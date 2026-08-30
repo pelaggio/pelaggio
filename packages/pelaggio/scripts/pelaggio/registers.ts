@@ -20,7 +20,8 @@
  * lock, `flow-events` is append-only JSONL, `execution-receipt` keeps its verifying writer. They
  * are registered here for their *paths* only.
  */
-import { resolve } from "node:path";
+import { mkdirSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 
 export const DEV_DIR = ".dev";
 
@@ -81,9 +82,14 @@ export function registerSpec(name: RegisterName): RegisterSpec {
 	return spec;
 }
 
-/** `<root>/.dev` */
-export function devRoot(root: string): string {
+/** `<root>/.dev` — private on purpose: exporting it would let callers compose unregistered children. */
+function devRoot(root: string): string {
 	return resolve(root, DEV_DIR);
+}
+
+/** Create `<root>/.dev` (recursively). The path itself is not returned — use `registerPath` for children. */
+export function ensureDevRoot(root: string): void {
+	mkdirSync(devRoot(root), { recursive: true });
 }
 
 /** `<root>/.dev/<name>[/segments…]` — the only way to build an absolute register path. */
@@ -116,7 +122,36 @@ export function bashDeniedRegisters(): readonly RegisterName[] {
 	return REGISTER_SPECS.filter((r) => r.kind === "harness" && !r.agentReads).map((r) => r.name as RegisterName);
 }
 
-/** Directory-shaped harness registers whose absolute paths the Write/Edit guard must refuse. */
-export function writeDeniedRegisterDirs(root: string): readonly string[] {
-	return REGISTER_SPECS.filter((r) => r.kind === "harness" && !r.agentReads && r.shape === "dir").map((r) => registerPath(root, r.name as RegisterName));
+export interface WriteDeniedRegister {
+	readonly name: RegisterName;
+	readonly shape: RegisterShape;
+	/** Absolute directory / file path, or the absolute filename prefix for a `file-family`. */
+	readonly path: string;
+}
+
+/**
+ * Every harness register under `root`, as the Write/Edit guard must see it. All harness entries
+ * are included — `agentReads` relaxes Bash *mention* only; a skill may read the cycle log, never
+ * write it — and file-shaped registers (locks, the log, the quarantine file) are covered as well
+ * as directories. Derived, never hand-listed.
+ */
+export function writeDeniedRegisters(root: string): readonly WriteDeniedRegister[] {
+	return REGISTER_SPECS.filter((r) => r.kind === "harness").map((r) => ({ name: r.name as RegisterName, shape: r.shape, path: resolve(root, DEV_DIR, r.name) }));
+}
+
+/**
+ * The harness register an absolute path lands in under `root`, or `null`. Directories match any
+ * descendant, files match exactly, file families match by filename prefix in `.dev` itself.
+ */
+export function writeDeniedRegisterFor(root: string, absolutePath: string): WriteDeniedRegister | null {
+	for (const register of writeDeniedRegisters(root)) {
+		if (register.shape === "dir") {
+			if (absolutePath === register.path || absolutePath.startsWith(`${register.path}/`)) return register;
+		} else if (register.shape === "file") {
+			if (absolutePath === register.path) return register;
+		} else if (dirname(absolutePath) === devRoot(root) && basename(absolutePath).startsWith(register.name)) {
+			return register;
+		}
+	}
+	return null;
 }

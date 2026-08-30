@@ -22,7 +22,7 @@ import { type PipelineDeps, runPipeline } from "./pipeline.js";
 import { buildFailClosedComment, type PrReviewGateResult, resolveCarryOptions, runPrReviewGate } from "./pr-review-gate.js";
 import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { detectUnattendedSignals, resolveAuthoringReviewExecution } from "./provider-routing.js";
-import { devRoot, registerFamilyPath, registerFamilyRelativePath } from "./registers.js";
+import { ensureDevRoot, registerFamilyPath, registerFamilyRelativePath } from "./registers.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import { prFindingDispositionsDir, writePrFindingDispositionRecord } from "./review/carry.js";
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
@@ -748,7 +748,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 
 				let logPath: string | undefined;
 				if (isParallel && v) {
-					mkdirSync(devRoot(REPO), { recursive: true });
+					ensureDevRoot(REPO);
 					logPath = registerFamilyPath(REPO, "pelaggio-", `${cycle}.log`);
 					appendFileSync(logPath, `${"=".repeat(60)}\nautopilot cycle ${cycle} — ${new Date().toISOString()}\n${"=".repeat(60)}\n`);
 				}

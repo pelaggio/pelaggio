@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { devRoot, registerPath, registerRelativePath } from "../registers.js";
+import { registerPath, registerRelativePath } from "../registers.js";
 import { escapeRegExp } from "../text.js";
 import type { ReviewFindingsParseErrorCode } from "./findings.js";
 import type { ReviewLoopResult, UnreadableSource } from "./loop.js";
@@ -112,8 +112,8 @@ export function writeDocReviewSeatTranscript(root: string, record: DocReviewSeat
 
 /** Create each repository-controlled component separately and refuse links before any raw text write. */
 function ensurePrivateTranscriptDirectory(root: string): string {
-	const devDirectory = devRoot(root);
-	const transcriptDirectory = join(devDirectory, "doc-review-transcripts");
+	const transcriptDirectory = registerPath(root, "doc-review-transcripts");
+	const devDirectory = dirname(transcriptDirectory);
 	for (const directory of [devDirectory, transcriptDirectory]) {
 		try {
 			mkdirSync(directory, { mode: 0o700 });

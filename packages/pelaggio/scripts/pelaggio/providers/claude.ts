@@ -9,7 +9,7 @@ import type { MainCheckoutDeltaObserver } from "../confinement/roots.js";
 import { sessionsDir } from "../confinement/sessions.js";
 import { emitDecisionsFromText } from "../decisions.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
-import { bashDeniedRegisters, DEV_DIR, writeDeniedRegisterDirs } from "../registers.js";
+import { bashDeniedRegisters, DEV_DIR, writeDeniedRegisterFor } from "../registers.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "../step-runner-shared.js";
 import { escapeRegExp } from "../text.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
@@ -162,13 +162,17 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 	const abs = fp.startsWith("/") ? resolve(fp) : resolve(cwdAbs, fp);
 
 	// Harness-register denial is absolute — even when cwd/own would otherwise allow. The set is
-	// derived from `registers.ts`: the session-evidence store (#386), both pr-adjudicate evidence
-	// stores and finding dispositions (#510 1a / #495), freshness-gate records (#424, defense in
-	// depth), and every other harness-written register a skill does not read (plan step 7a).
+	// derived from `registers.ts` (every harness-written register: the session-evidence store
+	// #386, both pr-adjudicate evidence stores and finding dispositions #510 1a / #495,
+	// freshness-gate records #424, effects, receipts, attempts, flow events, review records,
+	// the locks and the cycle log). It is checked under every root a seat could reach — the main
+	// checkout, the step cwd, and the own worktree — because effects, receipts and review records
+	// are written under the item WORKTREE, which the cwd exemption below would otherwise allow.
 	const sessionsAbs = sessionsDir(mainAbs);
-	for (const registerRoot of writeDeniedRegisterDirs(mainAbs)) {
-		if (!pathUnderRoot(abs, registerRoot)) continue;
-		if (registerRoot === sessionsAbs) {
+	for (const root of new Set([mainAbs, cwdAbs, ...(ownWorktree ? [resolve(ownWorktree)] : [])])) {
+		const denied = writeDeniedRegisterFor(root, abs);
+		if (!denied) continue;
+		if (denied.path === sessionsAbs) {
 			return {
 				decision: "block" as const,
 				reason: `Path "${fp}" targets the session-record directory (${sessionsAbs}), which is harness-owned evidence. Do not write session records from agent tools.`,
@@ -176,7 +180,7 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 		}
 		return {
 			decision: "block" as const,
-			reason: `Path "${fp}" targets a harness-owned evidence store (${registerRoot}). Harness registers (gate, adjudication-source, finding-disposition, freshness-gate, effects, receipt, attempt, flow-event and review records) are written only by the harness, never from agent tools.`,
+			reason: `Path "${fp}" targets a harness-owned evidence store (${denied.path}). Harness registers (gate, adjudication-source, finding-disposition, freshness-gate, effects, receipt, attempt, flow-event and review records, locks and the cycle log) are written only by the harness, never from agent tools.`,
 		};
 	}
 

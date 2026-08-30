@@ -289,17 +289,34 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 
 	it("denies Bash mention of every derived harness register, including the four step 7a adds (effects, receipts, attempts, flow-events)", () => {
 		const main = "/tmp/main";
+		const wt = "/tmp/main-wt-12";
 		for (const name of bashDeniedRegisters()) {
-			const out = blockForeignRootWrite(bash(`cat > .dev/${name}/x.json`), main, main, [main]);
-			assert.equal(out.decision, "block", name);
+			assert.equal(blockForeignRootWrite(bash(`cat > .dev/${name}/x.json`), wt, main, [main, wt], wt).decision, "block", name);
 		}
 		for (const name of ["effects", "execution-receipts", "attempts", "flow-events"]) {
-			assert.equal(blockForeignRootWrite(bash(`echo '{}' >> .dev/${name}/run/1.json`), main, main, [main]).decision, "block", name);
+			assert.equal(blockForeignRootWrite(bash(`echo '{}' >> .dev/${name}/run/1.json`), wt, main, [main, wt], wt).decision, "block", name);
+		}
+	});
+
+	it("denies Write/Edit into harness registers under the step cwd and own worktree, not only under main (#730 review)", () => {
+		const main = "/tmp/main";
+		const wt = "/tmp/main-wt-12";
+		// Effects, receipts and review records are written under the item WORKTREE: the cwd
+		// exemption must not reach them.
+		for (const rel of [".dev/effects/run/plan-1.json", ".dev/execution-receipts/run/plan-1.json", ".dev/review-records/run.json", ".dev/flow-events/01J.jsonl", ".dev/attempts/12/1.json"]) {
+			assert.equal(blockForeignRootWrite(edit(`${wt}/${rel}`), wt, main, [main, wt], wt).decision, "block", `cwd ${rel}`);
+			assert.equal(blockForeignRootWrite(edit(rel), wt, main, [main, wt], wt).decision, "block", `relative ${rel}`);
+			assert.equal(blockForeignRootWrite(write(`${wt}/${rel}`), main, main, [main, wt], wt).decision, "block", `own worktree ${rel}`);
+		}
+		// File-shaped harness registers too — including the ones skills may READ.
+		for (const rel of [".dev/roadmap-mutation.lock", ".dev/revise-claim.lock", ".dev/node-modules-repair.lock", ".dev/pelaggio-log.jsonl", ".dev/stale-quarantine.json", ".dev/pelaggio-3.log", ".dev/pelaggio-resume-12.log"]) {
+			assert.equal(blockForeignRootWrite(edit(`${main}/${rel}`), main, main, [main]).decision, "block", rel);
 		}
 	});
 
 	it("never fires on skill-read, agent-written or seat-tree registers (no false fire)", () => {
 		const main = "/tmp/main";
+		const wt = "/tmp/main-wt-12";
 		for (const cmd of [
 			"tail -n 20 .dev/pelaggio-log.jsonl",
 			"cat .dev/pelaggio-3.log",
@@ -310,12 +327,13 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 			"cd .dev/authoring-review-seats/abc/seat-p1 && pnpm test",
 			"git -C .dev/review-heads/abc status",
 		]) {
-			assert.deepEqual(blockForeignRootWrite(bash(cmd), main, main, [main]), {}, cmd);
+			assert.deepEqual(blockForeignRootWrite(bash(cmd), wt, main, [main, wt], wt), {}, cmd);
 		}
-		// Write/Edit into agent-written registers under the step cwd stays allowed; harness registers do not.
-		assert.deepEqual(blockForeignRootWrite(edit(".dev/plans/12.md"), main, main, [main]), {});
-		assert.equal(blockForeignRootWrite(edit(".dev/effects/run/plan-1.json"), main, main, [main]).decision, "block");
-		assert.equal(blockForeignRootWrite(edit(".dev/flow-events/01J.jsonl"), main, main, [main]).decision, "block");
+		// Agent-written registers under the step cwd stay writable; harness registers do not.
+		for (const rel of [".dev/plans/12.md", ".dev/ship/pr-body-12.md", ".dev/review-findings-12.md", "src/index.ts"]) {
+			assert.deepEqual(blockForeignRootWrite(edit(`${wt}/${rel}`), wt, main, [main, wt], wt), {}, rel);
+		}
+		assert.equal(blockForeignRootWrite(edit(`${wt}/.dev/effects/run/plan-1.json`), wt, main, [main, wt], wt).decision, "block");
 	});
 
 	it("ignores Bash commands that do not touch harness-owned registers (residual)", () => {

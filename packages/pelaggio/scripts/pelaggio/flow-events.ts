@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { isAbsolute, join, resolve } from "node:path";
 import { ulid } from "ulid";
 import { LOG_PATH, REPO } from "./config.js";
-import { devRoot, registerPath } from "./registers.js";
+import { ensureDevRoot, registerPath } from "./registers.js";
 import type { CycleLogEntry, EventLogDiagnostic, EventLogDiagnosticKind, EventLogDiagnostics, EventWriter, FlowEvent, FlowEventInput, FlowEventProjection, PelaggioEventType, ReadEventLogResult } from "./types.js";
 
 export const PELAGGIO_EVENT_TYPES = [
@@ -367,6 +367,6 @@ export function findLoggedArtifactAuthor(itemId: string, step: "plan" | "impleme
 }
 
 export function appendLog(entry: Record<string, unknown>): void {
-	mkdirSync(devRoot(REPO), { recursive: true });
+	ensureDevRoot(REPO);
 	appendFileSync(LOG_PATH, `${JSON.stringify(entry)}\n`);
 }

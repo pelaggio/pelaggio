@@ -11,7 +11,7 @@ import { dirname, join, relative } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { bashDeniedRegisters, DEV_DIR, REGISTER_SPECS, REGISTERS, type RegisterName, registerFamilyPath, registerPath, registerRelativePath, writeDeniedRegisterDirs } from "../registers.js";
+import { bashDeniedRegisters, DEV_DIR, REGISTER_SPECS, REGISTERS, type RegisterName, registerFamilyPath, registerPath, registerRelativePath, writeDeniedRegisterFor, writeDeniedRegisters } from "../registers.js";
 
 const PELAGGIO_SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = join(PELAGGIO_SRC, "..", "..", "..", "..");
@@ -71,10 +71,23 @@ describe("registers", () => {
 		for (const name of ["effects", "execution-receipts", "attempts", "flow-events"]) assert.ok(denied.includes(name as never), name);
 		// Skill-read and agent-written registers must never be denied (no false fire).
 		for (const name of ["pelaggio-log.jsonl", "plans", "ship", "authoring-review-seats", "review-heads", "review-findings-"]) assert.ok(!denied.includes(name as never), name);
+		// Write/Edit denial covers EVERY harness register — files and families too; agentReads only relaxes Bash mention.
 		assert.deepEqual(
-			writeDeniedRegisterDirs("/r").map((p) => relative("/r/.dev", p)),
-			REGISTER_SPECS.filter((r) => r.kind === "harness" && !r.agentReads && r.shape === "dir").map((r) => r.name),
+			writeDeniedRegisters("/r")
+				.map((r) => r.name)
+				.sort(),
+			REGISTER_SPECS.filter((r) => r.kind === "harness")
+				.map((r) => r.name)
+				.sort(),
 		);
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/effects/run/plan-1.json")?.name, "effects");
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/roadmap-mutation.lock")?.name, "roadmap-mutation.lock");
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/pelaggio-log.jsonl")?.name, "pelaggio-log.jsonl");
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/pelaggio-3.log")?.name, "pelaggio-");
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/plans/12.md"), null);
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/review-findings-12.md"), null);
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/authoring-review-seats/abc/p1/.dev/x"), null, "a seat tree is not a harness register (its own .dev is checked under the seat root)");
+		assert.equal(writeDeniedRegisterFor("/r", "/r/.dev/effects-not-a-register/x"), null, "directory match is by path segment, not prefix");
 	});
 
 	it(`every .dev literal in both packages lives in ${CHOKEPOINT} (no path built around the registry)`, () => {
