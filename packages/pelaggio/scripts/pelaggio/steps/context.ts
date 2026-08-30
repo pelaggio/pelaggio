@@ -15,7 +15,12 @@ import type { createSessionController as createSessionControllerDefault } from "
 import type { DriverIdentity } from "../driver-assignment.js";
 import type { Effect } from "../effects.js";
 import type { FlowPolicy } from "../flow-policy.js";
+import type { readFreshnessGateRecord as readFreshnessGateRecordDefault, writeFreshnessGateRecord as writeFreshnessGateRecordDefault } from "../freshness-gate-record.js";
+import type { runPrReviewGate as runPrReviewGateDefault } from "../pr-review-gate.js";
+import type { cleanupAuthoringReviewSeatsForSha as cleanupAuthoringReviewSeatsForShaDefault, prepareAuthoringReviewSeat as prepareAuthoringReviewSeatDefault } from "../review/seats.js";
 import type { RoadmapSource } from "../roadmap/index.js";
+import type { preparePrShipFreshness as preparePrShipFreshnessDefault, verifyPrShipFreshness as verifyPrShipFreshnessDefault } from "../ship/freshness.js";
+import type { runShipBookkeeping as runShipBookkeepingDefault } from "../ship/index.js";
 import type { PrShipGateBinding } from "../ship/pr-effects.js";
 import type { RunStepOpts } from "../step-runner.js";
 import type { CycleResult, ParkSignal, ProviderName, Step, StepResult } from "../types.js";
@@ -100,4 +105,17 @@ export interface CycleHelpers {
 	readonly resolveWorktree: (itemId: string) => string;
 	readonly createSessionController: typeof createSessionControllerDefault;
 	readonly isQuickScope: FlowPolicy["isQuickScope"];
+	/** Ship-tail capabilities (all injectable through PipelineDeps for tests). */
+	readonly quarantineExit: (error: string, extra?: Pick<CycleResult, "verdict">) => CycleResult;
+	readonly markShipwrecked: () => void;
+	readonly now: () => number;
+	readonly runShipBookkeeping: typeof runShipBookkeepingDefault;
+	readonly preparePrShipFreshness: typeof preparePrShipFreshnessDefault;
+	readonly verifyPrShipFreshness: typeof verifyPrShipFreshnessDefault;
+	readonly runPrReviewGate: typeof runPrReviewGateDefault;
+	readonly runTypecheckRatchet: (worktree: string) => Promise<{ ok: boolean; skipped?: boolean; detail?: string }>;
+	readonly readFreshnessGateRecord: typeof readFreshnessGateRecordDefault;
+	readonly writeFreshnessGateRecord: typeof writeFreshnessGateRecordDefault;
+	readonly prepareAuthoringReviewSeat: typeof prepareAuthoringReviewSeatDefault;
+	readonly cleanupAuthoringReviewSeatsForSha: typeof cleanupAuthoringReviewSeatsForShaDefault;
 }

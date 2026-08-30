@@ -120,6 +120,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"steps/plan.ts": 4,
 	"steps/shakedown-plan.ts": 4,
 	"steps/shakedown-code.ts": 4,
+	"steps/ship.ts": 4,
 	"cycle-support.ts": 4,
 	// L5 entry — parses argv and exits. Importable only by index.ts / main.ts.
 	"index.ts": 5,
