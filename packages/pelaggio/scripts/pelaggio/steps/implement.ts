@@ -36,7 +36,12 @@ export function archiveReviewFindingsAfterImplement(
 	return { ok: true };
 }
 
-export async function runImplement(ctx: CycleContext, helpers: CycleHelpers): Promise<StepOutcome> {
+/** Exactly the cycle state `runImplement` reads — a step that needs more must widen this type, visibly. */
+export type ImplementInput = Pick<CycleContext, "flags" | "mainRepo" | "roadmap" | "assignment" | "available" | "itemId" | "worktree" | "profile" | "verdict" | "shakedownPlanText" | "cost" | "onReviewFindingsConsumed">;
+/** Exactly the cycle helpers `runImplement` calls. */
+export type ImplementDeps = Pick<CycleHelpers, "log" | "finish" | "parkExit" | "runStepWithRetry" | "driverCandidates">;
+
+export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps): Promise<StepOutcome> {
 	const { flags, mainRepo, roadmap, assignment, available, itemId, worktree, profile, verdict, shakedownPlanText } = ctx;
 	const { log, finish, parkExit, runStepWithRetry, driverCandidates } = helpers;
 	const selected = selectAuthor(assignment, driverCandidates("implement"), available);

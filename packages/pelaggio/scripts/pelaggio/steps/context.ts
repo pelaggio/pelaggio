@@ -7,6 +7,12 @@
  * `CycleResult` the cycle must return immediately; `continue` carries whatever the next step
  * needs. Steps never assign closure state — the two mutations that exist go through `addCost`
  * and the shared `executionReceipts` array.
+ *
+ * `CycleContext` / `CycleHelpers` are the *catalogue* of what the cycle can offer; each step
+ * declares its own `<Step>Input = Pick<CycleContext, …>` / `<Step>Deps = Pick<CycleHelpers, …>`
+ * naming exactly what it reads and calls, so the coupling is visible per step and grows only by
+ * an explicit widening of that step's type. The cycle passes its full objects; TypeScript's
+ * structural typing does the narrowing at the boundary.
  */
 import type { appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "../decisions.js";
 import type { DriverAssignmentState, DriverIdentity } from "../driver-assignment.js";

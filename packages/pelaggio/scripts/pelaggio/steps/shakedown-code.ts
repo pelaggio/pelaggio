@@ -17,7 +17,34 @@ import { getProvider, REGISTERED_PROVIDERS } from "../step-runner.js";
 import type { StepResult } from "../types.js";
 import type { CycleContext, CycleHelpers, StepOutcome } from "./context.js";
 
-export async function runShakedownCode(ctx: CycleContext, helpers: CycleHelpers): Promise<StepOutcome<{ reviewRecordMarkdown: string | undefined }>> {
+/** Exactly the cycle state `runShakedownCode` reads — a step that needs more must widen this type, visibly. */
+export type ShakedownCodeInput = Pick<
+	CycleContext,
+	| "opts"
+	| "flags"
+	| "parkSignal"
+	| "mainRepo"
+	| "roadmap"
+	| "assignment"
+	| "available"
+	| "steps"
+	| "executionReceipts"
+	| "deferredItemTitles"
+	| "cycleChallenge"
+	| "writeEffectsManifest"
+	| "dispatchStepEffects"
+	| "appendReviewEscalation"
+	| "lookupReviewEscalation"
+	| "itemId"
+	| "worktree"
+	| "profile"
+	| "addCost"
+	| "cost"
+>;
+/** Exactly the cycle helpers `runShakedownCode` calls. */
+export type ShakedownCodeDeps = Pick<CycleHelpers, "log" | "finish" | "parkExit" | "runStepWithRetry" | "step" | "driverCandidates" | "itemRunId" | "observeGitForReceipt">;
+
+export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: ShakedownCodeDeps): Promise<StepOutcome<{ reviewRecordMarkdown: string | undefined }>> {
 	const {
 		opts,
 		flags,

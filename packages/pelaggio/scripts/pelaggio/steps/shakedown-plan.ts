@@ -5,7 +5,12 @@ import { selectReviewers } from "../driver-assignment.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
 import type { CycleContext, CycleHelpers, StepOutcome } from "./context.js";
 
-export async function runShakedownPlan(ctx: CycleContext, helpers: CycleHelpers): Promise<StepOutcome<{ verdict: "APPROVE" | "REVISE" | "RETHINK"; shakedownPlanText: string }>> {
+/** Exactly the cycle state `runShakedownPlan` reads — a step that needs more must widen this type, visibly. */
+export type ShakedownPlanInput = Pick<CycleContext, "roadmap" | "assignment" | "available" | "steps" | "itemId" | "profile" | "cost">;
+/** Exactly the cycle helpers `runShakedownPlan` calls. */
+export type ShakedownPlanDeps = Pick<CycleHelpers, "log" | "finish" | "runStepWithRetry" | "driverCandidates">;
+
+export async function runShakedownPlan(ctx: ShakedownPlanInput, helpers: ShakedownPlanDeps): Promise<StepOutcome<{ verdict: "APPROVE" | "REVISE" | "RETHINK"; shakedownPlanText: string }>> {
 	const { roadmap, assignment, available, steps, itemId, profile } = ctx;
 	const { log, finish, runStepWithRetry, driverCandidates } = helpers;
 	const planAuthor = assignment.authors.plan;

@@ -6,7 +6,12 @@ import { parseDeferredItems } from "../pick-parse.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
 import type { CycleContext, CycleHelpers, StepOutcome } from "./context.js";
 
-export async function runPlan(ctx: CycleContext, helpers: CycleHelpers): Promise<StepOutcome> {
+/** Exactly the cycle state `runPlan` reads — a step that needs more must widen this type, visibly. */
+export type PlanInput = Pick<CycleContext, "opts" | "roadmap" | "assignment" | "available" | "deferredItemTitles" | "itemId" | "worktree" | "profile" | "cost">;
+/** Exactly the cycle helpers `runPlan` calls. */
+export type PlanDeps = Pick<CycleHelpers, "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "reconstructAuthor">;
+
+export async function runPlan(ctx: PlanInput, helpers: PlanDeps): Promise<StepOutcome> {
 	const { opts, roadmap, assignment, available, deferredItemTitles, itemId, worktree, profile } = ctx;
 	const { log, finish, runStepWithRetry, driverCandidates, reconstructAuthor } = helpers;
 	const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
