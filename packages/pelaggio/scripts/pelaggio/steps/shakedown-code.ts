@@ -15,7 +15,6 @@ import { registerRelativePath } from "../registers.js";
 import { runReviewLoop } from "../review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "../review/record.js";
 import { cleanupAuthoringReviewSeatsForSha, prepareAuthoringReviewSeat } from "../review/seats.js";
-import type { RoadmapSource } from "../roadmap/index.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
 import { getProvider, REGISTERED_PROVIDERS } from "../step-runner.js";
 import type { ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, StepLog, StepResult } from "../types.js";
@@ -24,11 +23,9 @@ import type { CycleHelpers, StepOutcome } from "./context.js";
 /** Exactly the cycle state `runShakedownCode` reads — a step that needs more must widen this type, visibly. */
 /** The cycle bindings `runShakedownCode` reads — plain values, built by the cycle at the call site. */
 export interface ShakedownCodeInput {
-	readonly opts: PipelineOpts;
 	readonly flags: Flags;
 	readonly parkSignal: ParkSignal;
 	readonly mainRepo: string;
-	readonly roadmap: RoadmapSource;
 	readonly assignment: DriverAssignmentState;
 	readonly steps: readonly StepLog[];
 	/** Shared with the cycle; the step pushes receipts, never replaces the array. */
@@ -40,7 +37,9 @@ export interface ShakedownCodeInput {
 	readonly profile: string;
 }
 /** Exactly the cycle helpers `runShakedownCode` calls. */
-export type ShakedownCodeDeps = Pick<CycleHelpers, "available" | "log" | "finish" | "parkExit" | "runStepWithRetry" | "step" | "driverCandidates" | "itemRunId" | "observeGitForReceipt" | "cost" | "addCost"> & {
+export type ShakedownCodeDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "parkExit" | "runStepWithRetry" | "step" | "driverCandidates" | "itemRunId" | "observeGitForReceipt" | "cost" | "addCost"> & {
+	/** Run options: carry `notifyDecision` and the ship target (callables), so they ride as a Dep. */
+	readonly opts: PipelineOpts;
 	/** Effects seam and escalation ledger, injected so tests can observe them. */
 	readonly writeEffectsManifest: typeof writeEffectsManifestDefault;
 	readonly dispatchStepEffects: typeof dispatchStepEffectsDefault;
@@ -49,8 +48,8 @@ export type ShakedownCodeDeps = Pick<CycleHelpers, "available" | "log" | "finish
 };
 
 export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: ShakedownCodeDeps): Promise<StepOutcome<{ reviewRecordMarkdown: string | undefined }>> {
-	const { opts, flags, parkSignal, mainRepo, roadmap, assignment, steps, executionReceipts, deferredItemTitles, cycleChallenge, itemId, worktree, profile } = ctx;
-	const { available, log, finish, parkExit, runStepWithRetry, step, driverCandidates, itemRunId, observeGitForReceipt, writeEffectsManifest, dispatchStepEffects, appendReviewEscalation, lookupReviewEscalation } = helpers;
+	const { flags, parkSignal, mainRepo, assignment, steps, executionReceipts, deferredItemTitles, cycleChallenge, itemId, worktree, profile } = ctx;
+	const { opts, roadmap, available, log, finish, parkExit, runStepWithRetry, step, driverCandidates, itemRunId, observeGitForReceipt, writeEffectsManifest, dispatchStepEffects, appendReviewEscalation, lookupReviewEscalation } = helpers;
 	let reviewRecordMarkdown: string | undefined;
 	const implementationAuthor = assignment.authors.implementation;
 	if (!implementationAuthor) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "shakedown-code assignment failed: implementation author attribution is unavailable" }) };

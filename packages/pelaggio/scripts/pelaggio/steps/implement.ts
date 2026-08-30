@@ -10,7 +10,6 @@ import { getHeadSha } from "../git.js";
 import { registerPath } from "../registers.js";
 import { archiveAppliedReviewFindings, reviewFindingsDigest } from "../review-findings-archive.js";
 import { reviseFindingsPath } from "../revise-sweep.js";
-import type { RoadmapSource } from "../roadmap/index.js";
 import { reviewFindingsPreamble } from "../skills.js";
 import type { Flags } from "../types.js";
 import type { CycleHelpers, StepOutcome } from "./context.js";
@@ -43,7 +42,6 @@ export function archiveReviewFindingsAfterImplement(
 export interface ImplementInput {
 	readonly flags: Flags;
 	readonly mainRepo: string;
-	readonly roadmap: RoadmapSource;
 	readonly assignment: DriverAssignmentState;
 	readonly itemId: string;
 	readonly worktree: string;
@@ -52,14 +50,14 @@ export interface ImplementInput {
 	readonly shakedownPlanText: string;
 }
 /** Exactly the cycle helpers `runImplement` calls. */
-export type ImplementDeps = Pick<CycleHelpers, "available" | "log" | "finish" | "parkExit" | "runStepWithRetry" | "driverCandidates" | "cost"> & {
+export type ImplementDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "parkExit" | "runStepWithRetry" | "driverCandidates" | "cost"> & {
 	/** Notified after review findings were applied and archived. */
 	readonly onReviewFindingsConsumed?: (itemId: string) => void;
 };
 
 export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps): Promise<StepOutcome> {
-	const { flags, mainRepo, roadmap, assignment, itemId, worktree, profile, verdict, shakedownPlanText } = ctx;
-	const { available, log, finish, parkExit, runStepWithRetry, driverCandidates } = helpers;
+	const { flags, mainRepo, assignment, itemId, worktree, profile, verdict, shakedownPlanText } = ctx;
+	const { roadmap, available, log, finish, parkExit, runStepWithRetry, driverCandidates } = helpers;
 	const selected = selectAuthor(assignment, driverCandidates("implement"), available);
 	if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `implement assignment failed: ${selected.reason}` }) };
 	const implementationAuthor = selected.drivers[0];

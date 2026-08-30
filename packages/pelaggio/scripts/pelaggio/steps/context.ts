@@ -3,7 +3,8 @@
  *
  * A step module receives a plain value `<Step>Input` the cycle builds at the call site — only the
  * bindings that step reads, snapshotted when it starts — and a `<Step>Deps` of the cycle helpers
- * it calls. There is no shared state view: a step that needs one more binding widens its own
+ * it calls. Inputs are data only — strings, flags, records, the shared receipts array; anything
+ * callable (the roadmap adapter, run options with callbacks, the effects seam) is a Dep. There is no shared state view: a step that needs one more binding widens its own
  * `Input` interface, and the cycle passes it explicitly. It returns a `StepOutcome`: `terminal`
  * carries a finished `CycleResult` the cycle must return immediately; `continue` carries whatever
  * the next step needs (the cycle owns the binding it lands in). Steps never assign cycle state —
@@ -12,6 +13,7 @@
  */
 import type { DriverIdentity } from "../driver-assignment.js";
 import type { Effect } from "../effects.js";
+import type { RoadmapSource } from "../roadmap/index.js";
 import type { PrShipGateBinding } from "../ship/pr-effects.js";
 import type { RunStepOpts } from "../step-runner.js";
 import type { CycleResult, ParkSignal, ProviderName, Step, StepResult } from "../types.js";
@@ -72,6 +74,8 @@ export type StepOutcome<T extends object = Record<never, never>> = { kind: "term
 /** The cycle's capabilities a step module may call; each step `Pick`s exactly the ones it uses. */
 export interface CycleHelpers {
 	readonly log: (msg: string) => void;
+	/** The roadmap adapter — a capability (plan paths, item creation), never Input data. */
+	readonly roadmap: RoadmapSource;
 	/** Running cost total (read) and the only way a step adds to it. */
 	readonly cost: () => number;
 	readonly addCost: (delta: number) => void;

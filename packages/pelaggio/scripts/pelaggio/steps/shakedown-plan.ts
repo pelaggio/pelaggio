@@ -3,7 +3,6 @@ import { CONFIG, resolveStepSettings } from "../config.js";
 import { parseVerdict } from "../cycle-outcome.js";
 import type { DriverAssignmentState } from "../driver-assignment.js";
 import { selectReviewers } from "../driver-assignment.js";
-import type { RoadmapSource } from "../roadmap/index.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
 import type { StepLog } from "../types.js";
 import type { CycleHelpers, StepOutcome } from "./context.js";
@@ -11,18 +10,17 @@ import type { CycleHelpers, StepOutcome } from "./context.js";
 /** Exactly the cycle state `runShakedownPlan` reads — a step that needs more must widen this type, visibly. */
 /** The cycle bindings `runShakedownPlan` reads — plain values, built by the cycle at the call site. */
 export interface ShakedownPlanInput {
-	readonly roadmap: RoadmapSource;
 	readonly assignment: DriverAssignmentState;
 	readonly steps: readonly StepLog[];
 	readonly itemId: string;
 	readonly profile: string;
 }
 /** Exactly the cycle helpers `runShakedownPlan` calls. */
-export type ShakedownPlanDeps = Pick<CycleHelpers, "available" | "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "cost">;
+export type ShakedownPlanDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "cost">;
 
 export async function runShakedownPlan(ctx: ShakedownPlanInput, helpers: ShakedownPlanDeps): Promise<StepOutcome<{ verdict: "APPROVE" | "REVISE" | "RETHINK"; shakedownPlanText: string }>> {
-	const { roadmap, assignment, steps, itemId, profile } = ctx;
-	const { available, log, finish, runStepWithRetry, driverCandidates } = helpers;
+	const { assignment, steps, itemId, profile } = ctx;
+	const { roadmap, available, log, finish, runStepWithRetry, driverCandidates } = helpers;
 	const planAuthor = assignment.authors.plan;
 	if (!planAuthor) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "shakedown-plan assignment failed: plan author attribution is unavailable" }) };
 	const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);

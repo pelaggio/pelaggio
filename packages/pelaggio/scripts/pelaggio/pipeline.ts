@@ -1254,6 +1254,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// and the capabilities it Picks from the cycle's helpers; see steps/context.ts.
 	const cycleHelpers: CycleHelpers = {
 		log,
+		roadmap,
 		finish,
 		parkExit,
 		runStepWithRetry,
@@ -1270,12 +1271,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	};
 
 	if (shouldRun("plan")) {
-		const outcome = await runPlan({ opts, roadmap, assignment, deferredItemTitles, itemId: itemId!, worktree: worktree!, profile }, cycleHelpers);
+		const outcome = await runPlan({ dryRun: opts.dryRun === true, assignment, deferredItemTitles, itemId: itemId!, worktree: worktree!, profile }, cycleHelpers);
 		if (outcome.kind === "terminal") return outcome.result;
 	}
 
 	if (shouldRun("shakedown-plan")) {
-		const outcome = await runShakedownPlan({ roadmap, assignment, steps, itemId: itemId!, profile }, cycleHelpers);
+		const outcome = await runShakedownPlan({ assignment, steps, itemId: itemId!, profile }, cycleHelpers);
 		if (outcome.kind === "terminal") return outcome.result;
 		verdict = outcome.verdict;
 		shakedownPlanText = outcome.shakedownPlanText;
@@ -1291,7 +1292,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	}
 
 	if (shouldRun("implement")) {
-		const outcome = await runImplement({ flags, mainRepo, roadmap, assignment, itemId: itemId!, worktree: worktree!, profile, verdict, shakedownPlanText }, { ...cycleHelpers, onReviewFindingsConsumed: deps.onReviewFindingsConsumed });
+		const outcome = await runImplement({ flags, mainRepo, assignment, itemId: itemId!, worktree: worktree!, profile, verdict, shakedownPlanText }, { ...cycleHelpers, onReviewFindingsConsumed: deps.onReviewFindingsConsumed });
 		if (outcome.kind === "terminal") return outcome.result;
 	}
 
@@ -1300,8 +1301,8 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	if (shouldRun("shakedown-code")) {
 		const outcome = await runShakedownCode(
-			{ opts, flags, parkSignal, mainRepo, roadmap, assignment, steps, executionReceipts, deferredItemTitles, cycleChallenge, itemId: itemId!, worktree: worktree!, profile },
-			{ ...cycleHelpers, writeEffectsManifest, dispatchStepEffects, appendReviewEscalation, lookupReviewEscalation },
+			{ flags, parkSignal, mainRepo, assignment, steps, executionReceipts, deferredItemTitles, cycleChallenge, itemId: itemId!, worktree: worktree!, profile },
+			{ ...cycleHelpers, opts, writeEffectsManifest, dispatchStepEffects, appendReviewEscalation, lookupReviewEscalation },
 		);
 		if (outcome.kind === "terminal") return outcome.result;
 		reviewRecordMarkdown = outcome.reviewRecordMarkdown;
