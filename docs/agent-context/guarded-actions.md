@@ -83,11 +83,11 @@ We repeatedly write `if (allowed) { act }` against state held by another authori
 call the `if` a guard. It is not — nothing prevents a peer from passing the same check
 before we act.
 
-- `canRetryWithinBudget` (`helpers.ts`) is a pure predicate: `maxBudget - spent >=
+- `canRetryWithinBudget` (`cycle-outcome.ts`) is a pure predicate: `maxBudget - spent >=
   stepBudget`. Two `--parallel` workers both pass. `review/loop.ts`'s `phaseReservation`
   has the same shape. Accrual is post-hoc at four sites, so admission is decided against
   stale spend (#402).
-- `verifyShipLanded` (`helpers.ts`) answers "did my ship land?" with "did
+- `verifyShipLanded` (`ship/freshness.ts`) answers "did my ship land?" with "did
   `main` move?" A sibling's merge satisfies another worker's gate (#401).
 - `createClaimWorkspace` pre-checks `branchExists` then runs `worktree add -b`. This one
   is sound — git's ref creation is atomic, so the race is resolved by the authority, not
@@ -579,7 +579,7 @@ As failure modes, checklist-style:
     permits: **checkpoint-and-park** where committing is safe;
     **preserve-without-commit** where it is not; **leave-intact** where the state is
     already durable. Honesty about the second form (v6, corrected v7 against
-    `pipeline.ts`/`helpers.ts` at head): `quarantineCheckpoint` *commits*, so it is
+    `pipeline.ts`/`git.ts` at head): `quarantineCheckpoint` *commits*, so it is
     not a preserve-without-commit; and `error_confinement` exits via `finish()`,
     which deregisters and disposes but never deletes or resets the worktree — the
     state is **left intact in effect**. What that path is missing is not

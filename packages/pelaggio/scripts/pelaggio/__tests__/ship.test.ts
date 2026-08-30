@@ -6,11 +6,11 @@ import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { DEFAULT_SHIP_TARGET, loadConfig } from "../config.js";
 import { type Effect, EffectsManifestError } from "../effects.js";
-import { expandSkill } from "../helpers.js";
 import { type PipelineDeps, remotePushWarning, runPipeline } from "../pipeline.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingCtx, ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget, isAutonomousRemotePush, isShipTargetName, SHIP_TARGET_NAMES } from "../ship/index.js";
+import { expandSkill } from "../skills.js";
 import { stripAnsi } from "../tui.js";
 import type { Flags, PipelineOpts, ShipTargetName, StepResult } from "../types.js";
 import {

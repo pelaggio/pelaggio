@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join, resolve } from "node:path";
 import { REVIEW_CONFIG, type ReviewRunner, ROADMAP_GITHUB, ROADMAP_SOURCE } from "./config.js";
 import { buildEffectsManifestReceipt, ExecutionReceiptError, type GitRevisionBinding, writeExecutionReceipt } from "./execution-receipt.js";
-import { checkpoint, ensureCheckpointed, mainWorktree } from "./helpers.js";
+import { checkpoint, ensureCheckpointed, mainWorktree } from "./git.js";
 import { enqueueReviewRequest, type NewReviewRequest } from "./review-request-queue.js";
 import type { RoadmapSource } from "./roadmap/index.js";
 import { SHIP_TARGET_NAMES } from "./ship/index.js";

@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parseCli } from "./cli.js";
 import { REPO, ROADMAP_GITHUB, SHIP_TARGET } from "./config.js";
-import { resolveWorktree } from "./helpers.js";
+import { resolveWorktree } from "./git.js";
 import { type OrchestratorDeps, runOrchestrator } from "./pipeline.js";
 import {
 	type AcquireReviseExecutionResult,

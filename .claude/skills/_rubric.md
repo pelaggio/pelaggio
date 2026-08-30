@@ -8,12 +8,12 @@ Six dimensions — apply when planning, reviewing, or fixing code in this repo. 
 
 **Well-typed** — No `any`. Discriminated unions over boolean flags where state matters (e.g., `StepEvent`, `SDKResultMessage`). Explicit return types on all exported functions. `Step` is a literal union — new step names must land in config.ts's `STEPS` const and every `Record<Step, T>` must be exhaustive. No `as Step` casts outside controlled entry points (`detectResumeStep` log parsing is the one exception, and it validates via `STEPS.indexOf`).
 
-**Well-tested** — Pure helpers in `helpers.ts` have unit tests in `__tests__/helpers.test.ts` via `node:test` + `npx tsx --test`. Pipeline integration is harder to test (it spawns real SDK sessions) — acceptable to leave untested until a mocking approach emerges. Edge cases matter especially in `parseResetTime`, `parseWaitFlag`, `parseItemId`, `parseVerdict` — all of which are regex-driven and failure-prone.
+**Well-tested** — Pure helpers (`text.ts`, `git.ts`, `outcome-classify.ts`, `cycle-outcome.ts`, `skills.ts`, `pick-parse.ts`, `ship/freshness.ts`, `cycle-support.ts`) have unit tests in `__tests__/<module>.test.ts` via `node:test` + `npx tsx --test`. Pipeline integration is harder to test (it spawns real SDK sessions) — acceptable to leave untested until a mocking approach emerges. Edge cases matter especially in `parseResetTime`, `parseWaitFlag`, `parseItemId`, `parseVerdict` — all of which are regex-driven and failure-prone.
 
 **Well-factored** — Strict module boundaries:
 - `step-names.ts` — `STEPS` / `Step`: the source of truth for step names; adding a step means updating every step-indexed map in `config.ts`.
 - `config.ts` — static configuration (BUDGETS, TURN_LIMITS, EFFORT, MODEL_PROFILES, REPO path). No business logic. No hardcoded model strings anywhere else.
-- `helpers.ts` — pure functions and shell wrappers (git, fs). No SDK calls, no event emission.
+- `git.ts` / `text.ts` / `outcome-classify.ts` / `skills.ts` — pure functions and shell wrappers (git, fs, parsing). No SDK calls, no event emission. `cycle-outcome.ts` / `pick-parse.ts` / `ship/freshness.ts` hold verdict and ship policy; `cycle-support.ts` holds what only the orchestration layer uses.
 - `types.ts` — type-only. No runtime code.
 - `step-runner.ts` — owns the SDK `query()` loop, hook installation, event streaming. No business logic.
 - `pipeline.ts` — the orchestration loop. Composes everything above. No direct SDK imports (goes through `step-runner`).
@@ -45,7 +45,7 @@ Skills live in `.claude/skills/` — each skill is self-contained markdown with 
 npx tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/*.test.ts   # unit + pipeline tests (terse dot reporter)
 npx tsx --test --test-reporter=dot packages/server/__tests__/*.test.ts                         # server unit tests (supervisor, state-store, auth, app)
 npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/config.ts')"                        # parse-check config
-npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/helpers.ts')"                       # parse-check helpers
+npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/git.ts')"                           # parse-check git helpers
 npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/pipeline.ts')"                      # parse-check pipeline
 npx tsx -e "import('./packages/server/src/app.ts')"                                            # parse-check server entry
 pnpm typecheck                                                               # ordinary gate: pelaggio+server tsc --noEmit (relaxed noUncheckedIndexedAccess) + web astro check

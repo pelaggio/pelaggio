@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-import { listWorktreesIn, parseDecisions } from "./helpers.js";
+import { listWorktreesIn } from "./git.js";
 import { withMutationLock } from "./roadmap/mutation-lock.js";
 import type { Decision, EmittedDecision, ReviewEscalation, ReviewResolution, Step } from "./types.js";
 
@@ -1250,4 +1250,30 @@ export async function rebuildDecisionIndex(repo: string): Promise<RebuildIndexRe
 		commit(repo, [path], "docs: rebuild decision index from decision-log");
 		return { status: "written", rows: sortedActive.length + sortedResolved.length };
 	});
+}
+
+export function parseDecisions(text: string): Decision[] {
+	const decisions: Decision[] = [];
+	for (const line of text.split(/\r?\n/)) {
+		const match = line.match(/^\s*DECISION:(.*)$/);
+		if (!match) continue;
+		const raw = match[1].trim();
+		const choseAt = raw.indexOf("| chose:");
+		if (choseAt < 0) {
+			decisions.push({ fork: raw || "(unspecified decision)" });
+			continue;
+		}
+		const fork = raw.slice(0, choseAt).trim() || "(unspecified decision)";
+		const afterChose = raw.slice(choseAt + "| chose:".length);
+		const alternativesAt = afterChose.indexOf("| alternatives:");
+		if (alternativesAt < 0) {
+			const chosen = afterChose.trim();
+			decisions.push({ fork, ...(chosen ? { chosen } : {}) });
+			continue;
+		}
+		const chosen = afterChose.slice(0, alternativesAt).trim();
+		const alternatives = afterChose.slice(alternativesAt + "| alternatives:".length).trim();
+		decisions.push({ fork, ...(chosen ? { chosen } : {}), ...(alternatives ? { alternatives } : {}) });
+	}
+	return decisions;
 }

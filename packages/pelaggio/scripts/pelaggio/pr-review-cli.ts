@@ -9,7 +9,7 @@
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CONFIG, REPO, ROADMAP_GITHUB } from "./config.js";
-import { mainWorktree } from "./helpers.js";
+import { mainWorktree } from "./git.js";
 import { buildFailClosedComment, persistLocalGateEvidence, prReviewDeps, resolveCarryOptions, resolveReviewedHead, runPrReviewGate } from "./pr-review-gate.js";
 import { gateRecordsDir } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir } from "./review/adjudication.js";

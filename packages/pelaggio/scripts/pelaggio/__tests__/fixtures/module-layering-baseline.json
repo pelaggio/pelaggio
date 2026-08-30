@@ -1,14 +1,6 @@
 {
 	"edges": [
-		"codex-provider.ts -> helpers.ts (L3 -> L4)",
-		"decisions.ts -> helpers.ts (L2 -> L4)",
-		"effects.ts -> helpers.ts (L2 -> L4)",
 		"execution-receipt.ts -> effects.ts (L1 -> L2)",
-		"grok-provider.ts -> helpers.ts (L3 -> L4)",
-		"opencode-provider.ts -> helpers.ts (L3 -> L4)",
-		"review/adjudication.ts -> helpers.ts (L2 -> L4)",
-		"review/record.ts -> review/loop.ts (L1 -> L2)",
-		"roadmap/stale-quarantine.ts -> helpers.ts (L1 -> L4)",
-		"step-runner.ts -> helpers.ts (L3 -> L4)"
+		"review/record.ts -> review/loop.ts (L1 -> L2)"
 	]
 }
