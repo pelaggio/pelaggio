@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { DEV_DIR } from "../registers.js";
+import { devRootPathspec } from "../registers.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import { withMutationLock } from "../roadmap/mutation-lock.js";
 import { repairMainNodeModules } from "../worktree-deps.js";
@@ -129,7 +129,7 @@ export async function commitStrayBookkeeping(mainRepo: string, itemId: string, l
 			// failure mode: it's a harmless no-op whether .dev was staged, untouched, or
 			// absent.
 			try {
-				exec(`git add -A && git reset -- ${DEV_DIR}`, mainRepo);
+				exec(`git add -A && git reset -- ${devRootPathspec()}`, mainRepo);
 			} catch (e) {
 				log(`⚠ recover-commit failed: ${short(e)}`);
 				return false;

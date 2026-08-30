@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { DEV_DIR, type RegisterName, registerPath } from "../registers.js";
+import { type RegisterName, registerPath, registerRelativePath } from "../registers.js";
 import type { ProviderName, PrReviewAgreement } from "../types.js";
 import { normalizeGitPath } from "./adjudication.js";
 import { materializeAuthoringFinding, type ReviewFinding, type ReviewFindingClass, type ReviewFindingSeverity, reviewFindingFingerprint } from "./findings.js";
@@ -407,7 +407,7 @@ export function selectCarrySource(
 	const forPr = listing.records.filter((record) => record.prNumber === opts.prNumber && record.itemId === opts.itemId && record.headSha !== reviewedSha);
 	if (forPr.length === 0) return { kind: "none" };
 	if (forPr.length > CARRY_MAX_PRIOR_CANDIDATES) {
-		return { kind: "refused", reason: `disposition store holds ${forPr.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune ${DEV_DIR}/${PR_FINDING_DISPOSITIONS_DIR}/` };
+		return { kind: "refused", reason: `disposition store holds ${forPr.length} prior records for PR ${opts.prNumber} (carry scans at most ${CARRY_MAX_PRIOR_CANDIDATES}); prune ${registerRelativePath(PR_FINDING_DISPOSITIONS_DIR)}/` };
 	}
 	const ancestors = forPr.filter((record) => opts.isAncestor(record.headSha, reviewedSha));
 	if (ancestors.length === 0) {

@@ -23,7 +23,24 @@
 import { mkdirSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 
-export const DEV_DIR = ".dev";
+/** Private on purpose: exporting the token would let callers compose an unregistered child without a `.dev` literal. */
+const DEV_DIR = ".dev";
+
+/**
+ * The `.dev` directory as a git/shell pathspec, for commands such as `git reset -- <pathspec>`.
+ * Never for path composition — `registers.test.ts` fails on `devRootPathspec()` used inside
+ * `join()`/`resolve()` or followed by `/`.
+ */
+export function devRootPathspec(): string {
+	return DEV_DIR;
+}
+
+/** A child segment may not be empty, absolute, `.`/`..`, or contain a `..` component. */
+function assertSegment(segment: string, where: string): void {
+	if (segment === "" || segment === "." || segment === ".." || segment.startsWith("/") || /(^|\/)\.\.(\/|$)/.test(segment)) {
+		throw new Error(`${where}: refusing path segment ${JSON.stringify(segment)} — it would leave the register`);
+	}
+}
 
 export type RegisterKind = "harness" | "agent" | "seat-tree";
 export type RegisterShape = "dir" | "file" | "file-family";
@@ -94,23 +111,28 @@ export function ensureDevRoot(root: string): void {
 
 /** `<root>/.dev/<name>[/segments…]` — the only way to build an absolute register path. */
 export function registerPath(root: string, name: RegisterName, ...segments: string[]): string {
+	for (const segment of segments) assertSegment(segment, `registerPath(${name})`);
 	return resolve(root, DEV_DIR, name, ...segments);
 }
 
 /** `<root>/.dev/<prefix><rest>` for a `file-family` register (e.g. `pelaggio-3.log`). */
 export function registerFamilyPath(root: string, family: RegisterName, rest: string): string {
 	if (registerSpec(family).shape !== "file-family") throw new Error(`${family} is not a file family`);
+	assertSegment(rest, `registerFamilyPath(${family})`);
+	if (rest.includes("/")) throw new Error(`registerFamilyPath(${family}): a family member is a single filename, got ${JSON.stringify(rest)}`);
 	return resolve(root, DEV_DIR, `${family}${rest}`);
 }
 
 /** `.dev/<prefix><rest>` for a `file-family` register, relative. */
 export function registerFamilyRelativePath(family: RegisterName, rest: string): string {
 	if (registerSpec(family).shape !== "file-family") throw new Error(`${family} is not a file family`);
+	assertSegment(rest, `registerFamilyRelativePath(${family})`);
 	return `${DEV_DIR}/${family}${rest}`;
 }
 
 /** `.dev/<name>[/segments…]` — for worktree-relative records and prose. */
 export function registerRelativePath(name: RegisterName, ...segments: string[]): string {
+	for (const segment of segments) assertSegment(segment, `registerRelativePath(${name})`);
 	return [DEV_DIR, name, ...segments].join("/");
 }
 
@@ -154,4 +176,17 @@ export function writeDeniedRegisterFor(root: string, absolutePath: string): Writ
 		}
 	}
 	return null;
+}
+
+/**
+ * The Bash-mention denial for `bashDeniedRegisters()`: `.dev/<register>` in any shell spelling
+ * (`.dev//x`, `.dev/./x`) with a real boundary after the name (`/`, end, whitespace, quote,
+ * shell punctuation) — so `.dev/effects-old/…` is not a match (no false fire). Built here so
+ * the guard never needs the raw directory token.
+ */
+export function bashDeniedRegisterPattern(): RegExp {
+	const names = bashDeniedRegisters()
+		.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+		.join("|");
+	return new RegExp(`(^|[\\s"'=/>|;&(])\\.dev(?:/+(?:\\./+)*)(?:${names})(?=/|$|[\\s"'\`;&|)<>])`);
 }

@@ -20,7 +20,6 @@ import { listWorktreesIn, mainWorktree } from "./git.js";
 import { PR_REVIEW_MARKER, upsertMarkerComment } from "./github-posting.js";
 import { parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
 import { type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
-import { DEV_DIR } from "./registers.js";
 import { buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
 	buildCarryDispositionDraft,
@@ -862,7 +861,9 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const storeTrust = poolStoreTrust(poolProviders);
 	const carry = options.carry && storeTrust.trusted ? options.carry : undefined;
 	if (options.carry && !storeTrust.trusted) {
-		process.stderr.write(`⚠ carry consumption refused — review pool contains store-writable provider(s) ${storeTrust.untrusted.join(", ")} without a proven ${DEV_DIR} store-write denial; running cold (records still written, not consumed)\n`);
+		process.stderr.write(
+			`⚠ carry consumption refused — review pool contains store-writable provider(s) ${storeTrust.untrusted.join(", ")} without a proven harness-register store-write denial; running cold (records still written, not consumed)\n`,
+		);
 	}
 	// #495: seeded survivors join the first verification pass's candidates and persist under
 	// applyReviewPass's omission-never-refutes rule; gate PASS still requires converged-empty +

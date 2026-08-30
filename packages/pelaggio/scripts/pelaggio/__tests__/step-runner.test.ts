@@ -296,6 +296,8 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		for (const name of ["effects", "execution-receipts", "attempts", "flow-events"]) {
 			assert.equal(blockForeignRootWrite(bash(`echo '{}' >> .dev/${name}/run/1.json`), wt, main, [main, wt], wt).decision, "block", name);
 		}
+		for (const cmd of ["cat > .dev//effects/run/1.json", "cat > .dev/./effects/run/1.json", "cat > .dev/././execution-receipts/x"]) assert.equal(blockForeignRootWrite(bash(cmd), wt, main, [main, wt], wt).decision, "block", cmd);
+		for (const cmd of ["cat .dev/effects-old/x", "cat .dev/pr-review-gate-records.backup"]) assert.deepEqual(blockForeignRootWrite(bash(cmd), wt, main, [main, wt], wt), {}, cmd);
 	});
 
 	it("denies Write/Edit into harness registers under the step cwd and own worktree, not only under main (#730 review)", () => {

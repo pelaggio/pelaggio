@@ -11,7 +11,19 @@ import { dirname, join, relative } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { bashDeniedRegisters, DEV_DIR, REGISTER_SPECS, REGISTERS, type RegisterName, registerFamilyPath, registerPath, registerRelativePath, writeDeniedRegisterFor, writeDeniedRegisters } from "../registers.js";
+import {
+	bashDeniedRegisterPattern,
+	bashDeniedRegisters,
+	devRootPathspec,
+	REGISTER_SPECS,
+	REGISTERS,
+	type RegisterName,
+	registerFamilyPath,
+	registerPath,
+	registerRelativePath,
+	writeDeniedRegisterFor,
+	writeDeniedRegisters,
+} from "../registers.js";
 
 const PELAGGIO_SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = join(PELAGGIO_SRC, "..", "..", "..", "..");
@@ -44,6 +56,24 @@ export function devLiterals(file: string, src: string): string[] {
 	return hits;
 }
 
+/** `devRootPathspec()` used to compose a path — as a join/resolve argument or followed by `/`. */
+export function devPathspecCompositions(file: string, src: string): string[] {
+	const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const hits: string[] = [];
+	const visit = (n: ts.Node): void => {
+		if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "devRootPathspec") {
+			const parent = n.parent;
+			const inJoin =
+				ts.isCallExpression(parent) && ((ts.isIdentifier(parent.expression) && /^(join|resolve)$/.test(parent.expression.text)) || (ts.isPropertyAccessExpression(parent.expression) && /^(join|resolve)$/.test(parent.expression.name.text)));
+			const followedBySlash = ts.isTemplateSpan(parent) && parent.literal.text.startsWith("/");
+			if (inJoin || followedBySlash) hits.push(n.parent.getText(sf).slice(0, 80));
+		}
+		ts.forEachChild(n, visit);
+	};
+	visit(sf);
+	return hits;
+}
+
 describe("registers", () => {
 	it("names are unique and shapes are consistent", () => {
 		const names = REGISTERS.map((r) => r.name);
@@ -59,6 +89,22 @@ describe("registers", () => {
 		assert.equal(registerRelativePath("execution-receipts", "run", "x.json"), ".dev/execution-receipts/run/x.json");
 		assert.equal(registerFamilyPath("/r", "pelaggio-", "3.log"), "/r/.dev/pelaggio-3.log");
 		assert.throws(() => registerFamilyPath("/r", "effects", "x"), /not a file family/);
+	});
+
+	it("refuses segments that would leave the register (fail closed on dynamic ids)", () => {
+		for (const bad of ["../../x", "..", ".", "", "/etc/passwd", "run/../../x"]) {
+			assert.throws(() => registerPath("/r", "effects", bad), /would leave the register/, `registerPath ${bad}`);
+			assert.throws(() => registerRelativePath("effects", bad), /would leave the register/, `registerRelativePath ${bad}`);
+		}
+		assert.throws(() => registerFamilyPath("/r", "pelaggio-", "../x.log"));
+		assert.throws(() => registerFamilyPath("/r", "pelaggio-", "sub/x.log"), /single filename/);
+		assert.equal(registerPath("/r", "effects", "run-1", "plan-1.json"), "/r/.dev/effects/run-1/plan-1.json");
+	});
+
+	it("Bash-mention pattern: shell spellings match, look-alike names do not", () => {
+		const re = bashDeniedRegisterPattern();
+		for (const cmd of ["cat > .dev/effects/x", "cat > .dev//effects/x", "cat > .dev/./effects/x", "echo hi >.dev/flow-events/01J.jsonl", "rm -rf .dev/sessions", "ls .dev/effects"]) assert.ok(re.test(cmd), cmd);
+		for (const cmd of ["cat .dev/effects-old/x", "cat .dev/pr-review-gate-records.backup", "cat .dev/pelaggio-log.jsonl", "cat .dev/plans/12.md", "echo effects"]) assert.ok(!re.test(cmd), cmd);
 	});
 
 	it("derives the seat denials from the table: every harness register a skill does not read", () => {
@@ -101,6 +147,13 @@ describe("registers", () => {
 		assert.deepEqual(offenders, [], `build these through registerPath()/registerRelativePath() instead:\n  ${offenders.join("\n  ")}`);
 	});
 
+	it("devRootPathspec() is never composed into a path anywhere in either package", () => {
+		const offenders: string[] = [];
+		for (const root of SCAN_ROOTS) for (const file of sources(root)) for (const hit of devPathspecCompositions(file, readFileSync(file, "utf8"))) offenders.push(`${relative(REPO, file)}: ${hit}`);
+		assert.deepEqual(offenders, []);
+		assert.deepEqual(devPathspecCompositions("x.ts", 'const a = join(root, devRootPathspec(), "x"); const b = `${devRootPathspec()}/y`; const c = `git reset -- ${devRootPathspec()}`;').length, 2);
+	});
+
 	it("recognizes .dev in every literal form and ignores comments", () => {
 		const src = [
 			'const a = ".dev";',
@@ -112,6 +165,6 @@ describe("registers", () => {
 			'const e = "device"; const f = "dev.to";',
 		].join("\n");
 		assert.equal(devLiterals("x.ts", src).length, 4);
-		assert.equal(DEV_DIR, ".dev");
+		assert.equal(devRootPathspec(), ".dev");
 	});
 });

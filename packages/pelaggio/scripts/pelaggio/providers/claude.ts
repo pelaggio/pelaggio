@@ -9,9 +9,8 @@ import type { MainCheckoutDeltaObserver } from "../confinement/roots.js";
 import { sessionsDir } from "../confinement/sessions.js";
 import { emitDecisionsFromText } from "../decisions.js";
 import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
-import { bashDeniedRegisters, DEV_DIR, writeDeniedRegisterFor } from "../registers.js";
+import { bashDeniedRegisterPattern, bashDeniedRegisters, registerRelativePath, writeDeniedRegisterFor } from "../registers.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "../step-runner-shared.js";
-import { escapeRegExp } from "../text.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
 import type { ProviderCapabilities, TokenUsage } from "../types.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
@@ -120,7 +119,7 @@ function pathUnderRoot(abs: string, root: string): boolean {
  * stores: a seat that could write it could forge an auto-refutation of a real finding.
  */
 const BASH_DENIED_DEV_REGISTERS = bashDeniedRegisters();
-const BASH_DENIED_DEV_REGISTER_RE = new RegExp(`(^|[\\s"'=/])${escapeRegExp(DEV_DIR)}/(${BASH_DENIED_DEV_REGISTERS.map(escapeRegExp).join("|")})(/|\\b)`);
+const BASH_DENIED_DEV_REGISTER_RE = bashDeniedRegisterPattern();
 
 /**
  * #369: Block Write/Edit into main and every known foreign Git worktree root,
@@ -147,7 +146,7 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 			return {
 				decision: "block" as const,
 				reason:
-					`This Bash command references a harness-owned register (docs/decision-log/ or ${DEV_DIR}/{${BASH_DENIED_DEV_REGISTERS.join(",")}}/). These are written only by the harness; ` +
+					`This Bash command references a harness-owned register (docs/decision-log/ or one of ${BASH_DENIED_DEV_REGISTERS.map((name) => `${registerRelativePath(name)}/`).join(", ")}). These are written only by the harness; ` +
 					'emit a "DECISION:" line in your step output for decisions — review/adjudication evidence is produced only by the harness\'s own review commands.',
 			};
 		}
