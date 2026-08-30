@@ -624,7 +624,7 @@ const CLIENT_SCRIPT = `
       panel.appendChild(wrap);
       badges.forEach(function (issue) { panel.appendChild(el("p", { text: issue.message })); });
     }
-    var incidents = payload.edges.filter(function (edge) { return edge.from === node.id || edge.to === node.id; });
+    var incidents = lookupHit().edgeIdxs.map(function (idx) { return payload.edges[idx]; }).filter(function (edge) { return edge.from === node.id || edge.to === node.id; });
     if (incidents.length) {
       panel.appendChild(el("h3", { text: "incident edges" }));
       incidents.forEach(function (edge) {

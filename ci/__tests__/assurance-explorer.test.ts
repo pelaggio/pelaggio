@@ -210,6 +210,24 @@ describe("assurance HTML explorer payload", () => {
 		assert.deepEqual(JSON.parse(jsonText), synthetic);
 	});
 
+	it("refuses hrefs for scheme-shaped, absolute, or escaping graph paths while keeping labels", () => {
+		const hostile = ["javascript:alert(1)", "docs/assurance/generated/javascript:alert(1)", "/etc/passwd", "../outside/secret.md", "docs\\evil.md", "docs//evil.md"];
+		const doctored = structuredClone(graph);
+		doctored.nodes.push({ id: "CTR-9999", kind: "realization", slug: "hostile-paths", statement: "synthetic", sources: ["ADR-0002"], codeEvidence: hostile });
+		const built = buildExplorerPayload(doctored, catalog, { commitSha: COMMIT_SHA, diagnosticsEnv: env, adrFiles });
+		const node = built.nodes.find((candidate) => candidate.id === "CTR-9999");
+		assert.ok(node);
+		assert.deepEqual(node.codeEvidence, hostile.map((label) => ({ label, href: undefined })));
+		const safe = built.nodes.find((candidate) => candidate.id === "CTR-0001");
+		assert.ok(safe && safe.codeEvidence.every((entry) => entry.href?.startsWith("../../../")));
+	});
+
+	it("keeps the panel's incident edges keyed to the precomputed hit, never the canonical edge table", () => {
+		const html = renderHtmlExplorer(payload);
+		assert.ok(!html.includes("payload.edges.filter"), "client must derive incident edges from lookupHit().edgeIdxs, not filter the canonical payload.edges table");
+		assert.ok(html.includes("lookupHit().edgeIdxs.map"));
+	});
+
 	it("keeps the presentation module off the query engine", () => {
 		const src = readFileSync(new URL("../assurance-explorer.ts", import.meta.url), "utf8");
 		assert.doesNotMatch(src, /\bselectView\b/);

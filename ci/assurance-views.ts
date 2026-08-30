@@ -38,7 +38,7 @@ export type ExplorerCanonicalNode = {
 	sources: ExplorerHref[];
 	codeEvidence: ExplorerHref[];
 	observations: { kind: string; id: string; path: string }[];
-	grounding: { path: string; href: string; anchors: string[] }[];
+	grounding: { path: string; href?: string; anchors: string[] }[];
 };
 export type ExplorerViewKind = "parameterized" | "static" | "debt";
 export type ExplorerViewMeta = {
@@ -288,7 +288,12 @@ function edgeIdentity(edge: GraphEdge): string {
 	return `${edge.from}:${edge.relation}:${edge.to}`;
 }
 
-function generatedHref(repoPath: string): string {
+const HREF_SEGMENT = /^[A-Za-z0-9._@-]+$/;
+
+/** Fail closed: only a plain repo-relative file path becomes an href (no scheme, no absolute path, no `..`, no backslash). A rejected path keeps its label and renders as text. */
+function generatedHref(repoPath: string): string | undefined {
+	const segments = repoPath.split("/");
+	if (segments.some((segment) => segment === ".." || !HREF_SEGMENT.test(segment))) return undefined;
 	return posix.relative(GENERATED_DIR, repoPath);
 }
 
