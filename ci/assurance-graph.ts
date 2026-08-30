@@ -50,6 +50,7 @@ export type AssuranceGraph = {
 	adrMap?: Record<string, string[]>;
 	sourceGrounding?: SourceGrounding[];
 	invariantIndex?: { entries: InvariantIndexEntry[] };
+	extraction?: { decided?: string[] };
 };
 
 export type AssuranceView = {

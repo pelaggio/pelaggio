@@ -1,11 +1,14 @@
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { posix, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { renderHtmlExplorer } from "./assurance-explorer.js";
 import { type AssuranceGraph, type AssuranceView, type GraphEdge, type GraphNode, loadShadowGraph, loadViews, REPO_ROOT, readShadowGraphRaw, type SourceGrounding, shadowGraphPath } from "./assurance-graph.js";
 import { type AssuranceObservation, type ObservationResolution, observationKey, resolveObservations } from "./assurance-observations.js";
 import { readSourceWithinRoot } from "./root-files.js";
 
 export type { AssuranceGraph, AssuranceView, GraphEdge, GraphNode, SourceGrounding } from "./assurance-graph.js";
-export { readSourceWithinRoot };
+export { readSourceWithinRoot, renderHtmlExplorer };
 export type QueryArgs = { node?: string; source?: string; seeds?: string[] };
 export type Diagnostic = { check: string; node: string; message: string };
 /** Optional harness inputs for diagnostics; omitted in pure in-memory stress tests. */
@@ -14,6 +17,60 @@ export type DiagnosticsEnv = {
 	resolveObservations?: (observations: readonly AssuranceObservation[]) => Map<string, ObservationResolution>;
 	sourceGrounding?: SourceGrounding[];
 };
+
+const ENGINE_MODES = new Set(["all-of-kind", "seeded-neighborhood", "neighborhood", "upstream-intent", "diagnostics"]);
+const EXPLORER_PARAMETERS = new Set(["node", "node-or-source"]);
+const GENERATED_DIR = "docs/assurance/generated";
+
+export type ExplorerHref = { label: string; href?: string };
+export type ExplorerCanonicalNode = {
+	id: string;
+	kind: string;
+	statement: string;
+	slug: string;
+	role?: string;
+	status?: string;
+	visibility: string;
+	externalId?: string;
+	wrongIf?: string;
+	revisitIf?: string;
+	projection?: { status?: string; scope?: string };
+	sources: ExplorerHref[];
+	codeEvidence: ExplorerHref[];
+	observations: { kind: string; id: string; path: string }[];
+	grounding: { path: string; href: string; anchors: string[] }[];
+};
+export type ExplorerViewKind = "parameterized" | "static" | "debt";
+export type ExplorerViewMeta = {
+	id: string;
+	question: string;
+	mode: string;
+	parameter?: "node" | "node-or-source";
+	relations: string[];
+	depth?: number;
+	defaultDepth: number;
+	depths: number[];
+	kind: ExplorerViewKind;
+};
+export type ExplorerGraphHit = { nodeIdxs: number[]; edgeIdxs: number[] };
+export type ExplorerParameterizedResults = Record<string, Record<string, Record<string, ExplorerGraphHit>>>;
+export type ExplorerStaticResults = Record<string, ExplorerGraphHit>;
+export type ExplorerDebtResults = { diagnostics: Diagnostic[] };
+export type ExplorerViewResults = ExplorerParameterizedResults | ExplorerStaticResults | ExplorerDebtResults;
+export type ExplorerPayload = {
+	graphSchemaVersion: string;
+	catalogSchemaVersion: string;
+	status?: string;
+	authority?: string;
+	commitSha: string;
+	views: ExplorerViewMeta[];
+	nodes: ExplorerCanonicalNode[];
+	sources: ExplorerHref[];
+	edges: GraphEdge[];
+	retiredIds: string[];
+	results: Record<string, ExplorerViewResults>;
+};
+export type ExplorerPayloadOpts = { commitSha: string; diagnosticsEnv: DiagnosticsEnv; adrFiles: string[] };
 
 /** Every check the `debt` view may declare. `views.json` is bound to this list by test. */
 export const DEBT_CHECKS = [
@@ -65,11 +122,11 @@ function neighborhood(graph: AssuranceGraph, seeds: string[], relations: Set<str
 }
 
 /** Default environment: the graph's own groundings, read from the repository, so the `debt` view fires every check it declares. */
-export function defaultDiagnosticsEnv(graph: AssuranceGraph): DiagnosticsEnv {
+export function defaultDiagnosticsEnv(graph: AssuranceGraph, repo: string = REPO_ROOT): DiagnosticsEnv {
 	return {
 		sourceGrounding: graph.sourceGrounding ?? [],
-		readSource: (path) => readSourceWithinRoot(REPO_ROOT, path),
-		resolveObservations: (observations) => resolveObservations(REPO_ROOT, observations),
+		readSource: (path) => readSourceWithinRoot(repo, path),
+		resolveObservations: (observations) => resolveObservations(repo, observations),
 	};
 }
 
@@ -227,18 +284,269 @@ export function renderMermaid(graph: AssuranceGraph, view: AssuranceView): strin
 	return lines.join("\n");
 }
 
-if (process.argv.includes("--write")) {
-	const repo = resolve(new URL("..", import.meta.url).pathname);
+function edgeIdentity(edge: GraphEdge): string {
+	return `${edge.from}:${edge.relation}:${edge.to}`;
+}
+
+function generatedHref(repoPath: string): string {
+	return posix.relative(GENERATED_DIR, repoPath);
+}
+
+function classifyExplorerView(view: AssuranceView): ExplorerViewKind {
+	if (!ENGINE_MODES.has(view.mode)) throw new Error(`unsupported view mode ${view.mode} on ${view.id}`);
+	if (view.parameter !== undefined && !EXPLORER_PARAMETERS.has(view.parameter)) throw new Error(`unsupported view parameter ${view.parameter} on ${view.id}`);
+	if (view.parameter === "node" || view.parameter === "node-or-source") return "parameterized";
+	if (view.mode === "diagnostics") return "debt";
+	return "static";
+}
+
+function relationMasks(relations: string[]): { mask: number; subset: string[] }[] {
+	const count = 1 << relations.length;
+	const out: { mask: number; subset: string[] }[] = [];
+	for (let mask = 0; mask < count; mask++) {
+		const subset: string[] = [];
+		for (let i = 0; i < relations.length; i++) if (mask & (1 << i)) subset.push(relations[i]);
+		out.push({ mask, subset });
+	}
+	return out;
+}
+
+function engineDefaultDepth(view: AssuranceView): number {
+	if (view.mode === "upstream-intent") return 3;
+	return 1;
+}
+
+function explorerDefaultDepth(view: AssuranceView): number {
+	return view.depth ?? engineDefaultDepth(view);
+}
+
+function explorerDepthWindow(views: AssuranceView[]): number[] {
+	const parameterized = views.filter((view) => view.parameter === "node" || view.parameter === "node-or-source");
+	const defaults = parameterized.map(explorerDefaultDepth);
+	for (const depth of defaults) {
+		if (!Number.isSafeInteger(depth) || depth < 1) throw new Error(`parameterized explorer depth must be a positive integer, got ${depth}`);
+	}
+	const maxDepth = Math.max(0, ...defaults);
+	return Array.from({ length: maxDepth }, (_, index) => index + 1);
+}
+
+function sourceSeedKey(source: string): string {
+	return `source:${source}`;
+}
+
+function livePrefixWidths(nodes: GraphNode[]): Map<string, Set<number>> {
+	const prefixes = new Map<string, Set<number>>();
+	for (const node of nodes) {
+		const match = /^([A-Z]+)-(\d+)$/.exec(node.id);
+		if (!match) continue;
+		const widths = prefixes.get(match[1]) ?? new Set<number>();
+		widths.add(match[2].length);
+		prefixes.set(match[1], widths);
+	}
+	return prefixes;
+}
+
+function deriveRetiredIds(graph: AssuranceGraph): string[] {
+	const live = new Set(graph.nodes.map((node) => node.id));
+	const prefixes = livePrefixWidths(graph.nodes);
+	const alts = [...prefixes.entries()].flatMap(([prefix, widths]) => [...widths].map((width) => `${prefix}-\\d{${width}}`));
+	if (alts.length === 0) return [];
+	const tokenRe = new RegExp(`(?:${alts.join("|")})`, "g");
+	const retired = new Set<string>();
+	for (const note of graph.extraction?.decided ?? []) {
+		for (const token of note.match(tokenRe) ?? []) {
+			if (!live.has(token)) retired.add(token);
+		}
+	}
+	return [...retired].sort();
+}
+
+function adrFilesByPrefix(adrFiles: string[]): Map<string, string[]> {
+	const byPrefix = new Map<string, string[]>();
+	for (const file of adrFiles) {
+		const match = /^(\d{4})-/.exec(file);
+		if (!match) continue;
+		const list = byPrefix.get(match[1]) ?? [];
+		list.push(file);
+		byPrefix.set(match[1], list);
+	}
+	return byPrefix;
+}
+
+function sourceHref(source: string, adrByPrefix: Map<string, string[]>): ExplorerHref {
+	const adr = /^ADR-(\d{4})$/.exec(source);
+	if (!adr) return { label: source, href: generatedHref(source) };
+	const files = adrByPrefix.get(adr[1]) ?? [];
+	if (files.length > 1) throw new Error(`duplicate ADR files for ${source}: ${files.join(", ")}`);
+	if (files.length === 0) return { label: source };
+	return { label: source, href: generatedHref(`docs/decisions/${files[0]}`) };
+}
+
+function toCanonicalNode(node: GraphNode, adrByPrefix: Map<string, string[]>, grounding: SourceGrounding[]): ExplorerCanonicalNode {
+	return {
+		id: node.id,
+		kind: node.kind,
+		statement: node.statement,
+		slug: node.slug,
+		role: node.role,
+		status: node.status,
+		visibility: node.visibility ?? "internal",
+		externalId: node.externalId,
+		wrongIf: node.wrongIf,
+		revisitIf: node.revisitIf,
+		projection: node.projection,
+		sources: (node.sources ?? []).map((source) => sourceHref(source, adrByPrefix)),
+		codeEvidence: (node.codeEvidence ?? []).map((path) => ({ label: path, href: generatedHref(path) })),
+		observations: (node.observations ?? []).map((observation) => ({ kind: observation.kind, id: observation.id, path: observation.path })),
+		grounding: grounding.map((entry) => ({ path: entry.path, href: generatedHref(entry.path), anchors: entry.anchors })),
+	};
+}
+
+function toHit(selected: { nodes: GraphNode[]; edges: GraphEdge[] }, nodeIndex: Map<string, number>, edgeIndex: Map<string, number>): ExplorerGraphHit {
+	return {
+		nodeIdxs: selected.nodes.map((node) => {
+			const idx = nodeIndex.get(node.id);
+			if (idx === undefined) throw new Error(`result node ${node.id} missing from canonical table`);
+			return idx;
+		}),
+		edgeIdxs: selected.edges.map((edge) => {
+			const idx = edgeIndex.get(edgeIdentity(edge));
+			if (idx === undefined) throw new Error(`result edge ${edgeIdentity(edge)} missing from canonical table`);
+			return idx;
+		}),
+	};
+}
+
+export function buildExplorerPayload(graph: AssuranceGraph, catalog: { schemaVersion: string; views: AssuranceView[] }, opts: ExplorerPayloadOpts): ExplorerPayload {
+	const adrByPrefix = adrFilesByPrefix(opts.adrFiles);
+	const nodes = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
+	const sources = [...new Set(graph.nodes.flatMap((node) => node.sources ?? []))].sort();
+	const edges = [...graph.edges].sort((a, b) => edgeIdentity(a).localeCompare(edgeIdentity(b)));
+	const nodeIndex = new Map(nodes.map((node, idx) => [node.id, idx]));
+	const edgeIndex = new Map(edges.map((edge, idx) => [edgeIdentity(edge), idx]));
+	const groundingByNode = new Map<string, SourceGrounding[]>();
+	for (const entry of graph.sourceGrounding ?? []) {
+		const list = groundingByNode.get(entry.node) ?? [];
+		list.push(entry);
+		groundingByNode.set(entry.node, list);
+	}
+
+	const depthWindow = explorerDepthWindow(catalog.views);
+	const views: ExplorerViewMeta[] = catalog.views.map((view) => {
+		const kind = classifyExplorerView(view);
+		return {
+			id: view.id,
+			question: view.question,
+			mode: view.mode,
+			parameter: view.parameter,
+			relations: view.relations ?? [],
+			depth: view.depth,
+			defaultDepth: explorerDefaultDepth(view),
+			depths: kind === "parameterized" ? depthWindow : [],
+			kind,
+		};
+	});
+
+	const results: Record<string, ExplorerViewResults> = {};
+	for (const view of catalog.views) {
+		const kind = classifyExplorerView(view);
+		const relations = view.relations ?? [];
+		const masks = relationMasks(relations);
+		if (kind === "debt") {
+			const selected = selectView(graph, view, {}, opts.diagnosticsEnv);
+			results[view.id] = { diagnostics: selected.diagnostics ?? [] };
+			continue;
+		}
+		if (kind === "static") {
+			const byMask: ExplorerStaticResults = {};
+			for (const { mask, subset } of masks) {
+				byMask[String(mask)] = toHit(selectView(graph, { ...view, relations: subset }), nodeIndex, edgeIndex);
+			}
+			results[view.id] = byMask;
+			continue;
+		}
+		const bySeed: ExplorerParameterizedResults = {};
+		const seeds: { key: string; args: QueryArgs }[] = graph.nodes.map((node) => ({ key: node.id, args: { node: node.id } }));
+		if (view.parameter === "node-or-source") {
+			for (const source of sources) seeds.push({ key: sourceSeedKey(source), args: { source } });
+		}
+		for (const seed of seeds) {
+			const byDepth: Record<string, Record<string, ExplorerGraphHit>> = {};
+			for (const depth of depthWindow) {
+				const byMask: Record<string, ExplorerGraphHit> = {};
+				for (const { mask, subset } of masks) {
+					byMask[String(mask)] = toHit(selectView(graph, { ...view, depth, relations: subset }, seed.args), nodeIndex, edgeIndex);
+				}
+				byDepth[String(depth)] = byMask;
+			}
+			bySeed[seed.key] = byDepth;
+		}
+		results[view.id] = bySeed;
+	}
+
+	return {
+		graphSchemaVersion: graph.schemaVersion,
+		catalogSchemaVersion: catalog.schemaVersion,
+		status: graph.status,
+		authority: graph.authority,
+		commitSha: opts.commitSha,
+		views,
+		nodes: nodes.map((node) => toCanonicalNode(node, adrByPrefix, groundingByNode.get(node.id) ?? [])),
+		sources: sources.map((source) => sourceHref(source, adrByPrefix)),
+		edges,
+		retiredIds: deriveRetiredIds(graph),
+		results,
+	};
+}
+
+function readHeadSha(repo: string): string {
+	const git = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" });
+	if (git.status !== 0) {
+		if (git.error) throw new Error(`git rev-parse HEAD failed: ${git.error.message}`);
+		throw new Error(`git rev-parse HEAD failed (exit ${git.status}): ${(git.stderr || git.stdout).trim()}`);
+	}
+	const sha = git.stdout.trim();
+	if (!sha) throw new Error("git rev-parse HEAD returned an empty SHA");
+	const status = spawnSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf8" });
+	if (status.status !== 0) {
+		if (status.error) throw new Error(`git status --porcelain failed: ${status.error.message}`);
+		throw new Error(`git status --porcelain failed (exit ${status.status}): ${(status.stderr || status.stdout).trim()}`);
+	}
+	return status.stdout.trim() ? `${sha}-dirty` : sha;
+}
+
+export function writeHtmlExplorer(repo = REPO_ROOT): string {
+	const graph = loadShadowGraph(repo);
+	const catalog = loadViews(repo);
+	const adrFiles = readdirSync(resolve(repo, "docs/decisions")).filter((name) => name.endsWith(".md"));
+	const payload = buildExplorerPayload(graph, catalog, {
+		commitSha: readHeadSha(repo),
+		diagnosticsEnv: defaultDiagnosticsEnv(graph, repo),
+		adrFiles,
+	});
+	const outDir = resolve(repo, GENERATED_DIR);
+	mkdirSync(outDir, { recursive: true });
+	const outPath = resolve(outDir, "explorer.html");
+	writeFileSync(outPath, renderHtmlExplorer(payload));
+	return outPath;
+}
+
+function writeMermaidProjections(repo: string): void {
 	const graph = loadShadowGraph(repo);
 	const catalog = loadViews(repo);
 	for (const id of ["architecture", "review"]) {
-		const view = catalog.views.find((candidate: AssuranceView) => candidate.id === id) as AssuranceView | undefined;
+		const view = catalog.views.find((candidate: AssuranceView) => candidate.id === id);
 		if (!view) throw new Error(`missing view ${id}`);
-		writeFileSync(resolve(repo, `docs/assurance/generated/${id}.md`), renderMermaid(graph, view));
+		writeFileSync(resolve(repo, `${GENERATED_DIR}/${id}.md`), renderMermaid(graph, view));
 	}
-	// adrMap is generated output: regenerate it from node sources in place, keeping key order stable.
 	const stored = readShadowGraphRaw(repo);
 	const regenerated: Record<string, unknown> = {};
 	for (const key of Object.keys(stored)) regenerated[key] = key === "adrMap" ? adrMapFromSources(graph) : stored[key];
 	writeFileSync(shadowGraphPath(repo), `${JSON.stringify(regenerated, null, "\t")}\n`);
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+	const repo = REPO_ROOT;
+	if (process.argv.includes("--write")) writeMermaidProjections(repo);
+	if (process.argv.includes("--html")) console.log(writeHtmlExplorer(repo));
 }
