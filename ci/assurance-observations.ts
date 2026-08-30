@@ -1,5 +1,6 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { loadShadowGraph } from "./assurance-graph.js";
 import { resolveFileWithinRoot } from "./root-files.js";
 
 export type AssuranceObservation = {
@@ -113,7 +114,7 @@ export function observationKey(observation: AssuranceObservation): string {
 }
 
 export function graphObservations(root: string): AssuranceObservation[] {
-	const graph = JSON.parse(readFileSync(resolve(root, "docs/assurance/shadow-graph.json"), "utf8")) as { nodes: Array<{ id: string; kind: string; observations?: AssuranceObservation[] }> };
+	const graph = loadShadowGraph(root);
 	const realizations = graph.nodes.filter((node) => node.kind === "realization");
 	const unbound = realizations.filter((node) => !Array.isArray(node.observations) || node.observations.length === 0);
 	if (unbound.length > 0) throw new Error(`realizations without observations: ${unbound.map((node) => node.id).join(", ")}`);

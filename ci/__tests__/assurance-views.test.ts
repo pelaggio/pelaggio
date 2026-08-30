@@ -3,12 +3,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
+import { loadShadowGraph, loadViews } from "../assurance-graph.js";
 import { type AssuranceObservation, type ObservationTestResultEvent, observationKey, resolveObservations, resolveTestObservationEvents } from "../assurance-observations.js";
 import { type AssuranceGraph, type AssuranceView, DEBT_CHECKS, diagnostics, renderMermaid, selectView } from "../assurance-views.ts";
 
 const repo = resolve(new URL("../..", import.meta.url).pathname);
-const graph = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as AssuranceGraph & { relationKinds: Record<string, unknown> };
-const catalog = JSON.parse(readFileSync(resolve(repo, "docs/assurance/views.json"), "utf8")) as { views: AssuranceView[] };
+const graph = loadShadowGraph(repo);
+const catalog = loadViews(repo);
 const nodeIds = new Set(graph.nodes.map((node) => node.id));
 const views = new Map(catalog.views.map((view) => [view.id, view]));
 
@@ -507,4 +508,11 @@ describe("static projections", () => {
 			assert.equal(checkedIn, expected, `run node --import tsx ci/assurance-views.ts --write after changing ${id}`);
 		});
 	}
+});
+
+describe("views catalog <-> graph compatibility", () => {
+	it("views.json declares the graph schema it was authored against, and it matches the live graph", () => {
+		assert.equal(catalog.graphSchema, graph.schemaVersion, "bump views.json graphSchema when the graph schema changes (after re-checking every view still answers)");
+		assert.notEqual(catalog.schemaVersion, graph.schemaVersion, "the catalog is versioned independently of the graph (ADR-0027 replaceable representation)");
+	});
 });

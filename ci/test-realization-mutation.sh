@@ -16,12 +16,13 @@ observation_target="$fixture/$observation_path"
 mkdir -p "$(dirname "$mechanism_target")" "$(dirname "$observation_target")"
 ln -s "$repo/packages/server/node_modules" "$fixture/packages/server/node_modules"
 
-node - "$repo" "$fixture" "$control_id" "$mechanism_path" "$observation_path" "$observation_id" <<'NODE'
-const { readFileSync, writeFileSync } = require("node:fs");
-const { resolve } = require("node:path");
+node --import tsx --input-type=module - "$repo" "$fixture" "$control_id" "$mechanism_path" "$observation_path" "$observation_id" <<'NODE'
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const [repo, fixture, controlId, mechanismPath, observationPath, observationId] = process.argv.slice(2);
-const graph = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8"));
+const { loadShadowGraph } = await import(resolve(repo, "ci/assurance-graph.ts"));
+const graph = loadShadowGraph(repo);
 const control = graph.nodes.find((node) => node.id === controlId);
 const expected = [{ kind: "test", id: observationId, path: observationPath }];
 if (control?.kind !== "realization" || JSON.stringify(control.observations) !== JSON.stringify(expected)) {

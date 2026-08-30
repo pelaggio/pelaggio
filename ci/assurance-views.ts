@@ -1,45 +1,13 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { type AssuranceGraph, type AssuranceView, type GraphEdge, type GraphNode, loadShadowGraph, loadViews, REPO_ROOT, readShadowGraphRaw, type SourceGrounding, shadowGraphPath } from "./assurance-graph.js";
 import { type AssuranceObservation, type ObservationResolution, observationKey, resolveObservations } from "./assurance-observations.js";
 import { readSourceWithinRoot } from "./root-files.js";
 
+export type { AssuranceGraph, AssuranceView, GraphEdge, GraphNode, SourceGrounding } from "./assurance-graph.js";
 export { readSourceWithinRoot };
-
-const REPO_ROOT = resolve(new URL("..", import.meta.url).pathname);
-
-export type GraphNode = {
-	id: string;
-	kind: string;
-	slug: string;
-	statement: string;
-	role?: string;
-	status?: string;
-	visibility?: string;
-	sources?: string[];
-	wrongIf?: string;
-	revisitIf?: string;
-	projection?: { status?: string };
-	observations?: AssuranceObservation[];
-};
-export type GraphEdge = { from: string; relation: string; to: string };
-export type AssuranceGraph = { schemaVersion: string; nodes: GraphNode[]; edges: GraphEdge[]; sourceGrounding?: SourceGrounding[] };
-export type AssuranceView = {
-	id: string;
-	question: string;
-	mode: string;
-	audience?: string[];
-	kinds?: string[];
-	roles?: string[];
-	visibility?: string[];
-	relations?: string[];
-	seeds?: string[];
-	depth?: number;
-	checks?: string[];
-	parameter?: "node" | "node-or-source";
-};
 export type QueryArgs = { node?: string; source?: string; seeds?: string[] };
 export type Diagnostic = { check: string; node: string; message: string };
-export type SourceGrounding = { node: string; path: string; anchors: string[] };
 /** Optional harness inputs for diagnostics; omitted in pure in-memory stress tests. */
 export type DiagnosticsEnv = {
 	readSource?: (path: string) => string | undefined;
@@ -261,16 +229,16 @@ export function renderMermaid(graph: AssuranceGraph, view: AssuranceView): strin
 
 if (process.argv.includes("--write")) {
 	const repo = resolve(new URL("..", import.meta.url).pathname);
-	const graph = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as AssuranceGraph;
-	const catalog = JSON.parse(readFileSync(resolve(repo, "docs/assurance/views.json"), "utf8"));
+	const graph = loadShadowGraph(repo);
+	const catalog = loadViews(repo);
 	for (const id of ["architecture", "review"]) {
 		const view = catalog.views.find((candidate: AssuranceView) => candidate.id === id) as AssuranceView | undefined;
 		if (!view) throw new Error(`missing view ${id}`);
 		writeFileSync(resolve(repo, `docs/assurance/generated/${id}.md`), renderMermaid(graph, view));
 	}
 	// adrMap is generated output: regenerate it from node sources in place, keeping key order stable.
-	const stored = JSON.parse(readFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), "utf8")) as Record<string, unknown>;
+	const stored = readShadowGraphRaw(repo);
 	const regenerated: Record<string, unknown> = {};
 	for (const key of Object.keys(stored)) regenerated[key] = key === "adrMap" ? adrMapFromSources(graph) : stored[key];
-	writeFileSync(resolve(repo, "docs/assurance/shadow-graph.json"), `${JSON.stringify(regenerated, null, "\t")}\n`);
+	writeFileSync(shadowGraphPath(repo), `${JSON.stringify(regenerated, null, "\t")}\n`);
 }

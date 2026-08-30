@@ -1,5 +1,6 @@
 {
   "schemaVersion": "0.2.0",
+  "graphSchema": "0.3.0",
   "status": "shadow",
   "views": [
     {
