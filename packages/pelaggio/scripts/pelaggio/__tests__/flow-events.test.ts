@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { createEventWriter, foldEvents, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog } from "../flow-events.js";
+import { createEventWriter, decodeFlowEventLine, eventStreamPath, foldEvents, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog } from "../flow-events.js";
 import { computeStats } from "../stats.js";
 import type { FlowEventInput } from "../types.js";
 
@@ -349,5 +349,28 @@ describe("fold and historical projection", () => {
 		assert.equal(projection.deduplicatedEvents, 1);
 		assert.equal(projection.byType["pelaggio.claimed"], 1);
 		assert.equal("readiness" in projection, false);
+	});
+});
+
+describe("decodeFlowEventLine", () => {
+	it("fails closed on blank, unparsable and non-v1 lines and decodes a conforming one", () => {
+		assert.equal(decodeFlowEventLine(""), undefined);
+		assert.equal(decodeFlowEventLine("not json"), undefined);
+		assert.equal(decodeFlowEventLine('{"v":2,"type":"pelaggio.run-started"}'), undefined);
+		const line = JSON.stringify({
+			v: 1,
+			type: "pelaggio.watch-idle",
+			eventId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			streamId: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+			seq: 0,
+			ts: "2026-08-30T00:00:00.000Z",
+			itemId: null,
+			claimId: null,
+			readinessEpisodeId: null,
+			executionId: "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+			causationId: null,
+		});
+		assert.equal(decodeFlowEventLine(line)?.type, "pelaggio.watch-idle");
+		assert.equal(eventStreamPath("/r", "01ARZ3NDEKTSV4RRFFQ69G5FAW"), "/r/.dev/flow-events/01ARZ3NDEKTSV4RRFFQ69G5FAW.jsonl");
 	});
 });
