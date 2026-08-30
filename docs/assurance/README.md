@@ -81,7 +81,23 @@ The maintenance and interoperability rules — author the irreducible semantic f
 - **review** — why does the current review strategy exist and what survives if it changes?
 - **landing** — what must remain true if the current landing realization changes?
 
-The query layer is separate from presentation. GitHub gets generated Mermaid projections for selected static views; local or hosted explorers can consume the same selected subgraphs later without changing semantic state.
+The query layer is separate from presentation. GitHub gets generated Mermaid projections for selected static views; the local HTML explorer below consumes the same `selectView` answers without changing semantic state.
+
+## Local HTML explorer
+
+Generate a local page from the current checkout:
+
+```bash
+pnpm assurance:explore
+```
+
+The command prints the absolute path of `docs/assurance/generated/explorer.html` and does **not** rewrite the graph, `adrMap`, or Mermaid projections. Open that file from disk (`file://`). Source, code-evidence, and grounding hrefs are already rewritten relative to `docs/assurance/generated/`, so those links work without a hosted origin.
+
+The page is viewer-only and non-authoritative (ADR-0027). Every catalogued view, every declared-relation mask, and every `why` / `affected` neighbourhood in the catalog-derived depth window is precomputed by the query engine, including `affected` queries seeded from every source named by the graph. The browser looks up those answers and does not traverse neighbourhoods or diagnose debt; the only in-browser edge work is filtering the embedded result for edges incident to the selected node. Hash links encode `view`, either `node` or `source` (seed), `depth`, `rel` (integer relation mask), `sel` (side-panel node), and `q` (search). For example, `#view=why&node=CLM-0006&depth=2` restores a node neighbourhood, while `#view=affected&source=ADR-0027&depth=3` restores a source-seeded neighbourhood. Missing `depth` / `rel` restore the catalog or engine default (depth 2 for `why`, 3 for `affected`, full relation mask). Unknown or incomplete hashes fall back to the first catalog view at its defaults.
+
+Debt diagnostics depend on this checkout and `PELAGGIO_ASSURANCE_OBSERVATION_RESULTS`. An ordinary local run therefore truthfully shows missing local receipts rather than manufacturing passing evidence.
+
+`docs/assurance/generated/explorer.html` is gitignored, reproducible from the current graph and catalog, and must not be committed.
 
 ## Stress-test findings
 
