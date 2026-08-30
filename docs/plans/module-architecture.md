@@ -66,7 +66,7 @@ Open-PR constraint (2026-08-29): #699 and #719 both edit `pipeline.ts`,
 | # | Step | Touches (source → tests) | Exit criterion | Gate on |
 |---|---|---|---|---|
 | 0 | **Run-lane hold.** No new lane cycles; in-flight `--resume 647` and `--resume 672` run to completion. | memory note | both exited; #699/#719/#718 landed or parked | — |
-| 1 | **Layering test + baseline** (§4). | `__tests__/module-layering.test.ts`, `__tests__/fixtures/module-layering-baseline.json` | green on `main`; baseline lists every current violating edge | none |
+| 1 | **Layering test + baseline** (§4; the fixture was deleted when the baseline retired — see §4). | `__tests__/module-layering.test.ts`, `__tests__/fixtures/module-layering-baseline.json` | green on `main`; baseline lists every current violating edge | none |
 | 2 | **Entry modules become leaves.** `pr-review-cli.ts` keeps only `main`/argv; everything else (`runPrReviewGate`, `PrReviewGateResult`, `persistLocalGateEvidence`, `setPrReviewDepsForTests`, `buildFailClosedComment`, `resolveCarryOptions`, `verificationPrompt`, `trustedLocalContext`, `executionOverrideFor`, `PR_REVIEW_MARKER`) moves to L4 `pr-review-gate.ts`; the `PrReviewAgreement` type moves to `types.ts` so L1/L2 (`pr-review-gate-record`, `review/carry`, `review/adjudication`, `review-sweep`) never import L4. `buildFlowSnapshot` → L2 `flow-snapshot.ts`. `cli.ts` is reclassified L0 (it only parses argv), so `revise-cli → cli` is legal. | `pr-review-cli.ts`, `pr-review-gate.ts`, `flow-snapshot.ts`, `types.ts`, 8 import sites → `pr-review-cli.test.ts` (2,374 lines) splits into `pr-review-gate.test.ts` + a small CLI test | no non-`index.ts`/`main.ts` importer of any L5 module | 1, #699, #719 |
 | 3 | **Foundation de-cycle.** Break SCC `{types, config, notify, review/findings}` and the inline type edge `types.ts → confinement/sessions.ts` (`import("./confinement/sessions.js").SessionEvaluatorContext` — move that type down into `types.ts`): `STEPS`/`Step`/`PipelineStep`/`isPipelineStep` → `step-names.ts`; the runtime constants `NOTIFY_EVENTS`/`NOTIFY_FORMATS` and `NotifyConfig` → `notify-schema.ts` (L0; `types.ts` stays type-only, `notify.ts` keeps behaviour); findings schema *types* `config.ts` needs → `types.ts`. **Prose pins**: `AGENTS.md:37` ("`STEPS` in `step-names.ts` is the source of truth" — a pinned anchor at `docs/assurance/shadow-graph.json:2760`, asserted exactly-once by `ci/__tests__/shadow-assurance.test.ts`), `docs/agent-context/pipeline.md:13`, `docs/agent-context/flow.md:333`. | `types.ts`, `step-names.ts`, `notify-schema.ts`, `config.ts`, `notify.ts`, `review/findings.ts`, `confinement/sessions.ts`, `AGENTS.md`, `docs/assurance/shadow-graph.json`, `pipeline.md`, `flow.md` → `config.test.ts`, `notify.test.ts` (paths only) | L0 imports nothing above L0; `types.ts` exports no runtime value (`RECOVERABLE_ERRORS` → `cycle-errors.ts`, L0); `pnpm test:ci` green. *Accepted intra-L0 type cycle*: `types.ts` names `tui.LiveStatus` (a class, so it cannot move into the type-only file) while `tui.ts` imports types — reported by the cycle diagnostic, not gated. | 2 |
 | 4 | **Dissolve `helpers.ts`** (85 exports → 0, file deleted). Destinations: `git.ts` L1 (`getHeadSha`, `getArtifactHeadSha`, `checkpoint`, `quarantineCheckpoint`, `ensureCheckpointed`, `mainWorktree`, `listWorktrees*`, `resolveWorktree`, `gitDiff*`, `filesChangedSince`, `hasDeliverableCommits`, `readGitBinding`, `createMutex`); `text.ts` L0 (`escapeMarkdown`, `escapeHtml`, `fmtWait`, `formatResumeHint`); `outcome-classify.ts` L1 (`classifyStepError`, `isTransientSdkError`, `isRefusal`, `looksLikeRefusal`, `looksLikeStalledAsk`, `parseBlockedReason`, `parseWaitFlag`, `parseResetTime`, `resolveParkReset`, `classifyParkReason` — parsing, no verdict; this is what lets L3 stop importing L4); `cycle-outcome.ts` L2 (`parseVerdict`, `classifyOutcome`, `classifyCycleDisposition`, `canRetryWithinBudget` — verdict policy); `skills.ts` L1 (`expandSkill`, `expandPackagedSkill`, `buildStepArgs`, `reviewFindingsPreamble`); `pick-parse.ts` L2 (`parsePickResult`, `parsePickItem`, `parseDeferredItems`, `pickDivergedFromPin`); `parseDecisions` → `decisions.ts`; ship-freshness/landing (`preparePrShipFreshness`, `verifyPrShipFreshness`, `verifyConflictRepairComplete`, `captureShipState`, `verifyShipLanded`, `parseShipMerged`, `ensureMainCheckoutOnBranch`) → `ship/freshness.ts`; `snapshotForbiddenRoot*`, `diffForbiddenRootSnapshots`, `snapshotRepoRefState`, `snapshotSiblingWorktree`, `createMainCheckoutDeltaObserver` → `confinement/roots.ts`; `appendLog`, `findLoggedArtifactAuthor` → `flow-events.ts`; `detectResumeStep`, `stepIndex`, `countPlanFiles`, `computeImplementTurns`, `formatChangesUnderReview`, `buildReviewDiffBlock`, `revertPlanPolish`, `classifySecurityReviewDiff`, `formatReviewMetrics`, `uniqueDriverProvenance`, `resolveClaudeSdkManifestPath`, `readRuntimeVersions` → `cycle-support.ts` L4. Also `execution-receipt → effects` (move `Effect` type to `types.ts`) and `review/record → review/loop` (move the loop-result type to `review/findings.ts`). **Prose pins**: `.claude/skills/_rubric.md:11,15,47` (the rubric names `helpers.ts` as the pure-helper home and parse-checks it), `docs/agent-context/pipeline.md:112`, `flow.md:243`. | ~20 files, rubric + 2 docs → `helpers.test.ts` (2,114 lines) splits per destination | `helpers.ts` gone; no L1/L2/L3 module imports L4; rubric names the new homes. *Landed with two edges deferred to 7b* — `execution-receipt → effects` (`Effect` is a 14-type union) and `review/record → review/loop` (`ReviewLoopResult` carries 7 loop types): both are type migrations, not moves, and resolve when those registers move to the record store. | 3 |
@@ -92,15 +92,27 @@ Steps 7a/7b/8 and 10 are independent of 5/6/9 and may interleave once 4 is in.
 - **Layer rule**: for every edge `a → b`, `layer(a) ≥ layer(b)`.
 - **Entry-leaf rule**: an L5 module may be imported only by `index.ts` or
   `main.ts` (path-anchored to the package root).
-- **Baseline**: the exact set of violating edges (`"from -> to"`), not SCCs —
-  so a new edge inside an existing cycle is caught. Every baseline edge must
-  still exist (ratchet: a fixed violation is removed in the same PR);
-  any violating edge not in the baseline fails.
-- Cycles are not baselined separately: an acyclic-by-layer graph can only
-  cycle within a layer, and intra-layer cycles (`ship/*`, `roadmap/stale-*`)
-  are reported as a diagnostic, fixed opportunistically in steps 4/6.
-- Regenerate with `MODULE_LAYERING_WRITE=1 npx tsx --test …/module-layering.test.ts`.
-- Baseline fixture: `__tests__/fixtures/module-layering-baseline.json`.
+- **Baseline — retired.** Steps 1–9 carried an exact-edge baseline fixture so
+  each step could shrink it monotonically (20 → 13 → 10 → 2). The last two
+  edges (`execution-receipt → effects`, `review/record → review/loop`) were type
+  migrations deferred from step 4; the guard-hooks PR finished them (`Effect`
+  types live in `types.ts`; the loop's persisted shapes live in
+  `review/loop-result.ts`, L1) and deleted the fixture and its
+  `MODULE_LAYERING_WRITE` regeneration switch. A ratchet is a migration tool:
+  once its campaign closes it is a zero-rule with no reset key to protect.
+  Violations now simply fail; intra-layer cycles stay a printed diagnostic.
+- **Guard config is a review-lens change.** `LAYERS`, `registers.ts` and
+  `lefthook.yml` are `SECURITY_PATHS`, and `classifySecurityReviewDiff` renders
+  every changed table entry as a `guard:layer <module> L0→L4` /
+  `guard:register <name> harness→agent` reason, so a loosening is salient in
+  the gate comment and the red-team pass rather than buried in a fixture diff.
+  Under autonomous cycles the harness's author is the guarded party, so review
+  owns these files; a fence (base-config evaluation, seat denial, signed
+  tables) was considered and rejected as friction that blocks every PR adding
+  a module (see the guard-hooks PR).
+- **Authoring hooks.** A lefthook `pre-commit` `guards` command runs the
+  layering and register conformance tests (~1 s each) on any staged TS under
+  either package; the rubric's Verification section already runs them in-cycle.
 
 ## 5. Run-lane hold
 

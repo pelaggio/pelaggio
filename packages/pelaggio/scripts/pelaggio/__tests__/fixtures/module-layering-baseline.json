@@ -1,6 +1,0 @@
-{
-	"edges": [
-		"execution-receipt.ts -> effects.ts (L1 -> L2)",
-		"review/record.ts -> review/loop.ts (L1 -> L2)"
-	]
-}

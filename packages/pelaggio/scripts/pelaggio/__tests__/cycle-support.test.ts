@@ -12,6 +12,7 @@ import {
 	countPlanFiles,
 	formatChangesUnderReview,
 	formatReviewMetrics,
+	guardConfigDelta,
 	REVIEW_DIFF_MAX_BYTES,
 	readRuntimeVersions,
 	resolveClaudeSdkManifestPath,
@@ -483,5 +484,67 @@ describe("cycle provenance helpers", () => {
 		writeFileSync(caller, "export {};\n");
 		const found = resolveClaudeSdkManifestPath(pathToFileURL(caller).href);
 		assert.equal(found, manifestPath);
+	});
+});
+
+describe("guard config in the security signal", () => {
+	const LAYERING = "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts";
+	const LAYERS_FILE = LAYERING;
+	const REGISTERS = "packages/pelaggio/scripts/pelaggio/registers.ts";
+	const fileDiff = (file: string, ...lines: string[]): string => [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -1 +1 @@", ...lines].join("\n");
+
+	it("guard config files are security paths even without a keyword (path-only)", () => {
+		for (const file of [LAYERING, REGISTERS, "lefthook.yml", "ci/guards-staged.sh"]) {
+			const signal = classifySecurityReviewDiff([file], fileDiff(file, "+// comment"));
+			assert.equal(signal.triggered, true, file);
+			assert.ok(signal.reasons.includes(`path:${file}`), file);
+		}
+	});
+
+	it("renders a layer reclassification, an added module and a removed module as guard reasons", () => {
+		const diff = fileDiff(LAYERING, '-\t"text.ts": 0,', '+\t"text.ts": 4,', '+\t"steps/plan.ts": 4,', '-\t"helpers.ts": 4,');
+		assert.deepEqual(guardConfigDelta(diff), ["guard:layer text.ts L0→L4", "guard:layer helpers.ts removed", "guard:layer steps/plan.ts added L4"]);
+		const signal = classifySecurityReviewDiff([LAYERING], diff);
+		assert.ok(signal.reasons.includes("guard:layer text.ts L0→L4"));
+		// Guard deltas outrank path reasons under the limit.
+		assert.ok(signal.reasons.indexOf("guard:layer text.ts L0→L4") < signal.reasons.indexOf(`path:${LAYERING}`));
+	});
+
+	it("renders a register kind change, including the agentReads bit", () => {
+		const diff = fileDiff(
+			REGISTERS,
+			'-\t{ name: "effects", kind: "harness", shape: "dir" },',
+			'+\t{ name: "effects", kind: "agent", shape: "dir" },',
+			'-\t{ name: "attempts", kind: "harness", shape: "dir" },',
+			'+\t{ name: "attempts", kind: "harness", shape: "dir", agentReads: true },',
+		);
+		assert.deepEqual(guardConfigDelta(diff), ["guard:register attempts harness/dir→harness/dir+agentReads", "guard:register effects harness/dir→agent/dir"]);
+	});
+
+	it("renders a register shape change (dir→file narrows a write denial to one path)", () => {
+		const diff = fileDiff(REGISTERS, '-\t{ name: "sessions", kind: "harness", shape: "dir" },', '+\t{ name: "sessions", kind: "harness", shape: "file" },');
+		assert.deepEqual(guardConfigDelta(diff), ["guard:register sessions harness/dir→harness/file"]);
+	});
+
+	it("a trailing comment on a LAYERS row does not hide its delta, and register deltas outrank added layer rows", () => {
+		const diff = [
+			fileDiff(LAYERS_FILE, '-\t"text.ts": 0,', '+\t"text.ts": 4, // moved', '+\t"a.ts": 4,', '+\t"b.ts": 4,'),
+			fileDiff(REGISTERS, '-\t{ name: "effects", kind: "harness", shape: "dir" },', '+\t{ name: "effects", kind: "agent", shape: "dir" },'),
+		].join("\n");
+		assert.deepEqual(guardConfigDelta(diff), ["guard:register effects harness/dir→agent/dir", "guard:layer text.ts L0→L4", "guard:layer a.ts added L4", "guard:layer b.ts added L4"]);
+	});
+
+	it("does not fire on edits to the guard files that change no table entry (no false fire)", () => {
+		const diff = [
+			fileDiff(LAYERING, "-\t// L0 foundation — old comment", "+\t// L0 foundation — new comment", '+\t\tassert.ok(true, "text.ts: 4");'),
+			fileDiff(REGISTERS, '+// a comment that mentions name: "effects", kind: "agent" in prose'),
+			fileDiff("packages/pelaggio/scripts/pelaggio/text.ts", '-\t"text.ts": 0,', '+\t"text.ts": 4,'),
+		].join("\n");
+		assert.deepEqual(guardConfigDelta(diff), []);
+	});
+
+	it("an unchanged entry that merely moves within the table is not a delta", () => {
+		const diff = fileDiff(LAYERING, '-\t"text.ts": 0,', '+\t"text.ts": 0,');
+		assert.deepEqual(guardConfigDelta(diff), []);
 	});
 });
