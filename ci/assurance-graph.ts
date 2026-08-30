@@ -58,6 +58,8 @@ export type AssuranceView = {
 	mode: string;
 	audience?: string[];
 	visibility?: string[];
+	/** Which query argument the view takes; absent for views that take none. */
+	parameter?: "node" | "node-or-source";
 	kinds?: string[];
 	roles?: string[];
 	statuses?: string[];
