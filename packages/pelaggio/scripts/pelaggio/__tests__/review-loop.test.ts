@@ -36,12 +36,11 @@ const candidate = (className: ReviewFindingClass, severity: "must-fix" | "note" 
 
 describe("authoring review outcome", () => {
 	it("classifies every non-budget terminal family", () => {
-		assert.equal(classifyReviewOutcome([], [], new Map(), true, 1), "converged-clean");
-		assert.equal(classifyReviewOutcome([], [candidate("judgment", "note")], new Map(), true, 1), "converged-with-notes");
-		assert.equal(classifyReviewOutcome([], [candidate("judgment", "note")], new Map(), true, 2), "ceiling");
-		assert.equal(classifyReviewOutcome([candidate("judgment")], [], new Map([["C1", "judgment-dissent"]]), true, 2), "dissent");
-		assert.equal(classifyReviewOutcome([candidate("security-and-secrets")], [], new Map([["C1", "judgment-dissent"]]), true, 2), "hard-block");
-		assert.equal(classifyReviewOutcome([], [], new Map(), false, 1), "hard-block");
+		assert.equal(classifyReviewOutcome([], [], new Map(), 1), "converged-clean");
+		assert.equal(classifyReviewOutcome([], [candidate("judgment", "note")], new Map(), 1), "converged-with-notes");
+		assert.equal(classifyReviewOutcome([], [candidate("judgment", "note")], new Map(), 2), "ceiling");
+		assert.equal(classifyReviewOutcome([candidate("judgment")], [], new Map([["C1", "judgment-dissent"]]), 2), "dissent");
+		assert.equal(classifyReviewOutcome([candidate("security-and-secrets")], [], new Map([["C1", "judgment-dissent"]]), 2), "hard-block");
 	});
 
 	it("deduplicates deterministically and preserves a safety claim + classification", () => {
@@ -57,7 +56,7 @@ describe("authoring review outcome", () => {
 
 	it("treats all six safety classes as hard-block survivors", () => {
 		for (const cls of SAFETY_CLASSES) {
-			assert.equal(classifyReviewOutcome([candidate(cls)], [], new Map([["C1", "fixable-blocker"]]), true, 1), "hard-block");
+			assert.equal(classifyReviewOutcome([candidate(cls)], [], new Map([["C1", "fixable-blocker"]]), 1), "hard-block");
 			assert.ok(isSafetyClass(cls));
 		}
 	});
@@ -68,9 +67,9 @@ describe("authoring review outcome", () => {
 		const finding = materializeAuthoringFinding({ severity: "must-fix", message: "extended", ruleId: "pelaggio/judgment/style", classHint: "experimental-lint" }, emptyClassification, taxonomy);
 		const extended: ReviewCandidate = { candidateId: "C1", fingerprint: "fp", sources: ["reviewer"], finding };
 		assert.equal(finding.class, "experimental-lint");
-		assert.equal(classifyReviewOutcome([extended], [], new Map([["C1", "fixable-blocker"]]), true, 1, taxonomy), "hard-block");
+		assert.equal(classifyReviewOutcome([extended], [], new Map([["C1", "fixable-blocker"]]), 1, taxonomy), "hard-block");
 		// Under the baseline taxonomy the same token is still safety (unknown ⇒ safety), so it also blocks.
-		assert.equal(classifyReviewOutcome([extended], [], new Map([["C1", "fixable-blocker"]]), true, 1), "hard-block");
+		assert.equal(classifyReviewOutcome([extended], [], new Map([["C1", "fixable-blocker"]]), 1), "hard-block");
 	});
 });
 
@@ -724,8 +723,8 @@ describe("authoring review loop — no-revise + safety floor (#384)", () => {
 	it("classifyReviewOutcome honors the safety-floor param (dissent ruling on a safety survivor)", () => {
 		const survivor = candidate("security-and-secrets");
 		const rulings = new Map<string, JudgeRuling>([["C1", "judgment-dissent"]]);
-		assert.equal(classifyReviewOutcome([survivor], [], rulings, true, 2, BASELINE_TAXONOMY, "enabled"), "hard-block");
-		assert.equal(classifyReviewOutcome([survivor], [], rulings, true, 2, BASELINE_TAXONOMY, "disabled"), "dissent");
+		assert.equal(classifyReviewOutcome([survivor], [], rulings, 2, BASELINE_TAXONOMY, "enabled"), "hard-block");
+		assert.equal(classifyReviewOutcome([survivor], [], rulings, 2, BASELINE_TAXONOMY, "disabled"), "dissent");
 	});
 
 	it("classifyReviewDisagreement drops hasSafetyBlocker when the floor is disabled", () => {
@@ -961,20 +960,34 @@ describe("authoring review loop — seat output observations (#677)", () => {
 		assert.match(diagnostic, /\[REDACTED\]/);
 	});
 
-	it("persists the in-flight pass when the Judge runSeat throws, then hard-blocks", async () => {
+	it("records Judge rejection as softened provenance without vetoing a clean reviewer verdict", async () => {
 		const result = await runReviewLoop(
 			loopOpts(async (request) => {
 				if (request.role === "judge") throw new Error("judge crashed");
 				return ok(findings([]));
 			}),
 		);
-		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(result.diversity.state, "softened");
+		assert.match(result.diversity.state === "softened" ? result.diversity.explanation : "", /judge seat did not complete: judge/);
 		assert.equal(result.passes.length, 1);
 		const pass = firstPass(result);
 		assert.equal(firstReviewer(result).ok, true);
 		assert.equal(pass.judge.valid, false);
 		assert.equal(pass.judge.attempts?.[0]?.completion, "rejected");
 		assert.match(pass.judge.diagnostic ?? "", /judge crashed/);
+	});
+
+	it("retains reviewer must-fixes when the Judge runSeat throws", async () => {
+		const result = await runReviewLoop(
+			loopOpts(async (request) => {
+				if (request.role === "judge") throw new Error("judge crashed");
+				return ok(findings([{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }]));
+			}),
+		);
+		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.survivors.length, 1);
+		assert.equal(firstPass(result).carriedAfter.length, 1);
 	});
 
 	it("scrubs a rejected Judge provider error before persisting or rendering it", async () => {
@@ -1072,6 +1085,44 @@ describe("authoring review loop — seat output observations (#677)", () => {
 		assert.equal(judge.diagnostic, "authoring review Judge parse failure");
 		assert.equal(result.survivors.length, 1);
 		assert.equal(result.outcome, "hard-block");
+		assert.equal(result.diversity.state, "softened");
+		assert.match(result.diversity.state === "softened" ? result.diversity.explanation : "", /judge seat did not complete: judge/);
+	});
+
+	it("records an unreadable Judge as provenance without vetoing a clean reviewer verdict", async () => {
+		const result = await runReviewLoop(loopOpts(async (request) => ok(request.role === "judge" ? "Judge prose with no delimiters" : findings([]))));
+		assert.equal(result.outcome, "converged-clean");
+		assert.equal(firstPass(result).judge.valid, false);
+		assert.equal(result.diversity.state, "softened");
+		assert.match(result.diversity.state === "softened" ? result.diversity.explanation : "", /judge seat did not complete: judge/);
+	});
+
+	it("preserves a Judge rate-limit park instead of turning unavailability into a verdict", async () => {
+		const options = loopOpts(async (request) => {
+			if (request.role === "judge") {
+				Object.assign(request.parkSignal, { parked: true, resetsAt: 123, limitType: "tokens", triggerWorker: "judge" });
+				return ok("Judge prose with no delimiters");
+			}
+			return ok(findings([]));
+		});
+		const result = await runReviewLoop(options);
+		assert.equal(result.outcome, "budget");
+		assert.deepEqual(options.parkSignal, { parked: true, resetsAt: 123, limitType: "tokens", triggerWorker: "judge" });
+	});
+
+	it("preserves a reviewer-seat rate-limit park as budget, and a non-parked reviewer never trips the guard", async () => {
+		const parked = loopOpts(async (request) => {
+			if (request.role === "reviewer") Object.assign(request.parkSignal, { parked: true, resetsAt: 456, limitType: "tokens", triggerWorker: "reviewer" });
+			return ok(request.role === "judge" ? judgeReport([]) : findings([]));
+		});
+		const parkedResult = await runReviewLoop(parked);
+		assert.equal(parkedResult.outcome, "budget");
+		assert.deepEqual(parked.parkSignal, { parked: true, resetsAt: 456, limitType: "tokens", triggerWorker: "reviewer" });
+
+		const clean = loopOpts(async (request) => ok(request.role === "judge" ? judgeReport([]) : findings([])));
+		const cleanResult = await runReviewLoop(clean);
+		assert.equal(cleanResult.outcome, "converged-clean");
+		assert.equal(clean.parkSignal.parked, false);
 	});
 
 	it("invokes the observation callback once per returned seat and never for retries in this slice", async () => {

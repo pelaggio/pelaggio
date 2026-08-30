@@ -77,8 +77,10 @@ consolidates → author **revises** to resolve ≥-bar findings → re-review.
 **Convergence reuses pelaggio's existing `pr-review` contract — do not invent a weaker one.** That
 rule is deterministic and fail-closed (`roadmap-and-ship.md`): *validated ≥-bar (blocker) fingerprints
 survive across passes until a complete verifier explicitly **refutes** them — **omission is never
-refutation***; PASS requires a complete valid pass with an **empty carried-survivor set** and no new
-≥-bar findings. Only **non-regressing** revisions are promoted ("non-regressing" = required checks/
+refutation***; PASS requires an **empty carried-survivor set** and no new ≥-bar findings; a Judge that
+could not adjudicate (unreadable, rejected, or incomplete report) clears no candidate and is
+recorded as softened provenance (`judge.valid:false`) — Judge *availability* is never itself a
+verdict (#744: "we could not look" ≠ "the artifact might be bad", `guarded-actions.md` §2.3). Only **non-regressing** revisions are promoted ("non-regressing" = required checks/
 tests green + the judge's re-check of the prior ≥-bar set). Statistical stability detection
 (KS/adaptive) is a **deferred, optional lever for the below-bar *note* distribution only** — never the
 gate on the blocking set. Non-convergent exits (ceiling / dissent / hard-block) are terminal
@@ -146,7 +148,9 @@ not on output-format flakes that would fail-close good code. Two redundancies ar
 emitting more than one `AUTHORING_REVIEW_FINDINGS` block (all blocks are parsed and their findings
 unioned — codex reliably emits several), and a Judge decision omitting the redundant `class` (it is
 inherited from the candidate the Judge is already adjudicating by ID). The load-bearing fail-closed
-guards are unchanged: duplicate / unknown / missing decisions still invalidate the pass (#259), and a
+guards are unchanged: duplicate / unknown / missing decisions still invalidate the Judge *report* (#259)
+— it is discarded, no candidate is cleared, and the pass records `judge.valid:false`; the verdict then
+comes from the retained findings alone rather than a manufactured hard-block (#744) — and a
 Judge may not **downgrade** a reviewer's safety class to a non-safety one (only restate or elevate),
 so reclassification cannot route a safety finding around the floor (#272).
 
