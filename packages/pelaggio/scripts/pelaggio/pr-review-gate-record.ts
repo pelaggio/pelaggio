@@ -1,5 +1,6 @@
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { writeAtomically } from "./record-store.js";
 import { type RegisterName, registerPath } from "./registers.js";
 import type { ReviewExhaustionReason } from "./review/findings.js";
 import type { PrReviewAgreement } from "./types.js";
@@ -326,9 +327,7 @@ export function writePrReviewGateRecord(root: string, record: NewPrReviewGateRec
 	const complete = validatePrReviewGateRecord({ ...record, schemaVersion: 2 });
 	mkdirSync(root, { recursive: true });
 	const path = recordPath(root, complete.prNumber, complete.headSha);
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(complete, null, 2)}\n`, { mode: 0o600 });
-	renameSync(tmp, path);
+	writeAtomically(path, `${JSON.stringify(complete, null, 2)}\n`, { mode: 0o600 });
 	return path;
 }
 

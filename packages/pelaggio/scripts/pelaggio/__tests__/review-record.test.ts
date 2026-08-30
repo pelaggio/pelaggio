@@ -131,16 +131,22 @@ describe("DocReviewSeatTranscriptRecord (#677)", () => {
 		assert.ok(!existsSync(`${absolute}.tmp-${process.pid}`));
 	});
 
-	it("refuses a pre-existing permissive temp file instead of publishing it as a transcript", () => {
+	it("never publishes a planted permissive temp file as the transcript (record-store: unpredictable temp, wx open)", () => {
 		const planted = { ...transcript(), runId: "doc-stale-temp" };
 		const absolute = join(dir, ".dev", "doc-review-transcripts", "doc-stale-temp.json");
+		// The pre-7b writer used `${path}.tmp-${pid}`; an attacker who could predict it planted a
+		// permissive inode there. The shared writer's temp name carries a random suffix and opens
+		// `wx`, so the plant is never reused: the transcript is published from a fresh 0o600 file
+		// and the planted file is left exactly as it was.
 		const temporary = `${absolute}.tmp-${process.pid}`;
 		mkdirSync(join(dir, ".dev", "doc-review-transcripts"), { recursive: true });
 		writeFileSync(temporary, "attacker-controlled stale file", { mode: 0o644 });
 		chmodSync(temporary, 0o644);
 
-		assert.throws(() => writeDocReviewSeatTranscript(dir, planted), { code: "EEXIST" });
-		assert.equal(existsSync(absolute), false);
+		const written = writeDocReviewSeatTranscript(dir, planted);
+		assert.equal(statSync(absolute).mode & 0o777, 0o600);
+		assert.notEqual(readFileSync(absolute, "utf8"), "attacker-controlled stale file");
+		assert.equal(createHash("sha256").update(readFileSync(absolute, "utf-8")).digest("hex"), written.sha256);
 		assert.equal(readFileSync(temporary, "utf8"), "attacker-controlled stale file");
 		assert.equal(statSync(temporary).mode & 0o777, 0o644);
 		rmSync(temporary);

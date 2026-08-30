@@ -20,8 +20,9 @@
  * POSITIVE terminal check (see `pipeline.ts`) — never "absent from the forge listing".
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import { writeAtomically } from "./record-store.js";
 import { type RegisterName, registerPath } from "./registers.js";
 
 export interface ReviewRequestRecord {
@@ -108,9 +109,7 @@ export function enqueueReviewRequest(mainRepo: string, request: NewReviewRequest
 	if (existsSync(pending) || existsSync(claimed)) return;
 	mkdirSync(dir, { recursive: true });
 	const record: ReviewRequestRecord = { schemaVersion: 1, ...request };
-	const tmp = `${pending}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-	renameSync(tmp, pending);
+	writeAtomically(pending, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
 }
 
 /**

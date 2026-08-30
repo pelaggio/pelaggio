@@ -43,6 +43,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"outcome-classify.ts": 1,
 	"skills.ts": 1,
 	"flow-events.ts": 1,
+	"record-store.ts": 1,
 	"execution-receipt.ts": 1,
 	"freshness-gate-record.ts": 1,
 	"pr-review-gate-record.ts": 1,
