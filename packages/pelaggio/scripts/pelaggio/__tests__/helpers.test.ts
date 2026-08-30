@@ -1740,6 +1740,15 @@ describe("classifySecurityReviewDiff", () => {
 		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
 	});
 
+	it("triggers for the merge-gate body even when the diff carries no security keyword (path-only)", () => {
+		// The gate logic lives in pr-review-gate.ts since plan step 2; the thin pr-review-cli.ts entry stays listed too.
+		for (const file of ["packages/pelaggio/scripts/pelaggio/pr-review-gate.ts", "packages/pelaggio/scripts/pelaggio/pr-review-cli.ts"]) {
+			const signal = classifySecurityReviewDiff([file], `diff --git a/${file} b/${file}\n+const label = "standard";\n`);
+			assert.equal(signal.triggered, true, file);
+			assert.ok(signal.reasons.includes(`path:${file}`), file);
+		}
+	});
+
 	it("triggers for security keywords on added and removed hunk lines", () => {
 		const signal = classifySecurityReviewDiff(["docs/setup.md"], hunk("-CONTROL_PLANE_TOKEN allowed loopback access.", "+Reject hosts under 127.0.0.1.example.com."));
 

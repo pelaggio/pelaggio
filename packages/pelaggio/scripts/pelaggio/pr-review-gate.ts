@@ -1,5 +1,3 @@
-#!/usr/bin/env tsx
-
 /**
  * `pelaggio pr-review --pr <n>` — the CI merge-gate entry point.
  *

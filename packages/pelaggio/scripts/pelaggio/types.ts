@@ -411,13 +411,13 @@ export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sd
 
 // ── Step providers ─────────────────────────────────────────────────────
 
+/** Closed agreement set over a completed required (driver × label) matrix. Omitted on park. */
+export type PrReviewAgreement = "consensus-pass" | "consensus-block" | "disagreement" | "invalid";
+
 /** The backend that runs a step's model. Started as only `"claude"` (the SDK runner);
  *  #80 opened the union for a second provider and #137 adds `"opencode"` (75+ model
  *  backends behind one headless CLI). The runtime names array lives in `config.ts`,
  *  mirroring `ShipTargetName` / `SHIP_TARGET_NAMES`. */
-/** Closed agreement set over a completed required (driver × label) matrix. Omitted on park. */
-export type PrReviewAgreement = "consensus-pass" | "consensus-block" | "disagreement" | "invalid";
-
 export type ProviderName = "claude" | "codex" | "grok" | "opencode";
 
 // ── Provider capability descriptors (ADR-0020 / #337) ──────────────────

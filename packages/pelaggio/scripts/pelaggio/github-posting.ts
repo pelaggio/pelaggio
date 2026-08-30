@@ -55,6 +55,9 @@ function hasVerifiedWritePermission(gh: GhRunner, ghRepo: string, login: string)
 	}
 }
 
+/** Marker that identifies the harness-owned PR review comment (upserted, never duplicated). */
+export const PR_REVIEW_MARKER = "<!-- pelaggio-pr-review -->";
+
 /**
  * Canonical author-trust rule for marker comments — ONE rule at every consumption site:
  * the read side (`fetchReviewFindings` in `revise-sweep.ts`), the write side
@@ -74,9 +77,6 @@ function hasVerifiedWritePermission(gh: GhRunner, ghRepo: string, login: string)
  * Logins are compared case-insensitively (GitHub logins are case-insensitive); a missing
  * login fails closed with no API traffic.
  */
-/** Marker that identifies the harness-owned PR review comment (upserted, never duplicated). */
-export const PR_REVIEW_MARKER = "<!-- pelaggio-pr-review -->";
-
 export function isTrustedCommentAuthor(gh: GhRunner, ghRepo: string, login: string | null | undefined): boolean {
 	if (!login) return false;
 	const normalized = login.toLowerCase();

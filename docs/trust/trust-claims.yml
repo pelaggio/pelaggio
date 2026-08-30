@@ -58,7 +58,7 @@ claims:
     status: guarantee
     applies_to: ">=0.1.0"
     condition: "ship.target = pull-request"
-    mechanism: "parseReviewFindings validates the versioned closed schema; reviewFindingsGate blocks only must-fix while step and parse failures block in pr-review-cli.ts. CI publishes the compatibility review status."
+    mechanism: "parseReviewFindings validates the versioned closed schema; reviewFindingsGate blocks only must-fix while step and parse failures block in pr-review-gate.ts. CI publishes the compatibility review status."
     evidence_command: "PELAGGIO_REPO=$PWD node --import tsx -e \"const f=await import('./packages/pelaggio/scripts/pelaggio/review/findings.ts'); const block=(findings)=>'REVIEW_FINDINGS\\\\n'+JSON.stringify({schemaVersion:1,summary:'Reviewed.',findings})+'\\\\nEND_REVIEW_FINDINGS'; for (const findings of [[],[{severity:'nice',message:'Improve.'}],[{severity:'note',message:'Context.'}]]) if(f.reviewFindingsGate(f.parseReviewFindings(block(findings)))!=='pass') process.exit(1); if(f.reviewFindingsGate(f.parseReviewFindings(block([{severity:'must-fix',message:'Bug.'}])))!=='block') process.exit(1); try { f.parseReviewFindings('malformed'); process.exit(1) } catch {}\""
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/review-findings.test.ts"
     failure_mode: "blocks the merge, loudly"

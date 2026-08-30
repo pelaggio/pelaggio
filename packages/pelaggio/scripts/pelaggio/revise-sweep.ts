@@ -20,7 +20,6 @@ import { type GhRunner, parseGhJson } from "./roadmap/github-issues.js";
 const REVISED_LABEL = "autopilot:revised";
 /** The `review` job name in `pr-review.yml` surfaces as the check-run `name` in statusCheckRollup. */
 const REVIEW_CHECK_NAME = "review";
-/** Marker the pr-review CLI upserts on its findings comment (`pr-review-cli.ts`). */
 /** Human-handoff marker — reused from CI so CI and local never double-post a park comment. */
 const PARK_MARKER = "<!-- pelaggio-revise-parked -->";
 /** Append-only operator-invocation audit — never upserted (`gh pr comment` POST, not PATCH). */

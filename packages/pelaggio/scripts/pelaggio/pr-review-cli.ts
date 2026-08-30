@@ -1,3 +1,5 @@
+#!/usr/bin/env tsx
+
 /**
  * `pelaggio pr-review --pr <n>` — thin entry over `pr-review-gate.ts`. Parses argv, runs the
  * gate fail-closed, posts the required status + marker comment, and exits. The gate body and
