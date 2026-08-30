@@ -5,3 +5,9 @@ pre-commit:
       glob: "{packages/*/scripts/**/*.ts,scripts/**/*.ts}"
       run: pnpm exec biome check --write --no-errors-on-unmatched {staged_files}
       stage_fixed: true
+    guards:
+      # The two 1-second conformance tests behind the review gate's guard-config lens, run at
+      # authoring time so a layering violation or an unregistered .dev path is refused before a
+      # gate roll, not $40 later (guarded-actions.md §8.1 "early").
+      glob: "{packages/pelaggio/scripts/**/*.ts,packages/server/src/**/*.ts}"
+      run: pnpm --filter pelaggio exec tsx --test scripts/pelaggio/__tests__/module-layering.test.ts scripts/pelaggio/__tests__/registers.test.ts

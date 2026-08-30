@@ -13,9 +13,8 @@
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, relative } from "node:path";
-import type { Effect } from "./effects.js";
 import { registerPath, registerRelativePath } from "./registers.js";
-import type { ExecutionReceiptDescriptor, ProviderName, Step } from "./types.js";
+import type { Effect, ExecutionReceiptDescriptor, ProviderName, Step } from "./types.js";
 
 export const EXECUTION_RECEIPT_SCHEMA_VERSION = 1 as const;
 export const EXECUTION_RECEIPT_KIND = "effects-manifest" as const;

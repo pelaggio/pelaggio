@@ -665,3 +665,53 @@ export interface SessionEvaluatorContext {
 	starttimeJiffies?: number;
 	mainRepo: string;
 }
+
+// ── Typed effects (owned here so L1 receipts and L2 effects share the shape without an upward edge) ──
+export interface ShipDecisionEffect {
+	kind: "ship.ShipDecision";
+	target: "pull-request" | "auto-merge-pr" | "direct-push";
+	itemId: string;
+	headBranch: string;
+	prTitle: string;
+	prBody: string;
+}
+
+export interface ReviewSeatIdentity {
+	role: "author" | "reviewer" | "judge";
+	seatId: string;
+	provider: ProviderName;
+	model?: string;
+}
+
+/**
+ * Aggregate authoring-review verdict attestation (#337). Validate-and-log only —
+ * durable review records stay on `writeReviewRecord`; this effect binds provenance
+ * to the typed effects seam without double-writing.
+ */
+export interface ReviewVerdictEffect {
+	kind: "review.Verdict";
+	itemId: string;
+	reviewedSha: string;
+	reviewRecordSource: string;
+	outcome: ReviewOutcome;
+	seats: ReviewSeatIdentity[];
+}
+
+/**
+ * Authoring-review disagreement escalation attestation. Validate-and-log only —
+ * durable escalations stay on `appendReviewEscalation`.
+ */
+export interface ReviewEscalationEffect {
+	kind: "review.Escalation";
+	itemId: string;
+	reviewedSha: string;
+	reviewRecordSource: string;
+	evidenceFingerprint: string;
+	hasSafetyBlocker: boolean;
+}
+
+export type ImplementedEffect = { kind: "checkpoint"; label: string } | { kind: "plan.publish"; planPath?: string } | ShipDecisionEffect | ReviewVerdictEffect | ReviewEscalationEffect;
+
+export type ReservedEffect = ({ kind: "pick.explainSelection" } & Record<string, unknown>) | ({ kind: "shakedown.deferredItems" } & Record<string, unknown>);
+
+export type Effect = ImplementedEffect | ReservedEffect;

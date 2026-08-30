@@ -13,57 +13,12 @@ import type { ExecutionReceiptDescriptor, ProviderName, ReviewOutcome, Step } fr
 
 export const EFFECTS_SCHEMA_VERSION = 1;
 
-export interface ShipDecisionEffect {
-	kind: "ship.ShipDecision";
-	target: "pull-request" | "auto-merge-pr" | "direct-push";
-	itemId: string;
-	headBranch: string;
-	prTitle: string;
-	prBody: string;
-}
-
 /** Closed review-loop outcomes accepted on `review.Verdict`. */
 export const REVIEW_OUTCOMES: readonly ReviewOutcome[] = ["converged-clean", "converged-with-notes", "ceiling", "dissent", "hard-block", "budget"];
 
-export interface ReviewSeatIdentity {
-	role: "author" | "reviewer" | "judge";
-	seatId: string;
-	provider: ProviderName;
-	model?: string;
-}
+import type { Effect, ImplementedEffect, ReservedEffect, ReviewEscalationEffect, ReviewSeatIdentity, ReviewVerdictEffect, ShipDecisionEffect } from "./types.js";
 
-/**
- * Aggregate authoring-review verdict attestation (#337). Validate-and-log only —
- * durable review records stay on `writeReviewRecord`; this effect binds provenance
- * to the typed effects seam without double-writing.
- */
-export interface ReviewVerdictEffect {
-	kind: "review.Verdict";
-	itemId: string;
-	reviewedSha: string;
-	reviewRecordSource: string;
-	outcome: ReviewOutcome;
-	seats: ReviewSeatIdentity[];
-}
-
-/**
- * Authoring-review disagreement escalation attestation. Validate-and-log only —
- * durable escalations stay on `appendReviewEscalation`.
- */
-export interface ReviewEscalationEffect {
-	kind: "review.Escalation";
-	itemId: string;
-	reviewedSha: string;
-	reviewRecordSource: string;
-	evidenceFingerprint: string;
-	hasSafetyBlocker: boolean;
-}
-
-export type ImplementedEffect = { kind: "checkpoint"; label: string } | { kind: "plan.publish"; planPath?: string } | ShipDecisionEffect | ReviewVerdictEffect | ReviewEscalationEffect;
-
-export type ReservedEffect = ({ kind: "pick.explainSelection" } & Record<string, unknown>) | ({ kind: "shakedown.deferredItems" } & Record<string, unknown>);
-
-export type Effect = ImplementedEffect | ReservedEffect;
+export type { Effect, ImplementedEffect, ReservedEffect, ReviewEscalationEffect, ReviewSeatIdentity, ReviewVerdictEffect, ShipDecisionEffect };
 
 export interface EffectsManifest {
 	schemaVersion: typeof EFFECTS_SCHEMA_VERSION;
