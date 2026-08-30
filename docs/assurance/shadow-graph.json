@@ -876,6 +876,8 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
+				"packages/pelaggio/scripts/pelaggio/step-names.ts",
+				"packages/pelaggio/scripts/pelaggio/steps/context.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
 			],
 			"observations": [
@@ -935,8 +937,10 @@
 				"ADR-0001"
 			],
 			"codeEvidence": [
-				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
-				"packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+				"packages/pelaggio/scripts/pelaggio/step-executor.ts",
+				"packages/pelaggio/scripts/pelaggio/confinement/roots.ts",
+				"packages/pelaggio/scripts/pelaggio/confinement/sessions.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/confinement-sessions.test.ts"
 			],
 			"observations": [
 				{
@@ -1286,6 +1290,7 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/claude-seat.ts",
+				"packages/pelaggio/scripts/pelaggio/providers/claude.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/claude-seat.test.ts"
 			],
 			"observations": [
@@ -1493,6 +1498,7 @@
 			],
 			"codeEvidence": [
 				"packages/pelaggio/scripts/pelaggio/pipeline.ts",
+				"packages/pelaggio/scripts/pelaggio/steps/ship.ts",
 				"packages/pelaggio/scripts/pelaggio/__tests__/continuous.test.ts"
 			],
 			"observations": [
@@ -1611,6 +1617,69 @@
 					"kind": "test",
 					"id": "allocates monotonically per item, starting at 1",
 					"path": "packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
+				}
+			]
+		},
+		{
+			"id": "DEC-0022",
+			"kind": "decision",
+			"slug": "layered-import-order",
+			"statement": "Modules in the pelaggio package are assigned to six layers (foundation, infra, domain, execution, orchestration, entry) and may import only their own layer or lower; entry modules are leaves. The assignment is a path-anchored table, unlisted modules fail, and the rule is enforced by construction at authoring time rather than reviewed for.",
+			"status": "current-construction-choice",
+			"sources": []
+		},
+		{
+			"id": "CTR-0026",
+			"kind": "realization",
+			"slug": "module-layering-conformance-test",
+			"statement": "The layered import order is enforced by a conformance test that parses every module's imports with the TypeScript compiler, refuses computed specifiers, and fails on any upward or entry-module edge; the pre-commit guard runs it on the staged snapshot.",
+			"sources": [],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts",
+				"ci/guards-staged.sh"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "no edge points upward and no non-entry module imports an entry module",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts"
+				},
+				{
+					"kind": "test",
+					"id": "every module is assigned a layer (extract-and-require)",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts"
+				}
+			]
+		},
+		{
+			"id": "CTR-0025",
+			"kind": "realization",
+			"slug": "seat-denials-derived-from-register-table",
+			"statement": "Seat Bash-mention and Write/Edit denials derive from the .dev register table (every harness-written register a skill does not read), checked under the main checkout, the step cwd and the own worktree; the `.dev`-literal source scan is a construction-discipline diagnostic, not the guard.",
+			"sources": [
+				"ADR-0001"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/registers.ts",
+				"packages/pelaggio/scripts/pelaggio/providers/claude.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/registers.test.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/step-runner.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "derives the seat denials from the table: every harness register a skill does not read",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/registers.test.ts"
+				},
+				{
+					"kind": "test",
+					"id": "denies Write/Edit into harness registers under the step cwd and own worktree, not only under main (#730 review)",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/step-runner.test.ts"
+				},
+				{
+					"kind": "test",
+					"id": "never fires on skill-read, agent-written or seat-tree registers (no false fire)",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/step-runner.test.ts"
 				}
 			]
 		}
@@ -2395,6 +2464,26 @@
 			"from": "CTR-0023",
 			"relation": "implements",
 			"to": "CLM-0012"
+		},
+		{
+			"from": "CTR-0026",
+			"relation": "derived-from",
+			"to": "DEC-0022"
+		},
+		{
+			"from": "CTR-0025",
+			"relation": "implements",
+			"to": "CLM-0002"
+		},
+		{
+			"from": "CTR-0025",
+			"relation": "implements",
+			"to": "TC-011"
+		},
+		{
+			"from": "CON-0027",
+			"relation": "constrains",
+			"to": "CTR-0025"
 		}
 	],
 	"adrMap": {
@@ -2404,6 +2493,7 @@
 			"CON-0002",
 			"CON-0003",
 			"CTR-0004",
+			"CTR-0025",
 			"TC-011"
 		],
 		"ADR-0002": [
