@@ -92,15 +92,27 @@ Steps 7a/7b/8 and 10 are independent of 5/6/9 and may interleave once 4 is in.
 - **Layer rule**: for every edge `a → b`, `layer(a) ≥ layer(b)`.
 - **Entry-leaf rule**: an L5 module may be imported only by `index.ts` or
   `main.ts` (path-anchored to the package root).
-- **Baseline**: the exact set of violating edges (`"from -> to"`), not SCCs —
-  so a new edge inside an existing cycle is caught. Every baseline edge must
-  still exist (ratchet: a fixed violation is removed in the same PR);
-  any violating edge not in the baseline fails.
-- Cycles are not baselined separately: an acyclic-by-layer graph can only
-  cycle within a layer, and intra-layer cycles (`ship/*`, `roadmap/stale-*`)
-  are reported as a diagnostic, fixed opportunistically in steps 4/6.
-- Regenerate with `MODULE_LAYERING_WRITE=1 npx tsx --test …/module-layering.test.ts`.
-- Baseline fixture: `__tests__/fixtures/module-layering-baseline.json`.
+- **Baseline — retired.** Steps 1–9 carried an exact-edge baseline fixture so
+  each step could shrink it monotonically (20 → 13 → 10 → 2). The last two
+  edges (`execution-receipt → effects`, `review/record → review/loop`) were type
+  migrations deferred from step 4; the guard-hooks PR finished them (`Effect`
+  types live in `types.ts`; the loop's persisted shapes live in
+  `review/loop-result.ts`, L1) and deleted the fixture and its
+  `MODULE_LAYERING_WRITE` regeneration switch. A ratchet is a migration tool:
+  once its campaign closes it is a zero-rule with no reset key to protect.
+  Violations now simply fail; intra-layer cycles stay a printed diagnostic.
+- **Guard config is a review-lens change.** `LAYERS`, `registers.ts` and
+  `lefthook.yml` are `SECURITY_PATHS`, and `classifySecurityReviewDiff` renders
+  every changed table entry as a `guard:layer <module> L0→L4` /
+  `guard:register <name> harness→agent` reason, so a loosening is salient in
+  the gate comment and the red-team pass rather than buried in a fixture diff.
+  Under autonomous cycles the harness's author is the guarded party, so review
+  owns these files; a fence (base-config evaluation, seat denial, signed
+  tables) was considered and rejected as friction that blocks every PR adding
+  a module (see the guard-hooks PR).
+- **Authoring hooks.** A lefthook `pre-commit` `guards` command runs the
+  layering and register conformance tests (~1 s each) on any staged TS under
+  either package; the rubric's Verification section already runs them in-cycle.
 
 ## 5. Run-lane hold
 

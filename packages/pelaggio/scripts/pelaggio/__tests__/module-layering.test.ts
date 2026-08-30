@@ -3,21 +3,19 @@
  *
  * Every non-test module under `scripts/pelaggio` is assigned a layer; an import may only point
  * at the same layer or lower, and entry (L5) modules may be imported only by the package barrel
- * and `main.ts`. Violations are ratcheted through a baseline fixture of exact edges: a new
- * violating edge fails, and a baseline edge that no longer exists fails too (remove it in the
- * same PR that fixes it). An unlisted module fails — extract-and-require, not default-allow.
- *
- * Regenerate the baseline: `MODULE_LAYERING_WRITE=1 npx tsx --test <this file>`.
+ * and `main.ts`. Any violating edge fails — there is no baseline and no regeneration switch: the
+ * migration that carried one (`docs/plans/module-architecture.md` §4) retired it at zero, so the
+ * rule has no reset key a PR could turn. An unlisted module fails — extract-and-require, not
+ * default-allow.
  */
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BASELINE_PATH = join(ROOT, "__tests__", "fixtures", "module-layering-baseline.json");
 
 /** Admission questions per layer live in the plan §2; this table is the path-anchored answer. */
 const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
@@ -50,6 +48,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"review-findings-archive.ts": 1,
 	"review/findings.ts": 1,
 	"review/record.ts": 1,
+	"review/loop-result.ts": 1,
 	"review/seats.ts": 1,
 	"github-posting.ts": 1,
 	"confinement/roots.ts": 1,
@@ -258,19 +257,11 @@ describe("module layering", () => {
 		assert.deepEqual(stale, [], `LAYERS names modules that no longer exist: ${stale.join(", ")}`);
 	});
 
-	it("violating edges match the baseline exactly (ratchet)", () => {
+	it("no edge points upward and no non-entry module imports an entry module", () => {
 		const current = violations(modules, edges);
 		const cycles = intraLayerCycles(edges);
 		if (cycles.length) console.log(`[module-layering] ${cycles.length} intra-layer cycle path(s) (diagnostic, not gated):\n  ${cycles.join("\n  ")}`);
-		// Regen is a local authoring convenience; under CI it would make this assertion vacuous.
-		if (process.env.MODULE_LAYERING_WRITE && !process.env.CI) {
-			writeFileSync(BASELINE_PATH, `${JSON.stringify({ edges: current }, null, "\t")}\n`);
-		}
-		const baseline: string[] = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).edges;
-		const added = current.filter((e) => !baseline.includes(e));
-		const fixed = baseline.filter((e) => !current.includes(e));
-		assert.deepEqual(added, [], `new layering violations (fix them or, for a planned move, extend the baseline deliberately):\n  ${added.join("\n  ")}`);
-		assert.deepEqual(fixed, [], `baseline edges no longer violate — remove them from the fixture:\n  ${fixed.join("\n  ")}`);
+		assert.deepEqual(current, [], `layering violations (move the module down, or reclassify it in LAYERS with the admission question answered):\n  ${current.join("\n  ")}`);
 	});
 
 	it("recognizes every import syntax that creates an edge, including inside template expressions (no scanner bypass)", () => {

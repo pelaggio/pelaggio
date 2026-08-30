@@ -5,7 +5,7 @@ import { writeAtomically, writeJsonAtomically } from "../record-store.js";
 import { registerPath, registerRelativePath } from "../registers.js";
 import { escapeRegExp } from "../text.js";
 import type { ReviewFindingsParseErrorCode } from "./findings.js";
-import type { ReviewLoopResult, UnreadableSource } from "./loop.js";
+import type { ReviewLoopResult, UnreadableSource } from "./loop-result.js";
 
 export interface ReviewRecord {
 	schemaVersion: 1;
