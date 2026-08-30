@@ -107,6 +107,8 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"grok-sandbox.ts": 3,
 	// L4 orchestration — sequences steps or seats end-to-end.
 	"pipeline.ts": 4,
+	"orchestrator.ts": 4,
+	"cycle-result.ts": 4,
 	"pr-review-gate.ts": 4,
 	"cycle-support.ts": 4,
 	// L5 entry — parses argv and exits. Importable only by index.ts / main.ts.

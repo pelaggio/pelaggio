@@ -16,7 +16,7 @@ Six dimensions — apply when planning, reviewing, or fixing code in this repo. 
 - `git.ts` / `text.ts` / `outcome-classify.ts` / `skills.ts` — pure functions and shell wrappers (git, fs, parsing). No SDK calls, no event emission. `cycle-outcome.ts` / `pick-parse.ts` / `ship/freshness.ts` hold verdict and ship policy; `cycle-support.ts` holds what only the orchestration layer uses.
 - `types.ts` — type-only. No runtime code.
 - `step-runner.ts` — owns the SDK `query()` loop, hook installation, event streaming. No business logic.
-- `pipeline.ts` — the orchestration loop. Composes everything above. No direct SDK imports (goes through `step-runner`).
+- `pipeline.ts` — one cycle (`runPipeline`); `orchestrator.ts` — the loop that schedules cycles, waits out parks and drains reviews. Both compose everything above. No direct SDK imports (goes through `step-runner`).
 - `main.ts` / `pelaggio.ts` — entry points. Arg parsing and orchestrator invocation only.
 - `tui.ts` — display layer. No business logic, no mutation.
 
@@ -46,7 +46,7 @@ npx tsx --test --test-reporter=dot packages/pelaggio/scripts/pelaggio/__tests__/
 npx tsx --test --test-reporter=dot packages/server/__tests__/*.test.ts                         # server unit tests (supervisor, state-store, auth, app)
 npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/config.ts')"                        # parse-check config
 npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/git.ts')"                           # parse-check git helpers
-npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/pipeline.ts')"                      # parse-check pipeline
+npx tsx -e "import('./packages/pelaggio/scripts/pelaggio/orchestrator.ts')"                  # parse-check pipeline + orchestrator
 npx tsx -e "import('./packages/server/src/app.ts')"                                            # parse-check server entry
 pnpm typecheck                                                               # ordinary gate: pelaggio+server tsc --noEmit (relaxed noUncheckedIndexedAccess) + web astro check
 pnpm typecheck:ratchet                                                       # strict non-web debt: diagnostic count may only fall (except governed root-TS bump)

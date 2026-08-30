@@ -6,7 +6,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { REPO, REVIEW_CONFIG } from "../config.js";
 import { createEventWriter, readEventLog } from "../flow-events.js";
 import type { NotifyPayload } from "../notify.js";
-import { hermeticDefault, hermeticQueueRoot, type OrchestratorDeps, PARKED_EXIT_CODE, runOrchestrator } from "../pipeline.js";
+import { hermeticDefault, hermeticQueueRoot, type OrchestratorDeps, PARKED_EXIT_CODE, runOrchestrator } from "../orchestrator.js";
 import { gateRecordsDir, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { fleetRecordDigestOf, readAdjudicationSourceRecord, writeAdjudicationSourceRecord } from "../review/adjudication.js";
 import { type PrCarryDispositionDraft, readPrFindingDispositionRecord, writePrFindingDispositionRecord } from "../review/carry.js";
