@@ -115,6 +115,11 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"orchestrator.ts": 4,
 	"cycle-result.ts": 4,
 	"pr-review-gate.ts": 4,
+	"steps/context.ts": 4,
+	"steps/implement.ts": 4,
+	"steps/plan.ts": 4,
+	"steps/shakedown-plan.ts": 4,
+	"steps/shakedown-code.ts": 4,
 	"cycle-support.ts": 4,
 	// L5 entry — parses argv and exits. Importable only by index.ts / main.ts.
 	"index.ts": 5,
