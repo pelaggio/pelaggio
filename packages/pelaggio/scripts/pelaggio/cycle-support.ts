@@ -156,14 +156,15 @@ const GUARD_CONFIG: readonly { label: string; path: RegExp; entry: RegExp; value
 	{
 		label: "layer",
 		path: /^packages\/pelaggio\/scripts\/pelaggio\/__tests__\/module-layering\.test\.ts$/,
-		entry: /^"([\w./-]+\.ts)":\s*([0-5]),?$/,
+		entry: /^"([\w./-]+\.ts)":\s*([0-5]),?\s*(?:\/\/.*)?$/,
 		value: (m) => `L${m[2]}`,
 	},
 	{
 		label: "register",
 		path: /^packages\/pelaggio\/scripts\/pelaggio\/registers\.ts$/,
-		entry: /^\{\s*name:\s*"([\w.-]+)",\s*kind:\s*"(harness|agent|seat-tree)"(?:,\s*shape:\s*"[\w-]+")?(?:,\s*agentReads:\s*(true|false))?\s*\},?/,
-		value: (m) => (m[3] === "true" ? `${m[2]}+agentReads` : (m[2] as string)),
+		entry: /^\{\s*name:\s*"([\w.-]+)",\s*kind:\s*"(harness|agent|seat-tree)"(?:,\s*shape:\s*"([\w-]+)")?(?:,\s*agentReads:\s*(true|false))?\s*\},?/,
+		// kind/shape[+agentReads]: shape matters too — dir→file narrows a write denial from a tree to one path.
+		value: (m) => `${m[2]}${m[3] ? `/${m[3]}` : ""}${m[4] === "true" ? "+agentReads" : ""}`,
 	},
 ];
 
@@ -205,7 +206,10 @@ export function guardConfigDelta(diff: string): string[] {
 		(line.startsWith("-") ? removed : added).set(m[1] as string, spec.value(m));
 	}
 	flush();
-	return out.sort();
+	// Register deltas before layer deltas; changes and removals before additions — so under the
+	// reason cap a PR that adds many modules cannot crowd out the loosening that matters.
+	const rank = (r: string): string => `${r.startsWith("guard:register") ? 0 : 1}${/ added /.test(r) ? 2 : / removed$/.test(r) ? 1 : 0}${r}`;
+	return out.sort((a, b) => rank(a).localeCompare(rank(b)));
 }
 
 /**
