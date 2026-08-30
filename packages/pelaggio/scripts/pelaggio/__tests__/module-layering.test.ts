@@ -116,6 +116,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"pr-review-gate.ts": 4,
 	"steps/context.ts": 4,
 	"steps/implement.ts": 4,
+	"steps/pick.ts": 4,
 	"steps/plan.ts": 4,
 	"steps/shakedown-plan.ts": 4,
 	"steps/shakedown-code.ts": 4,
