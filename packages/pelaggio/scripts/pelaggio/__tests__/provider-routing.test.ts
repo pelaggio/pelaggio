@@ -3,11 +3,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { CODEX_CAPABILITIES } from "../codex-provider.js";
 import { DEFAULTS, loadConfig, type ResolvedConfig } from "../config.js";
-import { grokCapabilities } from "../grok-provider.js";
-import { OPENCODE_CAPABILITIES } from "../opencode-provider.js";
 import { detectUnattendedSignals, matchEligibleProviders, matchesCapabilityPredicate, OPERATOR_ATTESTED_TTY_SUPPRESSION, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution, softDegradedAxes } from "../provider-routing.js";
+import { CODEX_CAPABILITIES } from "../providers/codex.js";
+import { grokCapabilities } from "../providers/grok.js";
+import { OPENCODE_CAPABILITIES } from "../providers/opencode.js";
 import { CLAUDE_CAPABILITIES } from "../step-runner.js";
 import type { ProviderCapabilities, ProviderName } from "../types.js";
 

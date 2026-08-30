@@ -78,5 +78,5 @@ needs to route server→client requests to a handler.)
 - Request/response correlation by monotonic integer `id`; a pending-map keyed by `id`.
 - Notification sink + a server→client request handler (default: reject/allow policy injected).
 - Lifecycle helpers: `initialize`, `sessionNew`, `sessionPrompt` — typed but agent-neutral.
-- Lifecycle: SIGTERM→SIGKILL on abort/timeout (mirror `codex-provider.ts`); surface spawn
+- Lifecycle: SIGTERM→SIGKILL on abort/timeout (mirror `providers/codex.ts`); surface spawn
   errors; resolve the prompt promise on the response, not on a stream sentinel.

@@ -18,7 +18,7 @@ No model strings live outside `MODEL_PROFILES`. No other file references `claude
 
 ## Step Providers
 
-`packages/pelaggio/scripts/pelaggio/step-runner.ts` exposes the `StepProvider` seam. The default registered provider is `claude`. Issue `#80` adds `codex`; `#136` adds `grok` (ACP), and `#137` adds `opencode` as a headless `run --format json` peer alongside Codex.
+`packages/pelaggio/scripts/pelaggio/providers/types.ts` exposes the `StepProvider` seam and `providers/index.ts` the registry; `step-runner.ts` dispatches through it. The default registered provider is `claude`. Issue `#80` adds `codex`; `#136` adds `grok` (ACP), and `#137` adds `opencode` as a headless `run --format json` peer alongside Codex.
 
 Important contracts:
 
@@ -31,7 +31,7 @@ Important contracts:
 
 Normal cycles run in sibling git worktrees. Mutating operations must target the worktree, not the main repo.
 
-`step-runner` installs PreToolUse hooks that block writes to `MAIN_REPO` paths when running in a worktree, preventing sibling-worktree corruption. Do not bypass this.
+`providers/claude.ts` (the Claude seat runner) installs PreToolUse hooks that block writes to `MAIN_REPO` paths when running in a worktree, preventing sibling-worktree corruption. Do not bypass this.
 
 Claude currently gets SDK hook enforcement plus system prompt guidance. Codex support must preserve the invariant through its sandbox and post-step checks.
 

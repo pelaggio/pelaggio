@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CONFIG, resolveProviderBin } from "../config.js";
-import { GROK_EGRESS_ENDPOINT, runStep } from "../grok-provider.js";
 import { buildGrokArgs, detectLandlock, GROK_SANDBOX_BEGIN, GROK_SANDBOX_BLOCK, GROK_SANDBOX_END, GROK_SANDBOX_PROFILE, installGrokSandboxProfile } from "../grok-sandbox.js";
+import { GROK_EGRESS_ENDPOINT, runStep } from "../providers/grok.js";
 
 async function temporaryHome(): Promise<string> {
 	return mkdtemp(join(tmpdir(), "pelaggio-grok-sandbox-"));

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { StepSettings } from "../config.js";
-import { buildOpenCodeStepResult, OPENCODE_CAPABILITIES, OPENCODE_SANDBOX_APPEND, opencodeTimeoutMs, selectOpenCodeModel } from "../opencode-provider.js";
+import { buildOpenCodeStepResult, OPENCODE_CAPABILITIES, OPENCODE_SANDBOX_APPEND, opencodeTimeoutMs, selectOpenCodeModel } from "../providers/opencode.js";
 import { EDIT_LOOP_THRESHOLD } from "../step-runner-shared.js";
 
 function fixtureEvents(name: string): Record<string, unknown>[] {

@@ -488,6 +488,9 @@ describe("classifyAuthoringReviewFinding", () => {
 describe("extractDiffPathSignals", () => {
 	it("maps representative paths to closed signal kinds", () => {
 		assert.deepEqual(extractDiffPathSignals(".github/workflows/ci.yml"), ["workflow"]);
+		for (const moved of ["packages/pelaggio/scripts/pelaggio/providers/claude.ts", "packages/pelaggio/scripts/pelaggio/providers/codex.ts", "packages/pelaggio/scripts/pelaggio/git.ts", "packages/pelaggio/scripts/pelaggio/cycle-support.ts"]) {
+			assert.deepEqual(extractDiffPathSignals(moved), ["confinement-surface"], moved);
+		}
 		assert.deepEqual(extractDiffPathSignals("package.json"), ["lifecycle-manifest"]);
 		assert.deepEqual(extractDiffPathSignals("pnpm-lock.yaml"), ["dependency-lock"]);
 		assert.deepEqual(extractDiffPathSignals("packages/pelaggio/scripts/pelaggio/step-runner.ts"), ["confinement-surface"]);

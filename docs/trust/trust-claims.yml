@@ -32,8 +32,8 @@ claims:
     status: guarantee
     applies_to: ">=0.1.0"
     mechanism: "Prompts are built from skill bodies + args (expandSkill/buildPrompt); provider and pipeline prompt/log paths do not read known secret env vars. The .jsonl log stores cycle metadata plus a bounded outputTail."
-    evidence_command: "grep -En 'ANTHROPIC_API_KEY|LINEAR_API_KEY|GH_TOKEN|CONTROL_PLANE_TOKEN' packages/pelaggio/scripts/pelaggio/step-runner.ts packages/pelaggio/scripts/pelaggio/codex-provider.ts packages/pelaggio/scripts/pelaggio/pipeline.ts # expect: none"
-    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/helpers.test.ts"
+    evidence_command: "grep -En 'ANTHROPIC_API_KEY|LINEAR_API_KEY|GH_TOKEN|CONTROL_PLANE_TOKEN' packages/pelaggio/scripts/pelaggio/step-runner.ts packages/pelaggio/scripts/pelaggio/providers/claude.ts packages/pelaggio/scripts/pelaggio/providers/codex.ts packages/pelaggio/scripts/pelaggio/pipeline.ts # expect: none"
+    test_file: "packages/pelaggio/scripts/pelaggio/__tests__/skills.test.ts"
     failure_mode: "n/a — secrets are never read into these paths"
     known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; as of TC-014 that sink is secret-scrubbed before write, but a novel credential format the scrubber does not recognize could still land there."
     standards: ["OWASP-LLM02", "ASVS-V6"]
