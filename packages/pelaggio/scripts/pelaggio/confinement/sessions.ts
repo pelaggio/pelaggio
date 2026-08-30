@@ -15,6 +15,9 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { SessionEvaluatorContext, SessionIdentity, SessionInventory } from "../types.js";
+
+export type { SessionEvaluatorContext, SessionIdentity, SessionInventory } from "../types.js";
 
 export const SESSION_SCHEMA_VERSION = 1 as const;
 /** Content-stored expiry: longer than the worst supported step. */
@@ -39,29 +42,6 @@ export interface SessionRecord {
 	expiresAt: number;
 	/** Schema-only reserved field; no scheduler behavior. */
 	writeSet?: string[];
-}
-
-/** Immutable identity for inventory / fallback eligibility. pid and expiresAt are excluded. */
-export interface SessionIdentity {
-	sessionId: string;
-	claimedItem: string;
-	claimBranch: string;
-	worktreePath: string;
-}
-
-export interface SessionInventory {
-	identities: readonly SessionIdentity[];
-}
-
-/**
- * Captured once per evaluator run (or once per process by the orchestrator).
- * starttimeJiffies is boot-relative from /proc/self/stat field 22 — never wall-clock.
- */
-export interface SessionEvaluatorContext {
-	inventory: SessionInventory;
-	/** Boot-relative jiffies; unset on non-Linux → only inventory fallback can accept. */
-	starttimeJiffies?: number;
-	mainRepo: string;
 }
 
 export type SessionEligibilityLeg = "binding" | "fallback";

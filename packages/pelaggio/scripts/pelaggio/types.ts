@@ -1,4 +1,4 @@
-import type { Step } from "./config.js";
+import type { Step } from "./step-names.js";
 
 export type { Step };
 
@@ -397,18 +397,6 @@ export interface CycleResult {
 	bookkeepingWarnings?: string[];
 }
 
-/**
- * Cycle `error` strings that are recoverable / informational — a worker keeps pulling
- * subsequent cycles instead of halting, and (per `notify.ts`) they never page a human.
- * Single-sourced here so the orchestrator's `RECOVERABLE` set and the notification
- * classifier can't drift apart.
- *
- * `parked` belongs to the set but is classified first in `classifyEvent`. The fatal pick
- * errors (`pick:unknown-id`, `pick:blocked`) are intentionally absent: a typo'd `--item`
- * or a user-requested blocked item should halt loudly and page.
- */
-export const RECOVERABLE_ERRORS = ["plan needs rethink", "parked", "transient sdk error", "pick:queue-empty", "pick:worktree-exists", "pick:already-claimed", "pick:already-done", "pick:stale-quarantined", "pick:unknown"] as const;
-
 // ── Step providers ─────────────────────────────────────────────────────
 
 /** Closed agreement set over a completed required (driver × label) matrix. Omitted on park. */
@@ -546,7 +534,7 @@ export interface PipelineOpts {
 	 * The orchestrator may pre-capture once per process and thread the same object
 	 * into every worker. Typed object — not a boolean flag.
 	 */
-	sessionEvaluator?: import("./confinement/sessions.js").SessionEvaluatorContext;
+	sessionEvaluator?: SessionEvaluatorContext;
 	workerStatus?: CycleStatus;
 	logPath?: string;
 	/** Required for creating step renderers — injected by orchestrate() */
@@ -651,4 +639,29 @@ export type StepEmit = (event: StepEvent) => void;
 export interface Mutex {
 	acquire(): Promise<void>;
 	release(): void;
+}
+
+// ── Confinement sessions (types only; behaviour in confinement/sessions.ts) ──
+
+/** Immutable identity for inventory / fallback eligibility. pid and expiresAt are excluded. */
+export interface SessionIdentity {
+	sessionId: string;
+	claimedItem: string;
+	claimBranch: string;
+	worktreePath: string;
+}
+
+export interface SessionInventory {
+	identities: readonly SessionIdentity[];
+}
+
+/**
+ * Captured once per evaluator run (or once per process by the orchestrator).
+ * starttimeJiffies is boot-relative from /proc/self/stat field 22 — never wall-clock.
+ */
+export interface SessionEvaluatorContext {
+	inventory: SessionInventory;
+	/** Boot-relative jiffies; unset on non-Linux → only inventory fallback can accept. */
+	starttimeJiffies?: number;
+	mainRepo: string;
 }

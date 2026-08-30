@@ -23,6 +23,9 @@ const BASELINE_PATH = join(ROOT, "__tests__", "fixtures", "module-layering-basel
 const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	// L0 foundation — types/config/argv/terminal/pure utilities; read-only fs probing ok, no `.dev` writes.
 	"types.ts": 0,
+	"step-names.ts": 0,
+	"cycle-errors.ts": 0,
+	"notify-schema.ts": 0,
 	"config.ts": 0,
 	"cli.ts": 0,
 	"tui.ts": 0,

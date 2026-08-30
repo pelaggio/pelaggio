@@ -21,14 +21,13 @@ import {
 	resolveHarnessSocketPaths,
 	spawnClaudeSeat,
 } from "../claude-seat.js";
-import { STEPS } from "../config.js";
+import { ALL_STEPS } from "../step-names.js";
 import type { Step } from "../types.js";
 
 const temps: string[] = [];
 const servers: Server[] = [];
 const httpServers: Array<ReturnType<typeof createHttpServer>> = [];
 const children: ChildProcess[] = [];
-const ALL_STEPS: readonly Step[] = [...STEPS, "shipwreck", "pr-review", "pr-verify"];
 const FORGE_CAPABLE_STEPS: readonly Step[] = ["pick", "ship", "shipwreck"];
 const DENIED_STEPS: readonly Step[] = ALL_STEPS.filter((step) => !FORGE_CAPABLE_STEPS.includes(step));
 const FORGE_REMOTE_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "LINEAR_API_KEY", "SSH_AUTH_SOCK", "GH_CONFIG_DIR", "GH_HOST", "GH_ENTERPRISE_HOST"] as const;

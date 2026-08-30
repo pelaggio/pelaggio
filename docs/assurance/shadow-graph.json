@@ -2757,7 +2757,7 @@
 		"rule": "Every bullet in the section resolves to graph primitives or is explicitly classified as a construction rule (repository convention, not architectural intent). A bullet that does neither is an uncovered channel for load-bearing intent and fails Q16.",
 		"entries": [
 			{
-				"anchor": "`STEPS` in `packages/pelaggio/scripts/pelaggio/config.ts` is the source of truth",
+				"anchor": "`STEPS` in `packages/pelaggio/scripts/pelaggio/step-names.ts` is the source of truth",
 				"construction": "config-shape convention for pipeline steps"
 			},
 			{

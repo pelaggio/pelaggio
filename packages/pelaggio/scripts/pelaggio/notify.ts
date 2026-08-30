@@ -1,20 +1,8 @@
-import { type CycleResult, type Decision, RECOVERABLE_ERRORS, type ReviewEscalation, type Step } from "./types.js";
+import { RECOVERABLE_ERRORS } from "./cycle-errors.js";
+import type { NotifyConfig, NotifyEvent, NotifyFormat } from "./notify-schema.js";
+import type { CycleResult, Decision, ReviewEscalation, Step } from "./types.js";
 
-// ── Events & formats ───────────────────────────────────────────────────
-
-export const NOTIFY_EVENTS = ["parked", "failed", "shipped", "pr-opened", "shipwrecked", "review-stranded", "decision"] as const;
-export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
-
-export const NOTIFY_FORMATS = ["json", "ntfy"] as const;
-export type NotifyFormat = (typeof NOTIFY_FORMATS)[number];
-
-export interface NotifyConfig {
-	/** Webhook endpoint. Empty string = notifications disabled (the default). */
-	url: string;
-	format: NotifyFormat;
-	/** Subset of `NOTIFY_EVENTS` to actually send. */
-	events: NotifyEvent[];
-}
+export { NOTIFY_EVENTS, NOTIFY_FORMATS, type NotifyConfig, type NotifyEvent, type NotifyFormat } from "./notify-schema.js";
 
 // ── Payload & wire request ─────────────────────────────────────────────
 
