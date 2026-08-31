@@ -211,3 +211,20 @@ describe("opencodeTimeoutMs", () => {
 		assert.equal(opencodeTimeoutMs(200), 90 * 60_000);
 	});
 });
+
+describe("opencode live 1.18.25 event shape", () => {
+	// Captured from `opencode run --format json -m opencode/mimo-v2.5-free` (2026-08-30): events are
+	// `{type, part:{type:"step-start"|"tool"|"text"|"step-finish", ...}}`, usage lives at `part.tokens`,
+	// and the stream ends on a `step-finish` with `reason:"stop"` — there is no separate `finish` event.
+	it("folds a real run to ok:true with tokens and a completion signal", () => {
+		const out = buildOpenCodeStepResult("implement", fixtureEvents("opencode-events-live-1.18.jsonl"), { exitCode: 0 });
+		assert.equal(out.result.ok, true, JSON.stringify(out.result));
+		assert.equal(out.result.subtype, "success");
+		assert.equal(out.result.text, "DONE");
+		assert.equal(out.result.turns, 2);
+		assert.deepEqual(out.result.tokens, { input: 354, output: 74, cacheCreation: 0, cacheRead: 8064 });
+		assert.ok(out.result.cost > 0);
+		assert.ok(out.events.some((e) => e.type === "tool_use" && e.name === "Edit" && e.mutating === true));
+		assert.ok(!out.events.some((e) => e.type === "sdk_error"));
+	});
+});

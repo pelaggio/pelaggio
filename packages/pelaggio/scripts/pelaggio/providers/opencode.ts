@@ -174,7 +174,8 @@ function toolState(part: JsonObject): { status: string; output: string } {
 }
 
 function usageObject(ev: JsonObject): JsonObject | undefined {
-	return nestedObject(ev, "usage") ?? nestedObject(eventPart(ev), "usage") ?? nestedObject(nestedObject(ev, "properties") ?? {}, "usage");
+	// Live `opencode run --format json` (1.18.x) reports usage as `part.tokens`, not `usage`.
+	return nestedObject(ev, "usage") ?? nestedObject(eventPart(ev), "usage") ?? nestedObject(nestedObject(ev, "properties") ?? {}, "usage") ?? nestedObject(eventPart(ev), "tokens") ?? nestedObject(ev, "tokens");
 }
 
 function tokensFromUsage(usage: JsonObject | undefined): TokenUsage | undefined {
@@ -264,6 +265,13 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 			const usage = usageObject(ev);
 			if (usage) tokens = tokensFromUsage(usage) ?? tokens;
 			cost = reportedCost(ev) || cost;
+			// Live 1.18.x emits no trailing `finish` event: the final `step-finish` carries
+			// `reason: "stop"` (intermediate ones carry `"tool-calls"`), so it is the completion signal.
+			const reason = stringField(part, "reason") || stringField(ev, "reason");
+			if (reason && reason !== "tool-calls") {
+				completed = true;
+				stopReason = reason;
+			}
 			continue;
 		}
 		if (/^(finish|done|complete|completed|message\.completed|result)$/.test(type)) {
