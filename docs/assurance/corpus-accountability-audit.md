@@ -11,6 +11,9 @@ It deliberately does not add a relation kind, node kind, generic rationale field
 or issue node. ADRs retain narrative, alternatives, and historical authority; the corpus anchors
 and relates those facts rather than copying their prose.
 
+The follow-on [intent lineage audit](./intent-lineage-audit.md) tests whether that ADR/trust boundary
+captured the intent that preceded it. Source grounding and source completeness are separate claims.
+
 ## Results
 
 - All 46 front-door records now carry exact source grounding: 21 decisions, 21 internal

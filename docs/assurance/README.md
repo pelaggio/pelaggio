@@ -15,6 +15,11 @@ developer-front-door decision, internal invariant, and assumption. Its executabl
 cases live in [`competency-fixtures.json`](./competency-fixtures.json). Both remain migration evidence,
 not authority or a promoted question contract.
 
+The [intent lineage audit](./intent-lineage-audit.md) checks those front-door decisions and assumptions
+against their ADR birth commits, architecture plans, roadmap snapshot, and tracked decision logs. It
+records why historical implementation choices are not imported wholesale and identifies the ordered
+typed-lifecycle candidate that still needs an authoritative settlement before it can enter the graph.
+
 ## Node model
 
 The current semantic kernel is deliberately small:
@@ -101,6 +106,12 @@ pnpm assurance:explore
 ```
 
 The command prints the absolute path of `docs/assurance/generated/explorer.html` and does **not** rewrite the graph, `adrMap`, or Mermaid projections. Open that file from disk (`file://`). Source, code-evidence, and grounding hrefs are already rewritten relative to `docs/assurance/generated/`, so those links work without a hosted origin.
+
+The Pages workflow publishes one canonical projection from `main`. A merge touching the assurance
+corpus or renderer, ADRs, trust material, AGENTS.md grounding index, or generator dependencies rebuilds
+the page automatically; manual dispatch rebuilds the same `main` page. Hosted source, grounding, and
+code-evidence links are pinned to the exact published GitHub commit, while ordinary local generation
+keeps relative `file://` links.
 
 The page is viewer-only and non-authoritative (ADR-0027). Every catalogued view, every declared-relation mask, and every `why` / `affected` neighbourhood in the catalog-derived depth window is precomputed by the query engine, including `affected` queries seeded from every source named by the graph. The browser looks up those answers and does not traverse neighbourhoods or diagnose debt; the only in-browser edge work is filtering the embedded result for edges incident to the selected node. Hash links encode `view`, either `node` or `source` (seed), `depth`, `rel` (integer relation mask), `sel` (side-panel node), and `q` (search). For example, `#view=why&node=CLM-0006&depth=2` restores a node neighbourhood, while `#view=affected&source=ADR-0027&depth=3` restores a source-seeded neighbourhood. Missing `depth` / `rel` restore the catalog or engine default (depth 2 for `why`, 3 for `affected`, full relation mask). Unknown or incomplete hashes fall back to the first catalog view at its defaults.
 
