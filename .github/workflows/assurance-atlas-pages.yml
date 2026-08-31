@@ -4,22 +4,19 @@ on:
   push:
     branches:
       - main
-      - 'feat/assurance-atlas-*'
     paths:
       - '.github/workflows/assurance-atlas-pages.yml'
+      - 'AGENTS.md'
       - 'ci/assurance-explorer.ts'
       - 'ci/assurance-graph.ts'
       - 'ci/assurance-observations.ts'
       - 'ci/assurance-views.ts'
       - 'docs/assurance/**'
+      - 'docs/decisions/**'
+      - 'docs/trust/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Branch, tag, or commit to preview
-        required: false
-        default: main
 
 permissions:
   contents: read
@@ -37,10 +34,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout selected revision
+      - name: Checkout main revision
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.event.inputs.ref || github.sha }}
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
@@ -52,9 +47,10 @@ jobs:
       - name: Install generator dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Generate atlas from the selected checkout
+      - name: Generate canonical page
         run: |
-          node --import tsx ci/assurance-views.ts --html
+          revision=$(git rev-parse HEAD)
+          PELAGGIO_ASSURANCE_SOURCE_BASE_URL="https://github.com/${{ github.repository }}/blob/${revision}/" node --import tsx ci/assurance-views.ts --html
           mkdir -p .pages
           cp docs/assurance/generated/explorer.html .pages/index.html
           touch .pages/.nojekyll

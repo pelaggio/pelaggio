@@ -174,6 +174,19 @@ describe("assurance HTML explorer payload", () => {
 		assert.ok(!payload.retiredIds.some((id) => /^ADR-\d+$/.test(id)), "ADR-shaped tokens that are not node prefixes must not be retired");
 	});
 
+	it("pins hosted source, grounding, and code links to the selected GitHub revision", () => {
+		const base = "https://github.com/pelaggio/pelaggio/blob/selected-sha/";
+		const hosted = buildExplorerPayload(graph, catalog, { commitSha: COMMIT_SHA, diagnosticsEnv: env, adrFiles, sourceBaseUrl: base });
+		const decision = hosted.nodes.find((node) => node.id === "DEC-0001");
+		assert.ok(decision);
+		assert.ok(decision.sources.some((source) => source.href?.startsWith(`${base}docs/decisions/`)));
+		const realization = hosted.nodes.find((node) => node.codeEvidence.length > 0);
+		assert.ok(realization?.codeEvidence.every((entry) => entry.href?.startsWith(base)));
+		const grounded = hosted.nodes.find((node) => node.grounding.length > 0);
+		assert.ok(grounded?.grounding.every((entry) => entry.href?.startsWith(base)));
+		assert.throws(() => buildExplorerPayload(graph, catalog, { commitSha: COMMIT_SHA, diagnosticsEnv: env, adrFiles, sourceBaseUrl: "http://github.com/pelaggio/pelaggio/blob/bad/" }), /plain HTTPS URL/);
+	});
+
 	it("escapes JSON so graph prose cannot terminate the application/json script", () => {
 		const statement = "</script><!--&\u2028\u2029";
 		const synthetic: ExplorerPayload = {

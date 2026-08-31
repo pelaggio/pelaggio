@@ -70,7 +70,7 @@ export type ExplorerPayload = {
 	retiredIds: string[];
 	results: Record<string, ExplorerViewResults>;
 };
-export type ExplorerPayloadOpts = { commitSha: string; diagnosticsEnv: DiagnosticsEnv; adrFiles: string[] };
+export type ExplorerPayloadOpts = { commitSha: string; diagnosticsEnv: DiagnosticsEnv; adrFiles: string[]; sourceBaseUrl?: string };
 
 /** Every check the `debt` view may declare. `views.json` is bound to this list by test. */
 export const DEBT_CHECKS = [
@@ -291,9 +291,15 @@ function edgeIdentity(edge: GraphEdge): string {
 const HREF_SEGMENT = /^[A-Za-z0-9._@-]+$/;
 
 /** Fail closed: only a plain repo-relative file path becomes an href (no scheme, no absolute path, no `..`, no backslash). A rejected path keeps its label and renders as text. */
-function generatedHref(repoPath: string): string | undefined {
+function generatedHref(repoPath: string, sourceBaseUrl?: string): string | undefined {
 	const segments = repoPath.split("/");
 	if (segments.some((segment) => segment === ".." || !HREF_SEGMENT.test(segment))) return undefined;
+	if (sourceBaseUrl) {
+		const base = new URL(sourceBaseUrl);
+		if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) throw new Error("explorer source base URL must be a plain HTTPS URL");
+		if (!base.pathname.endsWith("/")) base.pathname += "/";
+		return new URL(repoPath, base).toString();
+	}
 	return posix.relative(GENERATED_DIR, repoPath);
 }
 
@@ -378,16 +384,16 @@ function adrFilesByPrefix(adrFiles: string[]): Map<string, string[]> {
 	return byPrefix;
 }
 
-function sourceHref(source: string, adrByPrefix: Map<string, string[]>): ExplorerHref {
+function sourceHref(source: string, adrByPrefix: Map<string, string[]>, sourceBaseUrl?: string): ExplorerHref {
 	const adr = /^ADR-(\d{4})$/.exec(source);
-	if (!adr) return { label: source, href: generatedHref(source) };
+	if (!adr) return { label: source, href: generatedHref(source, sourceBaseUrl) };
 	const files = adrByPrefix.get(adr[1]) ?? [];
 	if (files.length > 1) throw new Error(`duplicate ADR files for ${source}: ${files.join(", ")}`);
 	if (files.length === 0) return { label: source };
-	return { label: source, href: generatedHref(`docs/decisions/${files[0]}`) };
+	return { label: source, href: generatedHref(`docs/decisions/${files[0]}`, sourceBaseUrl) };
 }
 
-function toCanonicalNode(node: GraphNode, adrByPrefix: Map<string, string[]>, grounding: SourceGrounding[]): ExplorerCanonicalNode {
+function toCanonicalNode(node: GraphNode, adrByPrefix: Map<string, string[]>, grounding: SourceGrounding[], sourceBaseUrl?: string): ExplorerCanonicalNode {
 	return {
 		id: node.id,
 		kind: node.kind,
@@ -400,10 +406,10 @@ function toCanonicalNode(node: GraphNode, adrByPrefix: Map<string, string[]>, gr
 		wrongIf: node.wrongIf,
 		revisitIf: node.revisitIf,
 		projection: node.projection,
-		sources: (node.sources ?? []).map((source) => sourceHref(source, adrByPrefix)),
-		codeEvidence: (node.codeEvidence ?? []).map((path) => ({ label: path, href: generatedHref(path) })),
+		sources: (node.sources ?? []).map((source) => sourceHref(source, adrByPrefix, sourceBaseUrl)),
+		codeEvidence: (node.codeEvidence ?? []).map((path) => ({ label: path, href: generatedHref(path, sourceBaseUrl) })),
 		observations: (node.observations ?? []).map((observation) => ({ kind: observation.kind, id: observation.id, path: observation.path })),
-		grounding: grounding.map((entry) => ({ path: entry.path, href: generatedHref(entry.path), anchors: entry.anchors })),
+		grounding: grounding.map((entry) => ({ path: entry.path, href: generatedHref(entry.path, sourceBaseUrl), anchors: entry.anchors })),
 	};
 }
 
@@ -496,8 +502,8 @@ export function buildExplorerPayload(graph: AssuranceGraph, catalog: { schemaVer
 		authority: graph.authority,
 		commitSha: opts.commitSha,
 		views,
-		nodes: nodes.map((node) => toCanonicalNode(node, adrByPrefix, groundingByNode.get(node.id) ?? [])),
-		sources: sources.map((source) => sourceHref(source, adrByPrefix)),
+		nodes: nodes.map((node) => toCanonicalNode(node, adrByPrefix, groundingByNode.get(node.id) ?? [], opts.sourceBaseUrl)),
+		sources: sources.map((source) => sourceHref(source, adrByPrefix, opts.sourceBaseUrl)),
 		edges,
 		retiredIds: deriveRetiredIds(graph),
 		results,
@@ -528,6 +534,7 @@ export function writeHtmlExplorer(repo = REPO_ROOT): string {
 		commitSha: readHeadSha(repo),
 		diagnosticsEnv: defaultDiagnosticsEnv(graph, repo),
 		adrFiles,
+		sourceBaseUrl: process.env.PELAGGIO_ASSURANCE_SOURCE_BASE_URL,
 	});
 	const outDir = resolve(repo, GENERATED_DIR);
 	mkdirSync(outDir, { recursive: true });
