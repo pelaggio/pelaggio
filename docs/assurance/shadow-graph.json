@@ -659,7 +659,7 @@
 			"sources": [
 				"ADR-0024"
 			],
-			"wrongIf": "A single strong reviewer at equal token budget reproduces the fleet's must-fix set on a sampled set of gated PRs (#270/#291), and cross-provider disagreement contributes no landed fixes over the same sample (#627's instrument)."
+			"revisitIf": "A controlled sample at equal review budget shows that one strong reviewer reproduces the provider-diverse fleet's material findings, or that cross-provider disagreement contributes no landed correction while adding material cost, latency, or failure surface."
 		},
 		{
 			"id": "ASM-0003",
@@ -1445,7 +1445,7 @@
 			"id": "CTR-0013",
 			"kind": "realization",
 			"slug": "red-merge-guard-land",
-			"statement": "`land` reads the PR's required checks directly and refuses to merge unless every check completed green; the candidate-bound CAS fence (DEC-0015) is not built, so this realizes landing-fenced only as far as branch protection plus a fail-closed check reader.",
+			"statement": "`land` reads the PR's required checks directly and refuses to merge unless every check completed green. The admin path is not candidate-bound and bypasses branch protection; the target CAS fence in DEC-0015 is not built.",
 			"sources": [
 				"ADR-0005",
 				"ADR-0025"
@@ -1635,6 +1635,11 @@
 			"from": "CON-0004",
 			"relation": "constrains",
 			"to": "CLM-0007"
+		},
+		{
+			"from": "CON-0004",
+			"relation": "specializes",
+			"to": "CON-0003"
 		},
 		{
 			"from": "CON-0005",
@@ -2160,11 +2165,6 @@
 			"from": "DEC-0006",
 			"relation": "implements",
 			"to": "CLM-0022"
-		},
-		{
-			"from": "CTR-0013",
-			"relation": "implements",
-			"to": "CLM-0007"
 		},
 		{
 			"from": "CTR-0013",

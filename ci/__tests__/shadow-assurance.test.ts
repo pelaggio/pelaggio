@@ -272,6 +272,8 @@ describe("architectural question tests", () => {
 		assert.ok(outgoing("DEC-0014", "implements").some((e) => e.to === "CLM-0016"));
 		assert.ok(outgoing("DEC-0014", "assumes").some((e) => e.to === "ASM-0002"));
 		assert.match(node("ASM-0002").statement, /justify its incremental cost/i);
+		assert.equal(node("ASM-0002").wrongIf, undefined, "one controlled sample cannot universally refute provider diversity");
+		assert.match(node("ASM-0002").revisitIf ?? "", /controlled sample/i);
 	});
 
 	it("Q3: landing authority is constrained by ordering-not-authority and positive completion", () => {
@@ -281,7 +283,14 @@ describe("architectural question tests", () => {
 		assert.ok(constraints.includes("CON-0004"));
 		assert.ok(constraints.includes("CON-0009"));
 		assert.equal(node("CON-0004").role, "constraint");
+		assert.ok(outgoing("CON-0004", "specializes").some((e) => e.to === "CON-0003"));
 		assert.ok(outgoing("CLM-0007", "specializes").some((e) => e.to === "CLM-0006"));
+	});
+
+	it("Q3b: the current red-check reader does not overclaim the target landing fence", () => {
+		assert.ok(!outgoing("CTR-0013", "implements").some((edge) => edge.to === "CLM-0007"));
+		assert.match(node("CTR-0013").statement, /not candidate-bound/i);
+		assert.match(node("CTR-0013").statement, /not built/i);
 	});
 
 	it("Q4: principal authority is not conflated with deterministic safety enforcement", () => {
