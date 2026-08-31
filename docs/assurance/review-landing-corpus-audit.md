@@ -43,8 +43,8 @@ earn a record, relation, or node kind.
 | `ASM-0002` | retain and refine assumption | `DEC-0014` depends on the diversity bet. Replace the over-strong `wrongIf` with a `revisitIf`: one controlled sample can force reconsideration without universally settling provider diversity. |
 | `DEC-0012` | retain construction decision | Fixed steps and separate orchestrators are replaceable topology, correctly represented as a choice rather than durable intent. |
 | `DEC-0014` | retain construction decision | Concurrent reviewers, Judge, and bounded revision are a selected strategy with a named assumption and alternatives. |
-| `DEC-0003` | retain custody decision | It belongs under the custody commitment, not as a top-level review principle; current construction still names no realization. |
-| `DEC-0008` | retain custody decision | The envelope format is a replaceable selected strategy; current construction still names no realization. |
+| `DEC-0003` | retain custody decision | It belongs under the custody commitment, not as a top-level review principle. This bounded audit originally found no realization; the later corpus-wide accountability audit binds the narrower signed-tag/npm-provenance workflow without claiming the whole custody invariant. |
+| `DEC-0008` | retain custody decision | The envelope format is a replaceable selected strategy. This bounded audit originally recorded it as current construction without a realization; the later corpus-wide accountability audit corrects it to target construction because ADR-0018 says the envelope remains unbuilt. |
 | `DEC-0020` | retain proposed custody decision | Proposed delivery-packet strategy remains distinct from current review topology and must not be presented as built. |
 | `CTR-0002` | retain realization with evidence caveat | Distinct authoring/cold paths are current topology. Their relation to independent evaluation rests on the cold-context construction; the named observation proves author exclusion, not the complete context-isolation claim. |
 | `CTR-0003` | retain realization with evidence caveat | The multi-seat/Judge loop exists, but its observation establishes split handling rather than complete reviewer independence. |
@@ -98,4 +98,3 @@ This slice does not justify a new node kind or wholesale reclassification. It do
 assumption-accountability refinement, one missing specialization, and one removal of overclaimed
 realization. The larger corpus should be audited with the same deletion and prospective-change tests
 before authority promotion or documentation burn-down.
-

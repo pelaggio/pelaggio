@@ -122,8 +122,86 @@ describe("shadow assurance graph integrity", () => {
 		}
 	});
 
+	it("grounds every developer-front-door record in independent source text", () => {
+		const frontDoor = graph.nodes.filter((value) => value.kind === "decision" || (value.kind === "proposition" && ((value.role === "invariant" && (value.visibility ?? "internal") === "internal") || value.role === "assumption")));
+		const grounded = new Set(graph.sourceGrounding.map((entry) => entry.node));
+		assert.deepEqual(
+			frontDoor.filter((value) => !grounded.has(value.id)).map((value) => value.id),
+			[],
+			"choices, internal invariants, and assumptions must link to exact source language",
+		);
+	});
+
 	it("does not false-fire source-grounding on intent-preserving edits, and still fires when a unique anchor is removed", () => {
 		const table: Record<string, { snippet: string; replacement: string }> = {
+			"docs/decisions/0002-untrusted-input-and-tool-scope.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0003-pr-gated-by-default.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0005-auto-merge-safety-via-branch-protection.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0006-no-lifecycle-scripts-in-published-manifests.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0007-signed-tag-provenance-publish.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0008-control-plane-fail-closed.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0009-claims-are-git-branches.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0010-agent-env-allowlist-and-log-scrub.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0011-andon-not-dor.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0013-reversibility-weighted-gate-sizing.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0015-autonomy-by-default-configurable-tolerance.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0018-in-toto-attestation-envelope.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0019-checkpoint-restart-not-replay.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0020-multi-driver-provider-seam-and-capability-model.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0021-capability-enforcement-and-placement.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0023-contained-execution-boundary.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
+			"docs/decisions/0025-landing-serialization-cas-fence-optional-ordering.md": {
+				snippet: "## Context",
+				replacement: "## Context and motivation",
+			},
 			"docs/decisions/0001-worktree-write-confinement.md": {
 				snippet: "Enumerated main and sibling roots are in scope",
 				replacement: "Main and sibling roots that are enumerated stay in scope",
@@ -528,7 +606,7 @@ describe("architectural question tests", () => {
 		);
 	});
 
-	const FROZEN_UNREALIZED_CONSTRUCTION: ReadonlySet<string> = new Set(["DEC-0003", "DEC-0008", "DEC-0011"]);
+	const FROZEN_UNREALIZED_CONSTRUCTION: ReadonlySet<string> = new Set();
 
 	it("Q19: current-construction choices without a realizing derived-from", () => {
 		const corpus = graph as unknown as AssuranceGraph;
@@ -541,6 +619,7 @@ describe("architectural question tests", () => {
 		assert.deepEqual([...live].sort(), [...FROZEN_UNREALIZED_CONSTRUCTION].sort(), "the current unrealized-construction set (update when a mechanism is bound; it may only shrink)");
 
 		assert.equal(node("DEC-0015").status, "target-construction-choice");
+		assert.equal(node("DEC-0008").status, "target-construction-choice", "the in-toto envelope remains explicitly unbuilt");
 		assert.equal(node("DEC-0020").status, "proposed-construction-choice");
 	});
 

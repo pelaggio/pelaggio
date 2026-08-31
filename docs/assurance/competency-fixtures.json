@@ -1,0 +1,88 @@
+{
+	"schemaVersion": "0.1.0",
+	"status": "experimental-shadow-only",
+	"note": "Behavioral fixtures for consequential developer and agent questions. They exercise existing views and relation meanings; they do not promote a question API or add ontology.",
+	"fixtures": [
+		{
+			"id": "replace-review-topology",
+			"prompt": "Replace the fixed six-step and two-orchestrator construction.",
+			"query": { "view": "why", "node": "DEC-0012" },
+			"expectNodes": ["CLM-0016", "CTR-0001", "CTR-0002", "DEC-0012"],
+			"expectEdges": [
+				{ "from": "DEC-0012", "relation": "implements", "to": "CLM-0016" },
+				{ "from": "CTR-0001", "relation": "derived-from", "to": "DEC-0012" },
+				{ "from": "CTR-0002", "relation": "derived-from", "to": "DEC-0012" }
+			]
+		},
+		{
+			"id": "reconsider-provider-diversity",
+			"prompt": "Reconsider provider-diverse review.",
+			"query": { "view": "why", "node": "DEC-0014" },
+			"expectNodes": ["ASM-0002", "CLM-0009", "CLM-0016", "DEC-0014"],
+			"expectEdges": [
+				{ "from": "DEC-0014", "relation": "assumes", "to": "ASM-0002" },
+				{ "from": "DEC-0014", "relation": "implements", "to": "CLM-0009" },
+				{ "from": "DEC-0014", "relation": "implements", "to": "CLM-0016" }
+			]
+		},
+		{
+			"id": "replace-branch-protection-landing",
+			"prompt": "Replace the historical branch-protection landing construction.",
+			"query": { "view": "why", "node": "DEC-0002" },
+			"expectNodes": ["CLM-0007", "CON-0004", "CON-0009", "DEC-0002", "DEC-0015"],
+			"expectEdges": [
+				{ "from": "DEC-0015", "relation": "supersedes", "to": "DEC-0002" },
+				{ "from": "CON-0004", "relation": "constrains", "to": "CLM-0007" },
+				{ "from": "CON-0009", "relation": "constrains", "to": "CLM-0007" }
+			]
+		},
+		{
+			"id": "remove-landing-specialization",
+			"prompt": "Remove the ordering-cannot-replace-a-fence constraint.",
+			"query": { "view": "why", "node": "CON-0004" },
+			"expectNodes": ["CLM-0007", "CON-0003", "CON-0004"],
+			"expectEdges": [
+				{ "from": "CON-0004", "relation": "specializes", "to": "CON-0003" },
+				{ "from": "CON-0004", "relation": "constrains", "to": "CLM-0007" }
+			]
+		},
+		{
+			"id": "refuse-current-landing-overclaim",
+			"prompt": "Claim that the current red-check reader implements candidate-bound landing safety.",
+			"query": { "view": "why", "node": "CTR-0013" },
+			"expectNodes": ["CLM-0007", "CTR-0013", "DEC-0002"],
+			"expectEdges": [
+				{ "from": "CTR-0013", "relation": "derived-from", "to": "DEC-0002" }
+			],
+			"forbidEdges": [
+				{ "from": "CTR-0013", "relation": "implements", "to": "CLM-0007" }
+			],
+			"expectDiagnostics": [
+				{ "check": "invariant-without-realization", "node": "CLM-0007" }
+			]
+		},
+		{
+			"id": "replace-effect-placement",
+			"prompt": "Replace the current typed-effect dispatch machinery.",
+			"query": { "view": "why", "node": "DEC-0011" },
+			"expectNodes": ["CLM-0017", "CTR-0026", "DEC-0011"],
+			"expectEdges": [
+				{ "from": "CTR-0026", "relation": "derived-from", "to": "DEC-0011" },
+				{ "from": "DEC-0011", "relation": "implements", "to": "CLM-0017" }
+			]
+		},
+		{
+			"id": "promote-assurance-authority",
+			"prompt": "Promote the assurance corpus to architectural authority.",
+			"query": { "view": "why", "node": "DEC-0019" },
+			"expectNodes": ["CLM-0020", "CON-0024", "CTR-0022", "DEC-0019"],
+			"expectEdges": [
+				{ "from": "DEC-0019", "relation": "assumes", "to": "CON-0024" },
+				{ "from": "CTR-0022", "relation": "derived-from", "to": "DEC-0019" }
+			],
+			"expectDiagnostics": [
+				{ "check": "invariant-without-realization", "node": "CLM-0020" }
+			]
+		}
+	]
+}
