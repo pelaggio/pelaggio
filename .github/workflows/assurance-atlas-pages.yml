@@ -1,0 +1,72 @@
+name: Publish assurance atlas
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/assurance-atlas-*'
+    paths:
+      - '.github/workflows/assurance-atlas-pages.yml'
+      - 'ci/assurance-explorer.ts'
+      - 'ci/assurance-graph.ts'
+      - 'ci/assurance-observations.ts'
+      - 'ci/assurance-views.ts'
+      - 'docs/assurance/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to preview
+        required: false
+        default: main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: assurance-atlas-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout selected revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install generator dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Generate atlas from the selected checkout
+        run: |
+          node --import tsx ci/assurance-views.ts --html
+          mkdir -p .pages
+          cp docs/assurance/generated/explorer.html .pages/index.html
+          touch .pages/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: .pages
+
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

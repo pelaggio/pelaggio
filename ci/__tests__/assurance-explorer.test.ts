@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { posix, resolve } from "node:path";
 import { describe, it } from "node:test";
+import { Script } from "node:vm";
 import { loadShadowGraph, loadViews } from "../assurance-graph.js";
 import {
 	type AssuranceView,
@@ -222,13 +223,35 @@ describe("assurance HTML explorer payload", () => {
 			hostile.map((label) => ({ label, href: undefined })),
 		);
 		const safe = built.nodes.find((candidate) => candidate.id === "CTR-0001");
-		assert.ok(safe && safe.codeEvidence.every((entry) => entry.href?.startsWith("../../../")));
+		assert.ok(safe?.codeEvidence.every((entry) => entry.href?.startsWith("../../../")));
 	});
 
 	it("keeps the panel's incident edges keyed to the precomputed hit, never the canonical edge table", () => {
 		const html = renderHtmlExplorer(payload);
 		assert.ok(!html.includes("payload.edges.filter"), "client must derive incident edges from lookupHit().edgeIdxs, not filter the canonical payload.edges table");
 		assert.ok(html.includes("lookupHit().edgeIdxs.map"));
+	});
+
+	it("opens with exact dependency briefs while preserving the technical trace", () => {
+		const html = renderHtmlExplorer(payload);
+		assert.match(html, /<main class="atlas" id="atlas"/);
+		assert.match(html, /Before changing Pelaggio, find what must survive\./);
+		assert.match(html, /role="tab" aria-selected="true"><strong>Choices/);
+		assert.match(html, /<strong>Invariants<\/strong>/);
+		assert.match(html, /<strong>Assumptions<\/strong>/);
+		assert.match(html, /<details class="record">/);
+		assert.match(html, /If this changes/);
+		assert.match(html, /depends on this premise and should be reopened if it weakens/);
+		assert.match(html, /remains an obligation even if this premise is rejected/);
+		assert.match(html, /No change consequence is encoded for this record/);
+		assert.match(html, /Raise early/);
+		assert.match(html, /No change-specific escalation condition is encoded/);
+		assert.match(html, /Evidence & current state/);
+		assert.match(html, /Open technical trace →/);
+		assert.match(html, /id="explorer-shell"/);
+		const scripts = [...html.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/g)];
+		assert.equal(scripts.length, 2);
+		assert.doesNotThrow(() => new Script(scripts[1]![1]));
 	});
 
 	it("keeps the presentation module off the query engine", () => {
