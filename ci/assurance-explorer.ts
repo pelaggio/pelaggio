@@ -20,6 +20,33 @@ const ATLAS_CONCEPTS = [
 	{ id: "trust", title: "Public trust", summary: "The promises Pelaggio exposes publicly, their scope, and what internal intent they project.", view: "trust" },
 ] as const;
 
+const CHOICE_GROUPS = [
+	{
+		id: "policy",
+		title: "Operating policy",
+		description: "Current defaults and negotiated behavior. These may change without lowering the invariant safety floor.",
+		statuses: ["current-policy-choice"],
+	},
+	{
+		id: "construction",
+		title: "How Pelaggio works today",
+		description: "Replaceable machinery choices. Preserve their linked obligations, not necessarily these mechanisms.",
+		statuses: ["current-construction-choice"],
+	},
+	{
+		id: "direction",
+		title: "Selected or proposed direction",
+		description: "Unbuilt choices. The status on each record distinguishes a selected target from a proposal.",
+		statuses: ["target-construction-choice", "proposed-construction-choice"],
+	},
+	{
+		id: "history",
+		title: "Replaced choices",
+		description: "Retained so a replacement does not accidentally reintroduce the failure or trade-off that motivated the earlier choice.",
+		statuses: ["historical-construction-choice"],
+	},
+] as const;
+
 const STYLES = `
 :root {
   --paper: #f4f1ea; --paper-deep: #ebe6dc; --ink: #18201d; --muted: #68716c;
@@ -65,6 +92,10 @@ button { color: inherit; }
 .index-intro h2 { margin: 0; font: 500 25px Georgia, serif; }
 .index-intro p { color: var(--muted); margin: 0; font-size: 12px; }
 .record-list { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: rgba(255,253,248,.75); }
+.choice-group { padding: 16px 22px 13px; border-bottom: 1px solid var(--line); background: var(--paper-deep); }
+.choice-group:not(:first-child) { border-top: 5px solid var(--paper); }
+.choice-group h3 { margin: 0; font: 500 18px Georgia, serif; }
+.choice-group p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .record { border-bottom: 1px solid var(--line); }
 .record:last-child { border-bottom: 0; }
 .record summary { list-style: none; display: grid; grid-template-columns: 92px minmax(0,1fr) auto; gap: 18px; align-items: center; padding: 20px 22px; cursor: pointer; }
@@ -186,6 +217,7 @@ const CLIENT_SCRIPT = `
     supersedes: ["supersedes", "superseded by"]
   };
   var CONCEPTS = ${embedJson(ATLAS_CONCEPTS)};
+  var CHOICE_GROUPS = ${embedJson(CHOICE_GROUPS)};
   var INDEX_TABS = [
     { id: "choices", label: "Choices", title: "Decisions deliberately made", description: "Change or remove one only after checking the obligations and premises attached to it." },
     { id: "invariants", label: "Invariants", title: "Things that must stay true", description: "The acceptance bar for a replacement, regardless of which machinery implements it." },
@@ -499,7 +531,7 @@ const CLIENT_SCRIPT = `
     clear(host);
     var records = indexNodes(atlasTab).slice().sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
     if (!records.length) host.appendChild(el("p", { className: "empty-index", text: "No records in this category." }));
-    records.forEach(function (node) {
+    function appendRecord(node) {
       var signals = actionableSignals(node);
       var consequences = consequenceLines(node);
       var machinery = currentMachinery(node);
@@ -579,7 +611,18 @@ const CLIENT_SCRIPT = `
       body.appendChild(side);
       details.appendChild(body);
       host.appendChild(details);
-    });
+    }
+    if (atlasTab === "choices") {
+      CHOICE_GROUPS.forEach(function (group) {
+        var grouped = records.filter(function (node) { return group.statuses.indexOf(node.status) >= 0; });
+        if (!grouped.length) return;
+        var heading = el("header", { className: "choice-group", "data-choice-group": group.id });
+        heading.appendChild(el("h3", { text: group.title }));
+        heading.appendChild(el("p", { text: group.description }));
+        host.appendChild(heading);
+        grouped.forEach(appendRecord);
+      });
+    } else records.forEach(appendRecord);
   }
   function renderConceptHero() {
     var hero = document.getElementById("concept-hero");
@@ -1112,23 +1155,27 @@ export function renderHtmlExplorer(payload: ExplorerPayload): string {
 	const invariants = payload.nodes.filter((node) => node.role === "invariant" && node.visibility === "internal").length;
 	const choices = payload.nodes.filter((node) => node.kind === "decision").length;
 	const assumptions = payload.nodes.filter((node) => node.role === "assumption").length;
-	const staticChoiceRows = payload.nodes
-		.filter((node) => node.kind === "decision")
-		.sort((a, b) => a.id.localeCompare(b.id))
-		.map(
-			(node) => `<details class="record">
+	const sortedChoices = payload.nodes.filter((node) => node.kind === "decision").sort((a, b) => a.id.localeCompare(b.id));
+	const staticChoiceRows = CHOICE_GROUPS.map((group) => {
+		const rows = sortedChoices
+			.filter((node) => node.status && (group.statuses as readonly string[]).includes(node.status))
+			.map(
+				(node) => `<details class="record">
 <summary><span class="record-id">${escapeHtml(node.id)}</span><span class="record-title"><strong>${escapeHtml(node.slug.replaceAll("-", " "))}</strong><span>${escapeHtml(node.statement)}</span></span><span class="record-toggle" aria-hidden="true">+</span></summary>
 <div class="record-body"><div><section class="brief-section"><h3>Claim</h3><p class="record-statement">${escapeHtml(node.statement)}</p></section></div><aside class="record-side"><div class="record-meta">${[
-				node.status,
-				node.visibility,
-				node.role,
-			]
-				.filter(Boolean)
-				.map((value) => `<span>${escapeHtml(value!)}</span>`)
-				.join("")}</div></aside></div>
+					node.status,
+					node.visibility,
+					node.role,
+				]
+					.filter(Boolean)
+					.map((value) => `<span>${escapeHtml(value!)}</span>`)
+					.join("")}</div></aside></div>
 </details>`,
-		)
-		.join("\n");
+			)
+			.join("\n");
+		if (!rows) return "";
+		return `<header class="choice-group" data-choice-group="${group.id}"><h3>${escapeHtml(group.title)}</h3><p>${escapeHtml(group.description)}</p></header>\n${rows}`;
+	}).join("\n");
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>

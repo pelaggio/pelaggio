@@ -239,7 +239,14 @@ describe("assurance HTML explorer payload", () => {
 		assert.match(html, /role="tab" aria-selected="true"><strong>Choices/);
 		assert.match(html, /<strong>Invariants<\/strong>/);
 		assert.match(html, /<strong>Assumptions<\/strong>/);
+		assert.match(html, /data-choice-group="policy"/);
+		assert.match(html, /Operating policy/);
+		assert.match(html, /How Pelaggio works today/);
+		assert.match(html, /Selected or proposed direction/);
+		assert.match(html, /Replaced choices/);
+		assert.match(html, /Preserve their linked obligations, not necessarily these mechanisms/);
 		assert.match(html, /<details class="record">/);
+		assert.equal([...html.matchAll(/<details class="record">/g)].length, graph.nodes.filter((node) => node.kind === "decision").length);
 		assert.match(html, /If this changes/);
 		assert.match(html, /depends on this premise and should be reopened if it weakens/);
 		assert.match(html, /remains an obligation even if this premise is rejected/);

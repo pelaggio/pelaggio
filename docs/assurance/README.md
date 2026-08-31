@@ -15,6 +15,11 @@ developer-front-door decision, internal invariant, and assumption. Its executabl
 cases live in [`competency-fixtures.json`](./competency-fixtures.json). Both remain migration evidence,
 not authority or a promoted question contract.
 
+The [intent lineage audit](./intent-lineage-audit.md) checks those front-door decisions and assumptions
+against their ADR birth commits, architecture plans, roadmap snapshot, and tracked decision logs. It
+records why historical implementation choices are not imported wholesale and identifies the ordered
+typed-lifecycle candidate that still needs an authoritative settlement before it can enter the graph.
+
 ## Node model
 
 The current semantic kernel is deliberately small:
