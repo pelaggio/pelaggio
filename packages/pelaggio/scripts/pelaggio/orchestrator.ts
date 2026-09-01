@@ -20,7 +20,7 @@ import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, 
 import { parseWaitFlag } from "./outcome-classify.js";
 import { type PipelineDeps, runPipeline } from "./pipeline.js";
 import { buildFailClosedComment, type PrReviewGateResult, resolveCarryOptions, runPrReviewGate } from "./pr-review-gate.js";
-import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { gateRecordsDir, listPrReviewGateRecords, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { detectUnattendedSignals, resolveAuthoringReviewExecution } from "./provider-routing.js";
 import { ensureDevRoot, registerFamilyPath, registerFamilyRelativePath } from "./registers.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
@@ -94,6 +94,7 @@ export interface OrchestratorDeps {
 		dispositionsRoot: string;
 		writeDispositionRecord: typeof writePrFindingDispositionRecord;
 		resolveCarry: typeof resolveCarryOptions;
+		listGateRecords: typeof listPrReviewGateRecords;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -107,10 +108,12 @@ export interface OrchestratorDeps {
 	now?: () => number;
 	/**
 	 * Shared activity-event writer for this process. CLI `orchestrate()` injects a writer
-	 * correlated with the lifecycle worker by executionId; fallback creation stays continuous-only so ordinary
-	 * `runOrchestrator` tests do not write `.dev/flow-events/` under `REPO`.
+	 * correlated with the lifecycle worker by executionId; direct callers receive one fallback
+	 * writer in every mode so operator revision and standalone orchestration retain observations.
 	 */
 	eventWriter?: EventWriter;
+	/** Event-writer factory seam; production uses createEventWriter. */
+	createEventWriter?: typeof createEventWriter;
 	/** Roadmap + flow policy used by the default free queue probe. */
 	roadmap?: RoadmapSource;
 	flowPolicy?: FlowPolicy;
@@ -270,6 +273,7 @@ async function awaitParkReset(parkSignal: ParkSignal, opts: { maxWaitMs: number;
 	parkSignal.resetsAt = 0;
 	parkSignal.limitType = "";
 	parkSignal.triggerWorker = "";
+	parkSignal.rateLimit = undefined;
 	return "resumed";
 }
 
@@ -313,6 +317,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		parkSignal.parked = true;
 		parkSignal.limitType = "paused";
 		parkSignal.resetsAt = 0;
+		parkSignal.rateLimit = undefined;
 	};
 	process.on("SIGUSR2", onPause);
 
@@ -550,8 +555,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Emit at most one suspended per park interval (peers may all observe park).
 		let continuousSuspendedEmitted = false;
 		// Correlate activity with this process's lifecycle executionId. CLI `orchestrate()`
-		// injects the activity writer; fallback stays continuous-only.
-		const writer = deps.eventWriter ?? (continuous ? createEventWriter(eventWriterCorrelation()) : undefined);
+		// injects the activity writer; direct runOrchestrator callers share the same fallback in every mode.
+		const writer =
+			deps.eventWriter ??
+			(deps.createEventWriter ?? createEventWriter)({
+				...eventWriterCorrelation(),
+				...(IN_NODE_TEST ? { root: hermeticQueueRoot(() => REPO, "flow-event-root") } : {}),
+			});
 		const emitContinuous = (input: Parameters<NonNullable<typeof writer>["append"]>[0]): void => {
 			try {
 				writer?.append(input);
@@ -773,6 +783,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
+						...(writer ? { eventWriter: writer } : {}),
 					},
 					parkSignal,
 					flags,
@@ -800,6 +811,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						parkSignal.resetsAt = 0;
 						parkSignal.limitType = "sdk-outage";
 						parkSignal.triggerWorker = result.itemId ?? "";
+						parkSignal.rateLimit = undefined;
 						result = { ...cycleResultBase(result), outcome: "parked", parkClass: "sdk-outage", parkReason: "transient sdk error" };
 					}
 				} else if (result.disposition === "quarantine-and-continue") {
@@ -963,6 +975,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
+						...(writer ? { eventWriter: writer } : {}),
 					},
 					parkSignal,
 					resumeFlags,
@@ -1012,6 +1025,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// default above); with an empty store it returns before any git call.
 			writeDispositionRecord: writePrFindingDispositionRecord,
 			resolveCarry: resolveCarryOptions,
+			// Reads only the already-hermetic `gateRecordsRoot`; do not wrap in hermeticDefault.
+			listGateRecords: listPrReviewGateRecords,
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
@@ -1174,6 +1189,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							})
 						: undefined;
 					gateStartedAt = review.now();
+					const priorGateRecords = review.listGateRecords(review.gateRecordsRoot);
 					const result = await review.runReviewGate({
 						pr: String(pr.prNumber),
 						itemId: pr.itemId,
@@ -1186,6 +1202,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						policy: review.policy,
 						parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry policy
 						...(carry ? { carry } : {}),
+						priorGateRecords,
 					});
 					elapsedMs = Math.max(0, Math.trunc(review.now() - gateStartedAt));
 					if (result.gate === "park") {
@@ -1237,6 +1254,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							elapsedMs,
 							runner: "local",
 							reviewedAt: new Date(review.now()).toISOString(),
+							...(gateResult.recurrenceFindings !== undefined ? { recurrenceFindings: gateResult.recurrenceFindings } : {}),
 						}
 					: {
 							producer: "fleet",
@@ -1436,6 +1454,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
+						...(writer ? { eventWriter: writer } : {}),
 					},
 					parkSignal,
 					flags,
@@ -1613,6 +1632,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							unattendedSignalSuppressions: runUnattendedEvidence.suppressed,
 							...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 							...(signal ? { signal } : {}),
+							...(writer ? { eventWriter: writer } : {}),
 						},
 						parkSignal,
 						{ ...flags, "review-findings": findingsPath }, // per-item findings injection

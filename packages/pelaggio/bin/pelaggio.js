@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveAuthoringReviewMainRepo, verifyOrRepairAuthoringReviewHostDependencies } from "../scripts/pelaggio/review/seat-deps-core.js";
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const [, , sub, ...rest] = process.argv;
@@ -58,6 +59,21 @@ if (!sub || sub === "--help" || sub === "-h" || !routes[sub]) {
 
 const [script, ...prefix] = routes[sub];
 
+// Cold-start restoration guards EVERY routed subcommand: each one resolves tsx and
+// the package dependencies through packages/pelaggio/node_modules, so a dangling
+// link would otherwise fail pr-review/land/roadmap/… with a raw
+// ERR_MODULE_NOT_FOUND instead of this typed park guidance.
+{
+	const mainRepo = resolveAuthoringReviewMainRepo(resolve(pkgRoot, "../.."));
+	const repair = await verifyOrRepairAuthoringReviewHostDependencies(mainRepo);
+	if (repair.status === "park") {
+		console.error(`authoring-review host dependency restoration parked before CLI startup (${repair.reason}): ${repair.detail}`);
+		console.error("preserved state: the claim worktree and MAIN links remain at the last repair state");
+		console.error(`resume: ${sub === "run" ? `pnpm pelaggio ${rest.join(" ")}` : `npx pelaggio ${[sub, ...rest].join(" ")}`}`.trimEnd());
+		process.exit(1);
+	}
+}
+
 // Run the target script through tsx by loading tsx as a Node import hook via
 // `node --import`, rather than spawning the `node_modules/.bin/tsx` shim. On
 // Windows that shim is `tsx.CMD`, and post-CVE-2024-27980 Node refuses to spawn
@@ -71,7 +87,26 @@ try {
 	tsxImport = "tsx"; // fall back to a bare specifier resolved from cwd
 }
 
-spawn(process.execPath, ["--import", tsxImport, resolve(pkgRoot, script), ...prefix, ...rest], {
+const child = spawn(process.execPath, ["--import", tsxImport, resolve(pkgRoot, script), ...prefix, ...rest], {
 	stdio: "inherit",
 	env: process.env,
-}).on("exit", (code) => process.exit(code ?? 1));
+});
+
+// Supervised pause/stop signal this wrapper (their immediate child), not the
+// pipeline it spawned: forward the control signals so they reach the run
+// instead of orphaning it. SIGINT is forwarded only without a TTY — an
+// interactive Ctrl+C already reaches the whole foreground process group, and a
+// forwarded duplicate would read as a second interrupt.
+const forwardedSignals = ["SIGTERM", "SIGUSR2", ...(process.stdin.isTTY ? [] : ["SIGINT"])];
+for (const signal of forwardedSignals) process.on(signal, () => child.kill(signal));
+child.on("exit", (code, signal) => {
+	// Mirror how the pipeline actually ended: its exit code, or — after dropping
+	// our forwarding handlers so the re-raise takes the default action — the
+	// fatal signal itself.
+	if (signal) {
+		for (const forwarded of forwardedSignals) process.removeAllListeners(forwarded);
+		process.kill(process.pid, signal);
+		return;
+	}
+	process.exit(code ?? 1);
+});

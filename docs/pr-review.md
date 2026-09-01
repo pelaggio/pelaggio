@@ -61,7 +61,8 @@ after the loop.
 ### Report contract (schema v3) and fail-closed classification
 
 Authoring reviewers emit `AUTHORING_REVIEW_FINDINGS` with `schemaVersion: 3`. Each
-finding carries `severity`, `message`, optional `path`/`line`, and optional structured
+finding carries `severity`, `message`, optional `path`/`line`, optional `closure`
+(`patch` / `construction` / `authority` / `policy`), and optional structured
 evidence (`ruleId`, `cwe`, `classHint`). Wire fields `class` and `fingerprint` are
 rejected. The harness classifies each finding before ingestion (fingerprint / CWE /
 exact rule-id / path-signal rules; safety-dominant; unmatched →
@@ -625,7 +626,8 @@ The standard review is one fresh session, structured as three internal phases (s
   (ships a bug, breaks a load-bearing invariant, or merges broken code). Style nits and
   speculation are dropped.
 - **Report** — the final message ends in one versioned, delimited JSON report containing
-  a summary and separate `must-fix`, `nice`, or `note` findings with optional locations.
+  a summary and separate `must-fix`, `nice`, or `note` findings with optional locations
+  and optional `closure` (`patch` / `construction` / `authority` / `policy`).
   The CLI validates it and renders the human comment.
 
 The review is **read-only by convention** — the CI checkout is ephemeral, so edits would

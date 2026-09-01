@@ -1,5 +1,5 @@
 import type { MainCheckoutDeltaObserver } from "../confinement/roots.js";
-import type { ParkSignal, ProviderCapabilities, ProviderName, Step, StepEmit, StepResult } from "../types.js";
+import type { EventWriter, ParkSignal, ProviderCapabilities, ProviderName, ProviderObservation, Step, StepEmit, StepResult } from "../types.js";
 
 export interface ForeignRootDenial {
 	mainRepo: string;
@@ -45,6 +45,14 @@ export interface RunStepOpts {
 	 * + `.dev/sessions/` denial actually run.
 	 */
 	foreignRootDenial?: ForeignRootDenial;
+	/** Optional typed provider-observation callback. Absent callers (direct CLIs, hermetic tests) no-op. */
+	onProviderObservation?: (observation: ProviderObservation) => void;
+	/** Shared durable writer used by the dispatcher observation funnel. */
+	eventWriter?: EventWriter;
+	/** Attempt correlation for durable provider observations. */
+	providerObservationAttempt?: number;
+	/** Compact diagnostic sink for fail-soft observation drops. */
+	providerObservationLog?: (message: string) => void;
 }
 
 /** Canonical signature of a step runner. Single-sourced here (all four types are in

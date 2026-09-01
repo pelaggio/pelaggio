@@ -17,6 +17,7 @@ import type { Effect } from "../effects.js";
 import type { FlowPolicy } from "../flow-policy.js";
 import type { readFreshnessGateRecord as readFreshnessGateRecordDefault, writeFreshnessGateRecord as writeFreshnessGateRecordDefault } from "../freshness-gate-record.js";
 import type { runPrReviewGate as runPrReviewGateDefault } from "../pr-review-gate.js";
+import type { verifyOrRepairAuthoringReviewHostDependencies as verifyOrRepairAuthoringReviewHostDependenciesDefault } from "../review/seat-deps.js";
 import type { cleanupAuthoringReviewSeatsForSha as cleanupAuthoringReviewSeatsForShaDefault, prepareAuthoringReviewSeat as prepareAuthoringReviewSeatDefault } from "../review/seats.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import type { preparePrShipFreshness as preparePrShipFreshnessDefault, verifyPrShipFreshness as verifyPrShipFreshnessDefault } from "../ship/freshness.js";
@@ -91,7 +92,7 @@ export interface CycleHelpers {
 	readonly finishBlocked: (blockedKind: BlockedKind, reason: string, extra?: Partial<CycleResultBase> & { blockedStep?: Step }) => CycleResult;
 	readonly finishCompleted: (extra?: Partial<CycleResultBase>) => CycleResult;
 	readonly finishParked: (extra?: Partial<CycleResultBase>) => CycleResult;
-	readonly parkExit: (reason?: string) => CycleResult | null;
+	readonly parkExit: (reason?: string, disposition?: CycleResult["disposition"]) => CycleResult | null;
 	readonly runStepWithRetry: (cfg: RunStepWithRetryConfig) => Promise<StepAttempt>;
 	readonly step: (name: Step, prompt: string, cwd: string, options?: StepRunOptions) => Promise<StepResult>;
 	readonly driverCandidates: (name: Step) => DriverIdentity[];
@@ -122,4 +123,5 @@ export interface CycleHelpers {
 	readonly writeFreshnessGateRecord: typeof writeFreshnessGateRecordDefault;
 	readonly prepareAuthoringReviewSeat: typeof prepareAuthoringReviewSeatDefault;
 	readonly cleanupAuthoringReviewSeatsForSha: typeof cleanupAuthoringReviewSeatsForShaDefault;
+	readonly verifyOrRepairAuthoringReviewHostDependencies: typeof verifyOrRepairAuthoringReviewHostDependenciesDefault;
 }

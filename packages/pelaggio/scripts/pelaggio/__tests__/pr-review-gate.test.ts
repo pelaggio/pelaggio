@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,11 +7,11 @@ import { after, describe, it } from "node:test";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
 import { main } from "../pr-review-cli.js";
-import { runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-gate.js";
-import { listPrReviewGateRecords, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
+import { buildFailClosedComment, renderFindingClosureGuidance, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-gate.js";
+import { listPrReviewGateRecords, type PrReviewGateRecord, type PrReviewRecurrenceFinding, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { fleetRecordDigestOf, isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { type PrCarryRefutedEntry, type PrCarrySurvivorEntry, type PrFindingDispositionRecordV1, readPrFindingDispositionRecord, writePrFindingDispositionRecord } from "../review/carry.js";
-import { type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
+import { REVIEW_FINDING_CLOSURES, type ReviewFinding, type ReviewFindingClosure, reviewFindingFingerprint } from "../review/findings.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "../types.js";
 
@@ -47,6 +48,7 @@ interface RunCall {
 	prompt: string;
 	cwd: string;
 	parkSignal: ParkSignal;
+	itemId?: string;
 	workspaceAccess?: "read-only";
 	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
 	foreignRootDenial?: { mainRepo: string; registeredWorktrees: readonly string[] };
@@ -193,7 +195,16 @@ async function runCli(
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
-		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, workspaceAccess: stepOpts.workspaceAccess, executionOverride: stepOpts.executionOverride, foreignRootDenial: stepOpts.foreignRootDenial });
+		calls.push({
+			name,
+			prompt,
+			cwd: stepOpts.cwd,
+			parkSignal: stepOpts.parkSignal,
+			itemId: stepOpts.itemId,
+			workspaceAccess: stepOpts.workspaceAccess,
+			executionOverride: stepOpts.executionOverride,
+			foreignRootDenial: stepOpts.foreignRootDenial,
+		});
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
 		if (next instanceof Error) throw next;
@@ -654,6 +665,21 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.comments[0], /Original message/);
 		assert.match(out.comments[0], /isolated verification: \*\*refuted\*\*/);
 		assert.match(out.comments[0], /cost=6\.00 turns=8/);
+	});
+
+	it("attributes direct review and verification observations to the roadmap item rather than the PR", async () => {
+		const out = await runCli({
+			headRef: "feat/issue-581-retain-telemetry",
+			results: [result({ text: report("Candidate.", [{ severity: "must-fix", message: "Broken behavior." }]) }), verification([{ candidateId: "C1", decision: "refuted", rationale: "Not reachable." }])],
+		});
+
+		assert.deepEqual(
+			out.calls.map((call) => [call.name, call.itemId]),
+			[
+				["pr-review", "581"],
+				["pr-verify", "581"],
+			],
+		);
 	});
 
 	it("every review and verify seat carries the evidence-store write denial regardless of cwd (#495 store-trust)", async () => {
@@ -2371,5 +2397,367 @@ describe("pr-review CLI cross-push carry (#495)", () => {
 		assert.deepEqual(survived.get("Broken parser.")?.verification, { id: "C1", rationale: "Still present." });
 		assert.equal(survived.get("Stale style worry.")?.verification, null);
 		assert.deepEqual(stored.refuted, []);
+	});
+});
+
+describe("guarantee-authority recurrence (#745)", () => {
+	const PRIOR_HEAD = "c".repeat(40);
+	const findingA = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+	const findingB = { severity: "must-fix" as const, message: "Null deref.", path: "src/a.ts", line: 20 };
+	const findingC = { severity: "must-fix" as const, message: "Off-by-one.", path: "src/a.ts", line: 30 };
+
+	function digestOf(finding: ReviewFinding): string {
+		return createHash("sha256").update(reviewFindingFingerprint(finding), "utf8").digest("hex");
+	}
+
+	function observation(finding: ReviewFinding, path = "src/a.ts"): PrReviewRecurrenceFinding {
+		return { fingerprintDigest: digestOf(finding), path, findingClass: "correctness-regression" };
+	}
+
+	function priorRecord(observations: PrReviewRecurrenceFinding[]): PrReviewGateRecord {
+		return {
+			schemaVersion: 2,
+			producer: "fleet",
+			prNumber: 123,
+			headSha: PRIOR_HEAD,
+			itemId: "123",
+			gate: "block",
+			ok: true,
+			subtype: "success",
+			agreement: "consensus-block",
+			cost: 1,
+			costEstimated: false,
+			turns: 2,
+			runner: "local",
+			reviewedAt: "2026-08-13T11:00:00.000Z",
+			recurrenceFindings: observations,
+		};
+	}
+
+	function survivesAll(findings: ReviewFinding[]) {
+		return verification(findings.map((_, i) => ({ candidateId: `C${i + 1}`, decision: "survives" as const, rationale: "Still present." })));
+	}
+
+	async function runBlocked(opts: { findings: ReviewFinding[]; verify?: StepResult; prior?: readonly PrReviewGateRecord[]; reviewedSha?: string; itemId?: string; files?: string }) {
+		const queued: Array<StepResult | Error> = [result({ text: report("Block.", opts.findings) }), opts.verify ?? survivesAll(opts.findings)];
+		return runPrReviewGate({
+			pr: "123",
+			itemId: opts.itemId ?? "123",
+			reviewedSha: opts.reviewedSha ?? REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? (opts.files ?? "src/a.ts\n") : "+x\n")) as typeof import("node:child_process").execFileSync,
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next, "unexpected extra runStep call");
+				if (next instanceof Error) throw next;
+				return next;
+			},
+			...(opts.prior ? { priorGateRecords: opts.prior } : {}),
+		});
+	}
+
+	it("extracts surviving verifier dispositions and omits synthesized-incomplete and carried-unobserved seeds", async () => {
+		const survived = await runBlocked({ findings: [findingA] });
+		assert.deepEqual(survived.recurrenceFindings, [observation(findingA)]);
+
+		const incomplete = await runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: plainDiffExec(),
+			runStep: async (name) => {
+				if (name === "pr-review") return result({ text: report("Block.", [findingA]) });
+				return result({ text: "not a verification report", ok: false, subtype: "error_invalid_output" });
+			},
+		});
+		assert.equal(incomplete.agreement, "invalid");
+		assert.deepEqual(incomplete.recurrenceFindings, []);
+
+		const mixed = await runBlocked({
+			findings: [findingA, findingB],
+			verify: verification([
+				{ candidateId: "C1", decision: "survives", rationale: "Still present." },
+				{ candidateId: "C2", decision: "refuted", rationale: "No longer present." },
+			]),
+		});
+		assert.deepEqual(mixed.recurrenceFindings, [observation(findingA)]);
+		assert.equal(
+			mixed.recurrenceFindings?.some((entry) => entry.fingerprintDigest === digestOf(findingB)),
+			false,
+		);
+	});
+
+	it("canonicalizes stored paths and omits non-repo-relative ones", async () => {
+		const dotted = await runBlocked({ findings: [{ ...findingA, path: "./src/a.ts" }] });
+		assert.equal(dotted.recurrenceFindings?.[0]?.path, "src/a.ts");
+
+		const plain = await runBlocked({ findings: [findingA] });
+		assert.equal(plain.recurrenceFindings?.[0]?.path, "src/a.ts");
+
+		const absolute = await runBlocked({ findings: [{ ...findingA, path: "/abs/x.ts" }] });
+		assert.equal(absolute.recurrenceFindings?.[0]?.path, undefined);
+
+		const escaped = await runBlocked({ findings: [{ ...findingA, path: "../escape.ts" }] });
+		assert.equal(escaped.recurrenceFindings?.[0]?.path, undefined);
+
+		const longestStored = "a".repeat(509) + ".ts";
+		const bounded = await runBlocked({ findings: [{ ...findingA, path: longestStored }] });
+		assert.equal(bounded.recurrenceFindings?.[0]?.path, longestStored);
+		assert.equal(bounded.recurrenceFindings?.[0]?.findingClass, "correctness-regression");
+	});
+
+	it("demotes a 513-character path so the gate record persists", async () => {
+		const overlongPath = "a".repeat(510) + ".ts";
+		assert.equal(overlongPath.length, 513);
+		const overlongFinding = { ...findingA, path: overlongPath };
+		const out = await runCli({
+			files: `${overlongPath}\n`,
+			results: [result({ text: report("Block.", [overlongFinding]) }), survivesAll([overlongFinding])],
+		});
+
+		assert.equal(out.code, 1);
+		const stored = readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "fleet");
+		assert.deepEqual(stored.recurrenceFindings, [
+			{
+				fingerprintDigest: digestOf(overlongFinding),
+				findingClass: "correctness-regression",
+			},
+		]);
+	});
+
+	it("renders exactly one roll-2 recurrence advisory section", async () => {
+		const review = await runBlocked({
+			findings: [findingA, findingB, findingC],
+			prior: [priorRecord([observation(findingA), observation(findingB)])],
+		});
+		const sections = review.body.match(/### Recurrence advisory/g) ?? [];
+		assert.equal(sections.length, 1);
+		assert.ok(review.body.includes("3 distinct confirmed must-fixes of class correctness\\-regression in src/a\\.ts"));
+		assert.match(review.body, /survivors recur in a class this item may not own — consider re-chartering/i);
+		assert.doesNotMatch(buildFailClosedComment("error_crash", "boom"), /Recurrence advisory/);
+	});
+
+	it("advisories never alter gate outcome", async () => {
+		const findings = [findingA, findingB, findingC];
+		const without = await runBlocked({ findings });
+		const withHistory = await runBlocked({
+			findings,
+			prior: [priorRecord([observation(findingA), observation(findingB)])],
+		});
+		assert.equal(without.gate, withHistory.gate);
+		assert.equal(without.ok, withHistory.ok);
+		assert.equal(without.agreement, withHistory.agreement);
+		assert.equal(without.subtype, withHistory.subtype);
+		assert.equal(without.breakerReason, withHistory.breakerReason);
+		assert.equal(without.survivorCount, withHistory.survivorCount);
+		assert.notEqual(without.body, withHistory.body);
+		assert.match(withHistory.body, /### Recurrence advisory/);
+		assert.doesNotMatch(without.body, /### Recurrence advisory/);
+
+		const emptyCurrent = await runBlocked({
+			findings: [],
+			verify: result(),
+			prior: [priorRecord([observation(findingA), observation(findingB), observation(findingC)])],
+		});
+		assert.deepEqual(emptyCurrent.recurrenceFindings, []);
+		assert.doesNotMatch(emptyCurrent.body, /### Recurrence advisory/);
+		assert.equal(emptyCurrent.gate, "pass");
+	});
+
+	it("direct local CLI lists history, persists observations, and stays history-free in CI", async () => {
+		const out = await runCli({
+			files: "src/a.ts\n",
+			results: [result({ text: report("Block.", [findingA, findingB, findingC]) }), survivesAll([findingA, findingB, findingC])],
+			seed: (roots) => {
+				writePrReviewGateRecord(roots.gateRecordsRoot, {
+					producer: "fleet",
+					prNumber: 123,
+					headSha: PRIOR_HEAD,
+					itemId: "123",
+					gate: "block",
+					ok: true,
+					subtype: "success",
+					agreement: "consensus-block",
+					cost: 1,
+					costEstimated: false,
+					turns: 2,
+					elapsedMs: 10,
+					runner: "local",
+					reviewedAt: "2026-08-13T11:00:00.000Z",
+					recurrenceFindings: [observation(findingA), observation(findingB)],
+				});
+			},
+		});
+		assert.equal(out.code, 1);
+		assert.deepEqual(out.statuses, ["block"]);
+		assert.match(out.comments[0] ?? "", /### Recurrence advisory/);
+		const stored = readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "fleet");
+		assert.equal(stored.recurrenceFindings?.length, 3);
+		assert.deepEqual(new Set(stored.recurrenceFindings?.map((entry) => entry.path)), new Set(["src/a.ts"]));
+
+		const ci = await runCli({
+			ci: true,
+			files: "src/a.ts\n",
+			results: [result({ text: report("Block.", [findingA, findingB, findingC]) }), survivesAll([findingA, findingB, findingC])],
+			seed: (roots) => {
+				writePrReviewGateRecord(roots.gateRecordsRoot, {
+					producer: "fleet",
+					prNumber: 123,
+					headSha: PRIOR_HEAD,
+					itemId: "123",
+					gate: "block",
+					ok: true,
+					subtype: "success",
+					agreement: "consensus-block",
+					cost: 1,
+					costEstimated: false,
+					turns: 2,
+					elapsedMs: 10,
+					runner: "local",
+					reviewedAt: "2026-08-13T11:00:00.000Z",
+					recurrenceFindings: [observation(findingA), observation(findingB), observation(findingC)],
+				});
+			},
+		});
+		assert.equal(ci.code, 1);
+		assert.deepEqual(ci.statuses, ["block"]);
+		assert.doesNotMatch(ci.comments[0] ?? "", /Recurrence advisory/);
+		assert.deepEqual(
+			listPrReviewGateRecords(ci.gateRecordsRoot).map((entry) => entry.headSha),
+			[PRIOR_HEAD],
+			"CI persists neither the current roll nor an advisory",
+		);
+	});
+});
+
+describe("finding closure mode (#756)", () => {
+	const findingA = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+
+	function survivesAll(findings: ReviewFinding[]) {
+		return verification(findings.map((_, i) => ({ candidateId: `C${i + 1}`, decision: "survives" as const, rationale: "Still present." })));
+	}
+
+	async function runBlocked(opts: { findings: ReviewFinding[]; verify?: StepResult }) {
+		const queued: Array<StepResult | Error> = [result({ text: report("Block.", opts.findings) }), opts.verify ?? survivesAll(opts.findings)];
+		return runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "src/a.ts\n" : "+x\n")) as typeof import("node:child_process").execFileSync,
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next, "unexpected extra runStep call");
+				if (next instanceof Error) throw next;
+				return next;
+			},
+		});
+	}
+
+	it("suffixes verified surviving must-fixes for construction, authority, and policy", async () => {
+		for (const closure of ["construction", "authority", "policy"] as const) {
+			const guidance = renderFindingClosureGuidance(closure);
+			assert.ok(guidance);
+			const review = await runBlocked({ findings: [{ ...findingA, closure }] });
+			assert.match(review.body, /isolated verification: \*\*survives\*\*/);
+			assert.ok(review.body.includes(guidance), `expected ${closure} guidance in the gate comment`);
+			assert.doesNotMatch(review.body, /### Recurrence advisory/);
+			assert.equal(review.recurrenceFindings?.[0]?.closure, closure);
+		}
+	});
+
+	it("renders no closure suffix for patch, absent mode, refuted, nice/note, or fail-closed retention", async () => {
+		const patch = await runBlocked({ findings: [{ ...findingA, closure: "patch" }] });
+		assert.doesNotMatch(patch.body, /instance patch predicts recurrence/);
+		assert.doesNotMatch(patch.body, /routed decision required/);
+		assert.doesNotMatch(patch.body, /consider re-chartering/);
+		assert.equal(patch.recurrenceFindings?.[0]?.closure, "patch");
+
+		const absent = await runBlocked({ findings: [findingA] });
+		assert.doesNotMatch(absent.body, /instance patch predicts recurrence/);
+		assert.equal(Object.hasOwn(absent.recurrenceFindings?.[0] ?? {}, "closure"), false);
+
+		const refuted = await runBlocked({
+			findings: [{ ...findingA, closure: "construction" }],
+			verify: verification([{ candidateId: "C1", decision: "refuted", rationale: "No longer present." }]),
+		});
+		assert.doesNotMatch(refuted.body, /instance patch predicts recurrence/);
+		assert.deepEqual(refuted.recurrenceFindings, []);
+
+		const notes = await runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "src/a.ts\n" : "+x\n")) as typeof import("node:child_process").execFileSync,
+			runStep: async () =>
+				result({
+					text: report("Observations.", [
+						{ severity: "nice", message: "Improve this.", closure: "construction" },
+						{ severity: "note", message: "Context.", closure: "policy" },
+					]),
+				}),
+		});
+		assert.equal(notes.gate, "pass");
+		assert.doesNotMatch(notes.body, /instance patch predicts recurrence/);
+		assert.doesNotMatch(notes.body, /routed decision required/);
+		assert.deepEqual(notes.recurrenceFindings, []);
+
+		const retained = await runBlocked({
+			findings: [{ ...findingA, closure: "construction" }],
+			verify: result({ text: "not a verification report", ok: false, subtype: "error_invalid_output" }),
+		});
+		assert.match(retained.body, /isolated verification failed; blocker retained/);
+		assert.doesNotMatch(retained.body, /instance patch predicts recurrence/);
+		assert.deepEqual(retained.recurrenceFindings, []);
+	});
+
+	it("does not change verdict-bearing fields when only closure is present", async () => {
+		const without = await runBlocked({ findings: [findingA] });
+		const withMode = await runBlocked({ findings: [{ ...findingA, closure: "construction" }] });
+		assert.equal(without.gate, withMode.gate);
+		assert.equal(without.ok, withMode.ok);
+		assert.equal(without.agreement, withMode.agreement);
+		assert.equal(without.subtype, withMode.subtype);
+		assert.equal(without.breakerReason, withMode.breakerReason);
+		assert.equal(without.iterations, withMode.iterations);
+		assert.equal(without.survivorCount, withMode.survivorCount);
+		assert.notEqual(without.body, withMode.body);
+		assert.ok(withMode.body.includes("instance patch predicts recurrence — close by construction or record a residual"));
+		assert.equal(without.recurrenceFindings?.[0]?.closure, undefined);
+		assert.equal(withMode.recurrenceFindings?.[0]?.closure, "construction");
+		assert.match(withMode.body, /<!-- pr-review-metrics /);
+		assert.doesNotMatch(withMode.body, /### Recurrence advisory/);
+	});
+
+	it("only confirmed current-roll survivors enter recurrenceFindings with closure", async () => {
+		for (const closure of REVIEW_FINDING_CLOSURES) {
+			const review = await runBlocked({ findings: [{ ...findingA, closure }] });
+			assert.equal(review.recurrenceFindings?.length, 1);
+			assert.equal(review.recurrenceFindings?.[0]?.closure, closure);
+		}
+		const mixed = await runBlocked({
+			findings: [
+				{ ...findingA, closure: "construction" as ReviewFindingClosure },
+				{ severity: "must-fix" as const, message: "Null deref.", path: "src/a.ts", line: 20, closure: "policy" as ReviewFindingClosure },
+			],
+			verify: verification([
+				{ candidateId: "C1", decision: "survives", rationale: "Still present." },
+				{ candidateId: "C2", decision: "refuted", rationale: "No longer present." },
+			]),
+		});
+		assert.equal(mixed.recurrenceFindings?.length, 1);
+		assert.equal(mixed.recurrenceFindings?.[0]?.closure, "construction");
 	});
 });

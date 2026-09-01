@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { CONFIG, REPO, ROADMAP_GITHUB } from "./config.js";
 import { mainWorktree } from "./git.js";
 import { buildFailClosedComment, persistLocalGateEvidence, prReviewDeps, resolveCarryOptions, resolveReviewedHead, runPrReviewGate } from "./pr-review-gate.js";
-import { gateRecordsDir } from "./pr-review-gate-record.js";
+import { gateRecordsDir, listPrReviewGateRecords } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir } from "./review/adjudication.js";
 import { prFindingDispositionsDir } from "./review/carry.js";
 
@@ -56,6 +56,7 @@ export async function main(argv: string[]): Promise<number> {
 		// byte-identical to today (records are still written below, so re-enabling has priors).
 		const policy = deps.policy ?? CONFIG.review;
 		const dispositionsRoot = deps.dispositionsRoot ?? prFindingDispositionsDir(mainWorktree(REPO));
+		const gateRecordsRoot = deps.gateRecordsRoot ?? gateRecordsDir(mainWorktree(REPO));
 		const carry =
 			!deps.isCi() && head.itemId && policy.carry
 				? resolveCarryOptions({
@@ -65,13 +66,14 @@ export async function main(argv: string[]): Promise<number> {
 						repo: REPO,
 						diffCwd: REPO,
 						dispositionsRoot,
-						gateRecordsRoot: deps.gateRecordsRoot ?? gateRecordsDir(mainWorktree(REPO)),
+						gateRecordsRoot,
 						execFileSync: deps.execFileSync,
 						readFileSync: deps.readFileSync,
 						taxonomy: policy.taxonomy,
 						warn: (msg) => process.stderr.write(`⚠ ${msg}\n`),
 					})
 				: undefined;
+		const priorGateRecords = !deps.isCi() && head.itemId ? listPrReviewGateRecords(gateRecordsRoot) : undefined;
 		// Policy/pool are intentionally not passed: runPrReviewGate resolves them through
 		// options → deps → CONFIG, so the same defaults apply and tests can pin the seam.
 		const reviewStartedAt = deps.now();
@@ -86,6 +88,7 @@ export async function main(argv: string[]): Promise<number> {
 			runStep: deps.runStep,
 			execFileSync: deps.execFileSync,
 			...(carry ? { carry } : {}),
+			...(priorGateRecords ? { priorGateRecords } : {}),
 		});
 		const reviewElapsedMs = Math.max(0, Math.trunc(deps.now() - reviewStartedAt));
 
@@ -104,7 +107,7 @@ export async function main(argv: string[]): Promise<number> {
 				headSha: reviewedSha,
 				itemId: head.itemId,
 				review,
-				gateRecordsRoot: deps.gateRecordsRoot ?? gateRecordsDir(mainWorktree(REPO)),
+				gateRecordsRoot,
 				adjudicationSourcesRoot: deps.adjudicationSourcesRoot ?? adjudicationSourcesDir(mainWorktree(REPO)),
 				dispositionsRoot,
 				writeGateRecord: deps.writeGateRecord,

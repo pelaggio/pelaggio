@@ -2,7 +2,8 @@ import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { writeAtomically } from "./record-store.js";
 import { type RegisterName, registerPath } from "./registers.js";
-import type { ReviewExhaustionReason } from "./review/findings.js";
+import { REVIEW_FINDING_CLOSURES, type ReviewExhaustionReason, type ReviewFindingClosure } from "./review/findings.js";
+import { isWellFormedClassId } from "./review/taxonomy.js";
 import type { PrReviewAgreement } from "./types.js";
 
 export type PrReviewFindingDisposition = "fixed" | "refuted" | "accepted";
@@ -10,6 +11,14 @@ export type PrReviewFindingDisposition = "fixed" | "refuted" | "accepted";
 export interface PrReviewFindingDispositionEntry {
 	disposition: PrReviewFindingDisposition;
 	rationale: string;
+}
+
+/** Compact current-roll confirmed must-fix identity for recurrence telemetry. */
+export interface PrReviewRecurrenceFinding {
+	fingerprintDigest: string;
+	path?: string;
+	findingClass: string;
+	closure?: ReviewFindingClosure;
 }
 
 export interface PrReviewGateRecordV1 {
@@ -49,6 +58,8 @@ export interface PrReviewFleetGateRecordV2 {
 	turns: number;
 	/** Wall-clock duration of the fleet gate invocation. Absent on historical v2 records. */
 	elapsedMs?: number;
+	/** Compact confirmed must-fix observations. Absent on historical v2 records. */
+	recurrenceFindings?: readonly PrReviewRecurrenceFinding[];
 	runner: "local";
 	reviewedAt: string;
 }
@@ -80,6 +91,7 @@ export type NewPrReviewGateRecord = NewPrReviewFleetGateRecord | NewPrReviewOper
 /** Store directory name under `MAIN_REPO/.dev/`. Exported so the step-runner's Bash register
  *  denial (#510) names the exact same path as the store — the deny list must not drift. */
 export const PR_REVIEW_GATE_RECORDS_DIR: RegisterName = "pr-review-gate-records";
+export const PR_REVIEW_RECURRENCE_PATH_MAX = 512;
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const DIGEST_RE = /^[a-f0-9]{64}$/;
 const RECORD_RE = /^(\d+)-([0-9a-f]{7,40})\.json$/i;
@@ -104,11 +116,14 @@ const FLEET_V2_KEYS = [
 	"costEstimated",
 	"turns",
 	"elapsedMs",
+	"recurrenceFindings",
 	"runner",
 	"reviewedAt",
 ] as const;
 const OPERATOR_V2_KEYS = ["schemaVersion", "producer", "agreement", "prNumber", "itemId", "headSha", "gate", "runner", "reviewedAt", "adjudicator", "reviewedSourceSha", "interdiffDigest", "dispositions"] as const;
 const DISPOSITION_ENTRY_KEYS = ["disposition", "rationale"] as const;
+const RECURRENCE_FINDING_KEYS = ["fingerprintDigest", "path", "findingClass", "closure"] as const;
+const RECURRENCE_FINDINGS_MAX = 64;
 
 export function gateRecordsDir(mainRepo: string): string {
 	return registerPath(mainRepo, PR_REVIEW_GATE_RECORDS_DIR);
@@ -264,14 +279,50 @@ function validateDispositions(value: unknown): Record<string, PrReviewFindingDis
 	return Object.fromEntries(entries);
 }
 
+function isCanonicalStoredPath(path: string): boolean {
+	if (path.length === 0 || path.length > PR_REVIEW_RECURRENCE_PATH_MAX) return false;
+	if (/[\r\n\\]/.test(path) || path.startsWith("/")) return false;
+	const segments = path.split("/");
+	return segments.length > 0 && segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function requireOptionalRecurrenceFindings(value: unknown): PrReviewRecurrenceFinding[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.length > RECURRENCE_FINDINGS_MAX) fail("recurrenceFindings");
+	const seen = new Set<string>();
+	const observations: PrReviewRecurrenceFinding[] = [];
+	for (const entry of value) {
+		if (!isRecord(entry)) fail("recurrenceFindings");
+		requireClosedKeys(entry, RECURRENCE_FINDING_KEYS, "recurrenceFindings");
+		if (typeof entry.fingerprintDigest !== "string" || !DIGEST_RE.test(entry.fingerprintDigest)) fail("fingerprintDigest");
+		if (seen.has(entry.fingerprintDigest)) fail("fingerprintDigest");
+		seen.add(entry.fingerprintDigest);
+		if (typeof entry.findingClass !== "string" || !isWellFormedClassId(entry.findingClass)) fail("findingClass");
+		if (entry.closure !== undefined && (typeof entry.closure !== "string" || !(REVIEW_FINDING_CLOSURES as readonly string[]).includes(entry.closure))) fail("closure");
+		const observation: PrReviewRecurrenceFinding = {
+			fingerprintDigest: entry.fingerprintDigest,
+			findingClass: entry.findingClass,
+		};
+		if (entry.path !== undefined) {
+			if (typeof entry.path !== "string" || !isCanonicalStoredPath(entry.path)) fail("path");
+			observation.path = entry.path;
+		}
+		if (entry.closure !== undefined) observation.closure = entry.closure as ReviewFindingClosure;
+		observations.push(observation);
+	}
+	return observations;
+}
+
 function validateFleetV2(value: Record<string, unknown>): PrReviewFleetGateRecordV2 {
 	requireClosedKeys(value, FLEET_V2_KEYS, "record");
 	if (value.producer !== "fleet") fail("producer");
+	const recurrenceFindings = requireOptionalRecurrenceFindings(value.recurrenceFindings);
 	return {
 		schemaVersion: 2,
 		producer: "fleet",
 		...validateCommonIdentity(value),
 		...validateFleetMetrics(value),
+		...(recurrenceFindings !== undefined ? { recurrenceFindings } : {}),
 	};
 }
 

@@ -9,7 +9,7 @@
  * default-allow.
  */
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,8 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"review/record.ts": 1,
 	"review/loop-result.ts": 1,
 	"review/seats.ts": 1,
+	"review/seat-deps.ts": 1,
+	"review/seat-deps-core.js": 1,
 	"github-posting.ts": 1,
 	"confinement/roots.ts": 1,
 	"confinement/sessions.ts": 1,
@@ -86,6 +88,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"flow-policy.ts": 2,
 	"flow-snapshot.ts": 2,
 	"cycle-outcome.ts": 2,
+	"guarantee-authority.ts": 2,
 	"pick-parse.ts": 2,
 	"ship/freshness.ts": 2,
 	"continuous.ts": 2,
@@ -98,12 +101,14 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"run-lifecycle.ts": 2,
 	"run-lifecycle-worker.ts": 2,
 	"delivery/verify.ts": 2,
+	"run-lifecycle-worker.mjs": 2,
 	// L3 execution — spawns or talks to a model/agent process.
 	"step-runner.ts": 3,
 	"step-runner-shared.ts": 3,
 	"providers/types.ts": 3,
 	"providers/index.ts": 3,
 	"providers/claude.ts": 3,
+	"providers/claude-pool-id.ts": 3,
 	"providers/codex.ts": 3,
 	"providers/grok.ts": 3,
 	"providers/opencode.ts": 3,
@@ -156,13 +161,14 @@ function listModules(dir = ROOT): string[] {
 		const full = join(dir, name);
 		if (name === "__tests__" || name === "node_modules") continue;
 		if (statSync(full).isDirectory()) out.push(...listModules(full));
-		else if (name.endsWith(".ts") && !name.endsWith(".d.ts")) out.push(relative(ROOT, full));
+		else if ((name.endsWith(".ts") || name.endsWith(".js") || name.endsWith(".mjs")) && !name.endsWith(".d.ts")) out.push(relative(ROOT, full));
 	}
 	return out.sort();
 }
 
 /**
- * Relative import specifiers in one module's source, resolved to module paths (`.js` → `.ts`).
+ * Relative import specifiers in one module's source, resolved to module paths (`.js` → `.ts`
+ * only when that TypeScript source exists; genuine `.js`/`.mjs` modules keep their own paths).
  * Uses the TypeScript parser, so comments, string contents and template text can never create
  * or hide an edge — only real `import`/`export … from`, `import "x"`, `import("x")` (type or
  * dynamic, anywhere in the tree) and `require("x")` do.
@@ -204,8 +210,11 @@ export function edgesFromSource(from: string, src: string): Array<[string, strin
 		}
 		if (!spec.startsWith(".")) continue;
 		let to = normalize(join(dirname(from), spec));
-		if (to.endsWith(".js")) to = `${to.slice(0, -3)}.ts`;
-		if (to.endsWith(".mjs")) to = `${to.slice(0, -4)}.ts`;
+		// A `.js`/`.mjs` specifier that names an actual JavaScript file on disk is that module
+		// (e.g. review/seat-deps-core.js), so the guard covers it; otherwise it names the
+		// transpiled TS module and is rewritten to its `.ts` source.
+		if (to.endsWith(".js") && !existsSync(join(ROOT, to))) to = `${to.slice(0, -3)}.ts`;
+		if (to.endsWith(".mjs") && !existsSync(join(ROOT, to))) to = `${to.slice(0, -4)}.ts`;
 		edges.push([from, to]);
 	}
 	return edges;
@@ -218,7 +227,7 @@ function importEdges(modules: string[]): Array<[string, string]> {
 function violations(modules: string[], edges: Array<[string, string]>): string[] {
 	const out = new Set<string>();
 	for (const [from, to] of edges) {
-		if (!modules.includes(to)) continue; // non-.ts sibling (e.g. worker .mjs shim) — not a module edge
+		if (!modules.includes(to)) continue; // not a module file (e.g. a `.d.ts` sibling) — not a module edge
 		const lf = LAYERS[from];
 		const lt = LAYERS[to];
 		if (lf === undefined || lt === undefined) continue; // reported by the unlisted-module test

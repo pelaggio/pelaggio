@@ -109,10 +109,28 @@ stale weekly estimate.
 
 Pool identity is `(provider, poolId)`, where `poolId` is a **non-secret auth-realm
 discriminator** — a digest of the provider's account/subscription identity when one is exposed,
-else an auth-config epoch that bumps on credential change. Observations from different realms
-never merge, and a realm change invalidates the provider's projection: a subscription or API-key
-switch must not blend old-pool observations into the new pool. OpenCode pools are per-backend
-realms.
+else an auth-config epoch. **Exact realm fidelity is scoped to the channels this deployment
+exercises**: OAuth account identity plus subscription tier (a subscription switch on the same
+account invalidates the pool), and the direct-key digest (switching the resolved API key
+invalidates the pool). Within those channels, observations from different realms never merge and
+a realm change invalidates the provider's projection. OpenCode pools are per-backend realms.
+
+Outside those channels, poolId is **best-effort epoch identity**, not an exact realm claim.
+Known limits (accepted; full realm fidelity across the open auth-configuration set is a
+chartered follow-up):
+
+- **Multi-credential rotation**: pool identity hashes only the first configured direct
+  credential, so rotating `ANTHROPIC_AUTH_TOKEN` while `ANTHROPIC_API_KEY` remains set leaves
+  poolId unchanged even though both credentials are forwarded to the Claude child.
+- **Organization-scoped OAuth collapse**: OAuth realm identity uses `organization` when present
+  and discards `email`, so two users in the same organization and subscription tier receive the
+  same poolId.
+- **Selector-only profiles**: `authConfigEpoch` treats selector-only `AWS_PROFILE` and
+  `ANTHROPIC_PROFILE` values as resolved identities, so repointing the same profile name to
+  another account through the default credentials store yields the same poolId.
+- **Credential-file rotation and fd-passed credentials**: key-file contents and file-descriptor
+  credentials are digested at spawn; rotation behind an unchanged path or descriptor between
+  spawns is not re-observed within a process epoch.
 
 Adjacent borrows, all vocabulary and zero dependencies (supply-chain posture: no install scripts):
 

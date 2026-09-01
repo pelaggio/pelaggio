@@ -1,9 +1,9 @@
 /** Claude step provider (L3): the SDK seat, its PreToolUse guards, and the main-checkout attribution hooks. */
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKResultMessage, SDKSystemMessage, SpawnedProcess, SpawnOptions, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type { HookInput, HookJSONOutput, SDKAssistantMessage, SDKRateLimitEvent, SDKRateLimitInfo, SDKResultMessage, SDKSystemMessage, SpawnedProcess, SpawnOptions, SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { preflightClaudeSeat, spawnClaudeSeat } from "../claude-seat.js";
+import { buildClaudeSeatEnv, preflightClaudeSeat, spawnClaudeSeat } from "../claude-seat.js";
 import { CONFIG, REPO, resolveStepSettings } from "../config.js";
 import type { MainCheckoutDeltaObserver } from "../confinement/roots.js";
 import { sessionsDir } from "../confinement/sessions.js";
@@ -12,12 +12,96 @@ import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedSignal, 
 import { bashDeniedRegisterPattern, bashDeniedRegisters, registerRelativePath, writeDeniedRegisterFor } from "../registers.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
-import type { BlockedKind, ProviderCapabilities, StepResult, TokenUsage } from "../types.js";
+import type { BlockedKind, ProviderCapabilities, ProviderObservation, QuotaWindowObservation, StepResult, TokenUsage } from "../types.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
+import { claudeAccountRealmId, deriveClaudePoolId } from "./claude-pool-id.js";
 import type { RunStepFn, StepProvider } from "./types.js";
 
 export type { StepTextProjection } from "../step-runner-shared.js";
 export { composeSystemAppend, createStepTextProjection, isWorktreePath } from "../step-runner-shared.js";
+export { deriveClaudePoolId } from "./claude-pool-id.js";
+
+const CLAUDE_RATE_LIMIT_NATIVE_KEYS = ["status", "resetsAt", "rateLimitType", "utilization", "surpassedThreshold", "overageStatus", "overageResetsAt", "overageDisabledReason", "isUsingOverage", "overageInUse", "errorCode"] as const;
+
+function normalizedClaudeUtilization(info: SDKRateLimitInfo): number | undefined {
+	if (typeof info.utilization !== "number" || !Number.isFinite(info.utilization)) return undefined;
+	// SDKRateLimitInfo.utilization is already a 0–1 fraction: the pinned CLI compares it against
+	// 0.9/0.75 thresholds and renders it as Math.floor(utilization * 100)%.
+	return Math.min(1, Math.max(0, info.utilization));
+}
+
+/** Dedup key for consecutive non-rejected usage observations. Rejections are always emitted. */
+function claudeRateLimitObservationKey(info: SDKRateLimitInfo): string | undefined {
+	if (info.status === "rejected") return undefined;
+	return JSON.stringify(CLAUDE_RATE_LIMIT_NATIVE_KEYS.map((key) => info[key] ?? null));
+}
+
+export function createClaudeRateLimitObservationDeduper(): (info: SDKRateLimitInfo) => boolean {
+	let previousKey: string | undefined;
+	return (info): boolean => {
+		const key = claudeRateLimitObservationKey(info);
+		if (info.status === "rejected") {
+			previousKey = undefined;
+			return true;
+		}
+		const changed = key !== previousKey;
+		previousKey = key;
+		return changed;
+	};
+}
+
+function projectClaudeRateLimitNative(info: SDKRateLimitInfo): Record<string, unknown> {
+	const native: Record<string, unknown> = {};
+	for (const key of CLAUDE_RATE_LIMIT_NATIVE_KEYS) {
+		const value = info[key];
+		if (value !== undefined) native[key] = value;
+	}
+	return native;
+}
+
+/** SDK resetsAt is epoch seconds (raw `anthropic-ratelimit-unified-reset`; the pinned CLI compares it against Date.now()/1000). The quota contract carries epoch ms. */
+function claudeResetsAtMs(info: SDKRateLimitInfo): number | undefined {
+	return typeof info.resetsAt === "number" && Number.isFinite(info.resetsAt) ? info.resetsAt * 1000 : undefined;
+}
+
+/** Pure projector over one SDK rate-limit update. One reported window only when `rateLimitType` is present. */
+export function projectClaudeRateLimitInfo(info: SDKRateLimitInfo, observedAt: number, parked = false, poolId = deriveClaudePoolId()): ProviderObservation {
+	const native = projectClaudeRateLimitNative(info);
+	const windowName = info.rateLimitType;
+	const usedFraction = normalizedClaudeUtilization(info);
+	const resetsAtMs = claudeResetsAtMs(info);
+	const poolIdChannel = poolId.startsWith("e:") ? ({ poolIdChannel: "epoch" as const } as const) : {};
+	if (info.status === "rejected") {
+		return {
+			kind: "limit",
+			provider: "claude",
+			poolId,
+			...poolIdChannel,
+			fault: "rate-limit",
+			window: windowName ?? null,
+			...(resetsAtMs !== undefined ? { resetsAt: resetsAtMs } : {}),
+			...(parked ? { parked: true as const } : {}),
+			native,
+		};
+	}
+	const window: QuotaWindowObservation | undefined = windowName
+		? {
+				name: windowName,
+				channel: "reported",
+				observedAt,
+				...(usedFraction !== undefined ? { usedFraction } : {}),
+				...(resetsAtMs !== undefined ? { resetsAt: resetsAtMs } : {}),
+			}
+		: undefined;
+	return {
+		kind: "usage",
+		provider: "claude",
+		poolId,
+		...poolIdChannel,
+		windows: window ? [window] : [],
+		native,
+	};
+}
 
 export function classifyClaudeTerminalText(input: Pick<StepResult, "ok" | "subtype" | "text">): Pick<StepResult, "ok" | "subtype" | "text" | "blockedKind" | "stalledAsk"> {
 	if (!input.ok) return input;
@@ -404,14 +488,23 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	// Unconditional seat wrap: every Claude SDK child starts under Bubblewrap.
 	// onChildSpawn is observation-only (#369 outer bwrap PID); it does not gate the seam.
 	// Pass the SDK's forwarded `signal` so force-kill stays after the stdin-EOF + grace window.
-	const spawnClaudeCodeProcess = (spawnOpts: SpawnOptions): SpawnedProcess =>
-		spawnClaudeSeat(spawnOpts, {
+	let poolId = deriveClaudePoolId({});
+	let spawnEnv: NodeJS.ProcessEnv | undefined;
+	const spawnClaudeCodeProcess = (spawnOpts: SpawnOptions): SpawnedProcess => {
+		// spawnOpts flows through UNFILTERED: spawnClaudeSeat filters internally and scrubs child
+		// stderr from the unfiltered bag, so pre-filtering here would collapse the scrubber's
+		// secret set. The filtered view is derived locally only for pool identity (what the child sees).
+		const childEnv = buildClaudeSeatEnv(spawnOpts.env, name, CONFIG.security.envAllowlist);
+		spawnEnv = childEnv;
+		poolId = deriveClaudePoolId(childEnv);
+		return spawnClaudeSeat(spawnOpts, {
 			cwd: opts.cwd,
 			bwrap: seatPreflight.bwrap,
 			step: name,
 			envAllowlist: CONFIG.security.envAllowlist,
 			...(opts.onChildSpawn ? { onChildSpawn: opts.onChildSpawn } : {}),
 		});
+	};
 
 	const gen = query({
 		prompt,
@@ -449,6 +542,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	let rateLimitPark = false;
 	let lastToolName = "";
 	let tokens: TokenUsage | undefined;
+	const shouldEmitRateLimitObservation = createClaudeRateLimitObservationDeduper();
 
 	// Edit loop detection
 	const editCounts = new Map<string, number>();
@@ -461,6 +555,16 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 			if (msg.type === "system") {
 				const sys = msg as SDKSystemMessage;
 				if (sys.subtype === "init") {
+					let accountId: string | undefined;
+					if (sys.apiKeySource === "oauth") {
+						try {
+							const account = await gen.accountInfo();
+							accountId = claudeAccountRealmId(account);
+						} catch {
+							// Missing account metadata falls through to the profile digest or epoch channel.
+						}
+					}
+					poolId = deriveClaudePoolId(spawnEnv ?? {}, sys.apiKeySource, accountId);
 					emit({ type: "init", model: sys.model, toolCount: sys.tools?.length ?? 0 });
 				}
 				if ((msg as { subtype: string }).subtype === "compact_boundary") {
@@ -473,17 +577,22 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 				const rle = msg as SDKRateLimitEvent;
 				const info = rle.rate_limit_info;
 				const overageAvailable = info?.overageStatus === "allowed" || info?.overageStatus === "allowed_warning";
-				if (info?.status === "rejected" && !opts.parkSignal.parked && !overageAvailable) {
+				const parkedThis = info?.status === "rejected" && !opts.parkSignal.parked && !overageAvailable;
+				if (parkedThis && info) {
 					// Record the reset faithfully; the estimate for a missing reset is a last resort
 					// applied in the backfill below (#68), after the text-parse recovery gets a shot.
 					opts.parkSignal.parked = true;
 					opts.parkSignal.resetsAt = info.resetsAt ?? 0;
 					opts.parkSignal.limitType = info.rateLimitType ?? "unknown";
 					opts.parkSignal.triggerWorker = opts.itemId ?? "";
+					opts.parkSignal.rateLimit = { provider: "claude", window: info.rateLimitType ?? null };
 					rateLimitPark = true;
 					emit({ type: "rate_limit", limitType: opts.parkSignal.limitType, resetsAt: opts.parkSignal.resetsAt });
 				} else if (info?.status === "rejected" && overageAvailable) {
 					emit({ type: "rate_limit", limitType: `${info.rateLimitType ?? "unknown"} (continuing on extra usage)`, resetsAt: 0 });
+				}
+				if (info) {
+					if (shouldEmitRateLimitObservation(info)) opts.onProviderObservation?.(projectClaudeRateLimitInfo(info, Date.now(), parkedThis, poolId));
 				}
 			}
 

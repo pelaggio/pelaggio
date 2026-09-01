@@ -347,6 +347,27 @@ describe("adjudication source store", () => {
 });
 
 describe("emission-time classification", () => {
+	it("bare finding strip omits closure so sidecar FINDING_KEYS stay closed (#756)", () => {
+		const withClosure: ReviewFinding = { ...finding(), closure: "policy" };
+		const built = buildAdjudicationSourceDraft({
+			prNumber: 497,
+			itemId: "497",
+			reviewedSha: REVIEWED,
+			agreement: "consensus-block",
+			requiredCells: 1,
+			completedCells: 1,
+			ok: true,
+			survivors: [withClosure],
+			verifications: new Map([[reviewFindingFingerprint(withClosure), { id: "C1", decision: "survives" as const, rationale: "Still present." }]]),
+			inspectionDiff: inspectionDiff(),
+			changedFiles: ["src/a.ts"],
+			taxonomy: BASELINE_TAXONOMY,
+		});
+		assert.ok(built);
+		assert.equal("closure" in built.survivors[0]!.finding, false);
+		assert.deepEqual(Object.keys(built.survivors[0]!.finding).sort(), ["line", "message", "path", "severity"]);
+	});
+
 	it("captures correctness-regression/safety for ambiguous schema-v1 findings", () => {
 		const built = buildAdjudicationSourceDraft({
 			prNumber: 497,

@@ -16,8 +16,9 @@ export function classifyOutcome(result: Pick<StepResult, "subtype">): StepSubtyp
 export function classifyCycleDisposition(result: CycleResult, recoverable: ReadonlySet<string>): CycleDisposition {
 	switch (result.outcome) {
 		case "completed":
-		case "parked":
 			return "continue";
+		case "parked":
+			return result.disposition ?? "continue";
 		case "blocked":
 			return result.disposition ?? "halt-campaign";
 		case "failed":

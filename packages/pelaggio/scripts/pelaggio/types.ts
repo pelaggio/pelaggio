@@ -263,7 +263,7 @@ export type ParkClass = "rate-limit" | "paused" | "sdk-outage" | "review-escalat
 
 export type CycleOutcome =
 	| { outcome: "completed" }
-	| { outcome: "parked"; parkClass: ParkClass; parkReason: string | null }
+	| { outcome: "parked"; parkClass: ParkClass; parkReason: string | null; parkProvider?: ProviderName; parkWindow?: string | null }
 	| { outcome: "blocked"; blockedKind: BlockedKind; reason: string }
 	| { outcome: "failed"; failureClass: FailureClass; error: string };
 
@@ -296,6 +296,9 @@ export interface PreUnionCycleLogEntry extends CycleLogEnvelope {
 	parked?: boolean;
 	parkReason?: string | null;
 	parkClass?: ParkClass;
+	/** Provider/window metadata written by pre-union rate-limit park records. */
+	parkProvider?: ProviderName;
+	parkWindow?: string | null;
 }
 
 export type RawCycleLogRecord = CycleLogEntry | PreUnionCycleLogEntry;
@@ -332,7 +335,10 @@ export type PelaggioEventType =
 	// Process-level run identity / liveness (issue #40) — not item-flow transitions.
 	| "pelaggio.run-started"
 	| "pelaggio.run-heartbeat"
-	| "pelaggio.run-finished";
+	| "pelaggio.run-finished"
+	// Provider quota observations (issue #581) — not pool projections or park control.
+	| "pelaggio.provider-usage"
+	| "pelaggio.provider-limit";
 
 export interface FlowEventEnvelope {
 	v: 1;
@@ -368,10 +374,80 @@ export type RunFinishedEvent = FlowEventEnvelope & {
 	exitCode: number;
 };
 
-type ExplicitPelaggioEventType = "pelaggio.cycle-completed" | "pelaggio.run-started" | "pelaggio.run-heartbeat" | "pelaggio.run-finished";
+/** Quota provenance channel. This increment emits only `"reported"`; later items must not invent a fourth. */
+export type QuotaChannel = "reported" | "probed" | "estimated";
+
+/** One named window as the provider reported it. Channel and freshness live here, never on a provider aggregate. */
+export interface QuotaWindowObservation {
+	name: string;
+	channel: QuotaChannel;
+	observedAt: number;
+	usedFraction?: number;
+	resetsAt?: number;
+}
+
+type ProviderNativeDetail = Record<string, unknown>;
+
+export type ProviderUsageObservation = {
+	kind: "usage";
+	provider: ProviderName;
+	poolId: string;
+	poolIdChannel?: "epoch";
+	windows: QuotaWindowObservation[];
+	"gen_ai.usage.input_tokens"?: number;
+	"gen_ai.usage.output_tokens"?: number;
+	native?: ProviderNativeDetail;
+};
+
+export type ProviderLimitObservation = {
+	kind: "limit";
+	provider: ProviderName;
+	poolId: string;
+	poolIdChannel?: "epoch";
+	fault: "rate-limit";
+	window: string | null;
+	resetsAt?: number;
+	/** Present only when *this* observation set `parkSignal.parked`. */
+	parked?: true;
+	native?: ProviderNativeDetail;
+};
+
+/** Adapter-filled observation. The pipeline adds fat correlation (`step`, realized `model`) at append time. */
+export type ProviderObservation = ProviderUsageObservation | ProviderLimitObservation;
+
+export type ProviderUsageEvent = FlowEventEnvelope & {
+	type: "pelaggio.provider-usage";
+	provider: ProviderName;
+	poolId: string;
+	poolIdChannel?: "epoch";
+	windows: QuotaWindowObservation[];
+	"gen_ai.usage.input_tokens"?: number;
+	"gen_ai.usage.output_tokens"?: number;
+	step?: Step;
+	model?: string;
+	native?: ProviderNativeDetail;
+	truncated?: "event-oversize";
+};
+
+export type ProviderLimitEvent = FlowEventEnvelope & {
+	type: "pelaggio.provider-limit";
+	provider: ProviderName;
+	poolId: string;
+	poolIdChannel?: "epoch";
+	fault: "rate-limit";
+	window: string | null;
+	resetsAt?: number;
+	parked?: true;
+	step?: Step;
+	model?: string;
+	native?: ProviderNativeDetail;
+	truncated?: "event-oversize";
+};
+
+type ExplicitPelaggioEventType = "pelaggio.cycle-completed" | "pelaggio.run-started" | "pelaggio.run-heartbeat" | "pelaggio.run-finished" | "pelaggio.provider-usage" | "pelaggio.provider-limit";
 
 export type CoreFlowEvent = FlowEventEnvelope & { type: Exclude<PelaggioEventType, ExplicitPelaggioEventType>; [key: string]: unknown };
-export type FlowEvent = CycleCompletedEvent | LegacyCycleCompletedEvent | RunStartedEvent | RunHeartbeatEvent | RunFinishedEvent | CoreFlowEvent;
+export type FlowEvent = CycleCompletedEvent | LegacyCycleCompletedEvent | RunStartedEvent | RunHeartbeatEvent | RunFinishedEvent | ProviderUsageEvent | ProviderLimitEvent | CoreFlowEvent;
 
 export type EventLogDiagnosticKind = "malformed" | "truncatedTail" | "unknownType" | "duplicateEventId" | "duplicateSequence" | "regressingSequence" | "sequenceGap";
 
@@ -401,6 +477,35 @@ export type FlowEventInput = FlowEventCorrelations &
 		| { type: "pelaggio.run-started"; ts?: string; heartbeatMs: number; mode?: RunMode; resumed?: true }
 		| { type: "pelaggio.run-heartbeat"; ts?: string }
 		| { type: "pelaggio.run-finished"; ts?: string; outcome: RunFinishOutcome; exitCode: number }
+		| {
+				type: "pelaggio.provider-usage";
+				ts?: string;
+				provider: ProviderName;
+				poolId: string;
+				poolIdChannel?: "epoch";
+				windows: QuotaWindowObservation[];
+				"gen_ai.usage.input_tokens"?: number;
+				"gen_ai.usage.output_tokens"?: number;
+				step?: Step;
+				model?: string;
+				native?: ProviderNativeDetail;
+				truncated?: "event-oversize";
+		  }
+		| {
+				type: "pelaggio.provider-limit";
+				ts?: string;
+				provider: ProviderName;
+				poolId: string;
+				poolIdChannel?: "epoch";
+				fault: "rate-limit";
+				window: string | null;
+				resetsAt?: number;
+				parked?: true;
+				step?: Step;
+				model?: string;
+				native?: ProviderNativeDetail;
+				truncated?: "event-oversize";
+		  }
 		| ({ type: Exclude<PelaggioEventType, ExplicitPelaggioEventType>; ts?: string } & Record<string, unknown>)
 	);
 
@@ -612,6 +717,8 @@ export interface PipelineOpts {
 	unattendedSignalSuppressions?: readonly string[];
 	/** Independently gated, fail-soft per-decision delivery. */
 	notifyDecision?: (input: { itemId: string | null; decision: Decision; step: Step; source: string; logPath: string; escalation?: ReviewEscalation & { id: string } }) => Promise<void>;
+	/** Run-scoped flow writer. Direct callers and hermetic tests may omit it. */
+	eventWriter?: EventWriter;
 }
 
 // ── Shared mutable state ───────────────────────────────────────────────
@@ -621,6 +728,8 @@ export interface ParkSignal {
 	resetsAt: number;
 	limitType: string;
 	triggerWorker: string;
+	/** Paired identity for a rate-limit park. Omitted on pause/sdk-outage; never half-populated. */
+	rateLimit?: { provider: ProviderName; window: string | null };
 }
 
 // ── CLI flags ──────────────────────────────────────────────────────────

@@ -131,6 +131,12 @@ describe("classifyParkReason", () => {
 		assert.equal(classifyParkReason("adversarial review dissent", "5h"), "rate-limit");
 	});
 
+	it("still classifies native window names as rate-limit (#581 no-false-fire)", () => {
+		assert.equal(classifyParkReason(null, "five_hour"), "rate-limit");
+		assert.equal(classifyParkReason(null, "seven_day_opus"), "rate-limit");
+		assert.equal(classifyParkReason(null, "5h"), "rate-limit");
+	});
+
 	it("classifies the review-loop park reasons the pipeline actually emits", () => {
 		assert.equal(classifyParkReason("adversarial review could not bind current HEAD", ""), "review-binding");
 		assert.equal(classifyParkReason("adversarial review could not bind final reviewed HEAD", ""), "review-binding");

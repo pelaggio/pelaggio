@@ -36,6 +36,21 @@ You are checked out at the PR head with full history; `origin/main` is the merge
 
 !`cat .claude/skills/_project-context.md 2>/dev/null`
 
+## Closure mode (advisory)
+
+When a confirmed finding can be classified, set optional `closure` to exactly one of:
+
+- `patch` — a localized fix retires the finding and should converge.
+- `construction` — the finding is one instance of a class with a completeness surface; retirement requires a §8.2 construction move (chokepoint, extract-and-require, or default-deny), because an instance patch predicts recurrence.
+- `authority` — the guarantee is not this item's to make; closure is chartering/re-chartering through the authority path established by #745.
+- `policy` — the finding trades against a stated design constraint; closure requires a routed decision.
+
+Omit the field when unsure. Do not invent a fifth value.
+
+**Class-extent obligation:** a confirmed `must-fix` names the defect class and sweeps that class's surface in the diff. N instances of one class are reported as one class finding, not N patch requests.
+
+Do not put closure modes in taxonomy `class` / `classHint`. Taxonomy class remains the safety/judgment floor (#293/#294); closure is a second, optional axis.
+
 ## Mode selection
 
 If the `Arguments:` line contains `--document`, run **Document mode** below.
@@ -107,12 +122,12 @@ findings — never the placeholder strings):
 
 ```text
 AUTHORING_REVIEW_FINDINGS
-{"schemaVersion":3,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","message":"Concrete single-line finding.","path":"src/file.ts","line":1,"ruleId":"pelaggio/security/secret-leak","cwe":"CWE-798","classHint":"security-and-secrets"}]}
+{"schemaVersion":3,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","message":"Concrete single-line finding.","path":"src/file.ts","line":1,"ruleId":"pelaggio/security/secret-leak","cwe":"CWE-798","classHint":"security-and-secrets","closure":"patch"}]}
 END_AUTHORING_REVIEW_FINDINGS
 ```
 
 The JSON has exactly `schemaVersion`, `summary`, and `findings`. Each finding has
-exactly `severity`, `message`, optional `path`/`line`, and optional evidence
+exactly `severity`, `message`, optional `path`/`line`, optional `closure`, and optional evidence
 `ruleId` / `cwe` / `classHint` (valid classHint tokens:
 `security-and-secrets`, `data-loss/destructive-ops`, `correctness-regression`,
 `supply-chain/integrity`, `containment-escape`, `irreversible-git/unsafe-landing`,
@@ -145,8 +160,9 @@ Run this pass independently from any ordinary correctness review:
 6. Report confirmed findings with concrete locations where applicable. Drop vague
    "security sensitive" speculation.
 
-Write a concise summary of the attack surface tested and emit every confirmed candidate
-as a separate finding using the reporting contract below.
+Write a concise summary of the attack surface tested and emit confirmed findings using
+the reporting contract below. A class of instances is one finding that names the
+surface, not N instance findings.
 
 ## Standard mode
 
@@ -184,8 +200,9 @@ instead).
 
 ### Phase C — report
 
-Write a concise summary of what the PR does and emit every confirmed candidate as a
-separate finding using the reporting contract below.
+Write a concise summary of what the PR does and emit confirmed findings using the
+reporting contract below. A class of instances is one finding that names the surface,
+not N instance findings.
 
 ## Reporting contract
 
@@ -193,13 +210,14 @@ End the final response with exactly one block in this form and nothing after it:
 
 ```text
 REVIEW_FINDINGS
-{"schemaVersion":1,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","message":"Concise single-line finding.","path":"src/file.ts","line":12}]}
+{"schemaVersion":1,"summary":"Concise single-line summary.","findings":[{"severity":"must-fix","message":"Concise single-line finding.","path":"src/file.ts","line":12,"closure":"patch"}]}
 END_REVIEW_FINDINGS
 ```
 
 The JSON object has exactly `schemaVersion`, `summary`, and `findings`. Each finding has
-exactly `severity`, `message`, and optional `path` and `line`; `line` requires `path` and
-is a positive integer. All strings are non-empty and single-line. Use these severities:
+exactly `severity`, `message`, optional `path` and `line`, and optional `closure`; `line`
+requires `path` and is a positive integer. All strings are non-empty and single-line. Use
+these severities:
 
 - `must-fix`: a confirmed bug, broken required check, security exploit or fail-open path,
   or load-bearing invariant violation. This is the only severity that blocks merge.

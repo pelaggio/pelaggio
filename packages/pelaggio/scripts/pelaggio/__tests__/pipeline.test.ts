@@ -1,17 +1,19 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
 import { appendReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
 import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
+import { createEventWriter, readEventLog } from "../flow-events.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { runOrchestrator } from "../orchestrator.js";
 import { archiveReviewFindingsAfterImplement, defaultTypecheckRatchet, type RunStepFn, runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-gate.js";
 import { OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
+import { verifyOrRepairAuthoringReviewHostDependencies } from "../review/seat-deps.js";
 import { appliedReviewFindingsArchivePath, reviewFindingsDigest } from "../review-findings-archive.js";
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
@@ -2800,20 +2802,32 @@ describe("runPipeline — rate-limit park preserves state", () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
+		const writer = createEventWriter({ root: worktree });
+		const observedAt = 1_700_000_000_000;
+		const poolId = "k:0123456789ab";
 		const { runStep, calls } = createMockRunStep(
 			{
-				plan: { ok: true },
+				plan: {
+					ok: true,
+					observation: {
+						kind: "usage",
+						provider: "claude",
+						poolId,
+						windows: [{ name: "five_hour", channel: "reported", observedAt, usedFraction: 0.47, resetsAt: observedAt + 3_600_000 }],
+					},
+				},
 				"shakedown-plan": {
 					ok: false,
 					subtype: "error_rate_limit",
 					writes: { "wip.txt": "partial work" },
-					park: { parked: true, limitType: "5h", resetsAt: Date.now() + 3_600_000 },
+					park: { parked: true, limitType: "five_hour", resetsAt: Date.now() + 3_600_000, rateLimit: { provider: "claude", window: "five_hour" } },
+					observation: { kind: "limit", provider: "claude", poolId, fault: "rate-limit", window: "five_hour", parked: true, resetsAt: observedAt + 3_600_000 },
 				},
 			},
 			parkSignal,
 		);
 
-		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+		const result = await runPipeline({ ...baseOpts(worktree), eventWriter: writer }, parkSignal, baseFlags, {
 			runStep,
 			mainRepo: worktree,
 			listWorktrees: () => [],
@@ -2835,11 +2849,88 @@ describe("runPipeline — rate-limit park preserves state", () => {
 			`expected rate-limit park commit; got:\n${msgs.join("\n")}`,
 		);
 
-		assert.equal(logs[0].outcome, "parked");
-		assert.equal(logs[0].parkReason, "5h");
+		assert.equal(logs[0]?.outcome, "parked");
+		assert.equal(logs[0]?.parkReason, "five_hour");
 		// Signal-driven park: the structured limitType classifies it, and no review-loop
 		// reason is present to override it.
 		assert.equal(logs[0]?.parkClass, "rate-limit");
+		assert.equal(logs[0]?.parkProvider, "claude");
+		assert.equal(logs[0]?.parkWindow, "five_hour");
+
+		const events = readEventLog({ root: worktree, cycleLogPath: null }).events;
+		const usage = events.find((event) => event.type === "pelaggio.provider-usage");
+		const limit = events.find((event) => event.type === "pelaggio.provider-limit");
+		assert.ok(usage, "expected a correlated usage observation");
+		assert.ok(limit, "expected a parked limit observation");
+		assert.equal(usage.itemId, "TOOL-99");
+		assert.equal("step" in usage ? usage.step : undefined, "plan");
+		assert.ok(["claude", "codex", "grok", "opencode"].includes("provider" in usage ? String(usage.provider) : ""));
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.usedFraction : undefined, 0.47);
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.name : undefined, "five_hour");
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.resetsAt : undefined, observedAt + 3_600_000);
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.observedAt : undefined, observedAt);
+		assert.equal("parked" in limit ? limit.parked : undefined, true);
+		assert.equal("window" in limit ? limit.window : undefined, "five_hour");
+	});
+
+	it("distinguishes a weekly Claude window from the five-hour park while keeping coarse parkClass", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": {
+					ok: false,
+					subtype: "error_rate_limit",
+					writes: { "wip.txt": "weekly" },
+					park: { parked: true, limitType: "seven_day_opus", resetsAt: Date.now() + 3_600_000, rateLimit: { provider: "claude", window: "seven_day_opus" } },
+				},
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+		assert.equal(result.outcome, "parked");
+		assert.equal(logs[0]?.parkClass, "rate-limit");
+		assert.equal(logs[0]?.parkProvider, "claude");
+		assert.equal(logs[0]?.parkWindow, "seven_day_opus");
+	});
+
+	it("persists a Codex-shaped park with a null window", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": {
+					ok: false,
+					subtype: "error_rate_limit",
+					writes: { "wip.txt": "codex" },
+					park: { parked: true, limitType: "unknown (estimated)", resetsAt: Date.now() + 3_600_000, rateLimit: { provider: "codex", window: null } },
+				},
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+		assert.equal(result.outcome, "parked");
+		assert.equal(logs[0]?.parkClass, "rate-limit");
+		assert.equal(logs[0]?.parkProvider, "codex");
+		assert.equal(logs[0]?.parkWindow, null);
 	});
 });
 
@@ -4102,6 +4193,7 @@ describe("runOrchestrator — SIGUSR2 pause handler", () => {
 		const wrappedRun: typeof mockRun = async (opts, parkSignal, flags) => {
 			const result = await mockRun(opts, parkSignal, flags);
 			if (opts.itemId === "A-1") {
+				parkSignal.rateLimit = { provider: "claude", window: "five_hour" };
 				process.kill(process.pid, "SIGUSR2");
 				// Yield until the signal handler fires.
 				for (let i = 0; i < 5 && !parkSignal.parked; i++) await new Promise(setImmediate);
@@ -4121,6 +4213,7 @@ describe("runOrchestrator — SIGUSR2 pause handler", () => {
 		assert.equal(snap.parked, true);
 		assert.equal(snap.limitType, "paused");
 		assert.equal(snap.resetsAt, 0);
+		assert.equal(snap.rateLimit, undefined);
 	});
 
 	it("removes its SIGUSR2 listener on return so repeated invocations do not leak", async () => {
@@ -4157,13 +4250,19 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
 
 		const parkSignal = makeParkSignal();
+		const writer = createEventWriter({ root: worktree });
 		const manifests: Array<{ attempt: number; step: string; effects: unknown[] }> = [];
 		const dispatches: Array<{ attempt: number; step: string }> = [];
 		const { runStep: mockRunStep, calls } = createMockRunStep(
 			{
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
-				"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+				"pr-verify": {
+					ok: true,
+					text: cleanJudge,
+					fullText: cleanJudge,
+					observation: { kind: "usage", provider: "claude", poolId: "k:0123456789ab", windows: [{ name: "five_hour", channel: "reported", observedAt: 1, usedFraction: 0.25, resetsAt: 2 }] },
+				},
 				ship: {
 					ok: true,
 					text: "ship-merged: TOOL-99",
@@ -4183,7 +4282,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		};
 
 		try {
-			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", eventWriter: writer }, parkSignal, baseFlags, {
 				runStep,
 				mainRepo: worktree,
 				listWorktrees: () => [worktree],
@@ -4215,6 +4314,129 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			assert.ok(aggregate, `expected shakedown-code attempt 0 manifest; got ${JSON.stringify(manifests)}`);
 			assert.equal(aggregate.effects[0] && (aggregate.effects[0] as { kind: string }).kind, "review.Verdict");
 			assert.ok(dispatches.some((d) => d.step === "shakedown-code" && d.attempt === 0));
+			const reviewUsage = readEventLog({ root: worktree, cycleLogPath: null }).events.find((event) => event.type === "pelaggio.provider-usage" && "step" in event && event.step === "pr-verify");
+			assert.ok(reviewUsage, "the review-loop Judge seat must reach the shared provider-observation append funnel");
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+		}
+	});
+
+	it("parks a teardown restoration failure even when the author revision rejects", async () => {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((seat) => ({ ...seat })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		REVIEW_CONFIG.authoring.enabled = "local";
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "claude", provider: "claude" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const findings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "fixable defect", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const judge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" }] })}\nEND_AUTHORING_REVIEW_JUDGE`;
+		const { runStep: mockRunStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"pr-review": { ok: true, text: findings, fullText: findings },
+				"pr-verify": { ok: true, text: judge, fullText: judge },
+			},
+			parkSignal,
+		);
+		const runStep: RunStepFn = async (name, prompt, opts, emit) => {
+			if (name === "shakedown-code") throw new Error("author seat rejected");
+			return mockRunStep(name, prompt, opts, emit);
+		};
+		const logs: Array<Record<string, unknown>> = [];
+
+		try {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: (entry) => logs.push(entry),
+				runShipBookkeeping: noopBookkeeping,
+				prepareAuthoringReviewSeat: (_main, key) => join(tmpdir(), `rejecting-seat-${key.seatId}-p${key.pass}`),
+				cleanupAuthoringReviewSeatsForSha: async () => {
+					throw new Error("repair lock unavailable");
+				},
+			});
+
+			assert.equal(result.outcome, "parked");
+			assert.equal(result.disposition, "halt-campaign");
+			assert.ok(calls.some((call) => call.step === "pr-review"));
+			assert.ok(calls.some((call) => call.step === "pr-verify"));
+			assert.match(String(logs[0]?.parkReason), /repair lock unavailable/);
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+		}
+	});
+
+	it("a rejecting review loop parks with checkpoint and halt-campaign even when cleanup succeeds", async () => {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((seat) => ({ ...seat })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		REVIEW_CONFIG.authoring.enabled = "local";
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "claude", provider: "claude" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const findings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "fixable defect", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const judge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" }] })}\nEND_AUTHORING_REVIEW_JUDGE`;
+		const { runStep: mockRunStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"pr-review": { ok: true, text: findings, fullText: findings },
+				"pr-verify": { ok: true, text: judge, fullText: judge },
+			},
+			parkSignal,
+		);
+		const runStep: RunStepFn = async (name, prompt, opts, emit) => {
+			if (name === "shakedown-code") {
+				// The author seat dirties the claim tree, then its await rejects: the
+				// escape must become a checkpointing park, never an unhandled rejection.
+				writeFileSync(join(worktree, "author-in-flight.txt"), "unsaved author work");
+				throw new Error("author seat rejected");
+			}
+			return mockRunStep(name, prompt, opts, emit);
+		};
+		const logs: Array<Record<string, unknown>> = [];
+
+		try {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: (entry) => logs.push(entry),
+				runShipBookkeeping: noopBookkeeping,
+				prepareAuthoringReviewSeat: (_main, key) => join(tmpdir(), `rejecting-loop-seat-${key.seatId}-p${key.pass}`),
+				cleanupAuthoringReviewSeatsForSha: async () => ({ status: "healthy", repaired: [] }),
+			});
+
+			assert.equal(result.outcome, "parked");
+			assert.equal(result.disposition, "halt-campaign");
+			assert.ok(calls.some((call) => call.step === "pr-review"));
+			assert.match(String(logs[0]?.parkReason), /adversarial review loop failed: author seat rejected/);
+			// The park checkpointed the author's in-flight work instead of dropping it.
+			assert.equal(execSync("git status --porcelain", { cwd: worktree }).toString().trim(), "");
+			assert.match(execSync("git log --format=%s", { cwd: worktree }).toString(), /wip: pelaggio/);
 		} finally {
 			REVIEW_CONFIG.authoring.enabled = saved.enabled;
 			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
@@ -4882,8 +5104,22 @@ describe("execution receipts (#188)", () => {
 
 function makeDeliverableRepo(): string {
 	const dir = makeTempGitRepo();
+	const dependencyNames = ["diff", "tsx", "ulid", "yaml"];
+	const packageNodeModules = resolve(dir, "packages", "pelaggio", "node_modules");
+	mkdirSync(packageNodeModules, { recursive: true });
+	writeFileSync(resolve(dir, "packages", "pelaggio", "package.json"), JSON.stringify({ name: "pelaggio", dependencies: Object.fromEntries(dependencyNames.map((name) => [name, "^1.0.0"])) }));
+	writeFileSync(
+		resolve(dir, "pnpm-lock.yaml"),
+		["lockfileVersion: '9.0'", "importers:", "  packages/pelaggio:", "    dependencies:", ...dependencyNames.flatMap((name) => [`      ${name}:`, "        specifier: ^1.0.0", "        version: 1.0.0"]), ""].join("\n"),
+	);
+	for (const name of dependencyNames) {
+		const target = resolve(dir, "node_modules", ".pnpm", `${name}@1.0.0`, "node_modules", name);
+		mkdirSync(target, { recursive: true });
+		writeFileSync(resolve(target, "package.json"), JSON.stringify({ name }));
+		symlinkSync(relative(packageNodeModules, target), resolve(packageNodeModules, name), "dir");
+	}
 	writeFileSync(join(dir, "impl.txt"), "x\n");
-	execSync("git add impl.txt && git commit -q -m impl", { cwd: dir });
+	execSync("git add impl.txt packages/pelaggio/package.json pnpm-lock.yaml && git commit -q -m impl", { cwd: dir });
 	return dir;
 }
 
@@ -4922,6 +5158,75 @@ function shipFrom(worktree: string): PipelineOpts {
 }
 
 describe("runPipeline — PR pre-flight and freshness (#424)", () => {
+	it("repairs MAIN after a skipped teardown before the ship-candidate ratchet", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const order: string[] = [];
+		const packageNodeModules = resolve(worktree, "packages", "pelaggio", "node_modules");
+		const canonicalTargets = new Map<string, string>();
+		for (const name of ["diff", "tsx", "ulid", "yaml"]) {
+			const link = resolve(packageNodeModules, name);
+			canonicalTargets.set(name, readlinkSync(link));
+		}
+		const yamlLink = resolve(packageNodeModules, "yaml");
+		const crashedSeatTarget = resolve(worktree, ".dev", "authoring-review-seats", "crashed", "node_modules", ".pnpm", "yaml");
+		mkdirSync(crashedSeatTarget, { recursive: true });
+		rmSync(yamlLink);
+		symlinkSync(crashedSeatTarget, yamlLink, "dir");
+
+		const lockPaths: string[] = [];
+		const { runStep } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			mainRepo: worktree,
+			verifyOrRepairAuthoringReviewHostDependencies: async (main) => {
+				assert.equal(main, worktree);
+				order.push("repair");
+				return verifyOrRepairAuthoringReviewHostDependencies(main, async (path, fn) => {
+					lockPaths.push(path);
+					return fn();
+				});
+			},
+			runTypecheckRatchet: async () => {
+				order.push("ratchet");
+				assert.equal(readlinkSync(yamlLink), canonicalTargets.get("yaml"), "read-side repair must finish before the ratchet");
+				return { ok: true };
+			},
+			listWorktrees: () => [],
+			appendLog: () => {},
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.outcome, "completed", `expected completed; error=${failedError(result)}`);
+		assert.deepEqual(order.slice(0, 2), ["repair", "ratchet"]);
+		assert.deepEqual(lockPaths, [resolve(worktree, ".dev", "node-modules-repair.lock")]);
+	});
+
+	it("parks before the ship-candidate ratchet when derived store content is missing", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<{ parkReason?: string | null }> = [];
+		let ratchetCalls = 0;
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			verifyOrRepairAuthoringReviewHostDependencies: async () => ({ status: "park", reason: "missing-store-content", detail: "yaml target absent", repaired: [] }),
+			runTypecheckRatchet: async () => {
+				ratchetCalls += 1;
+				return { ok: true };
+			},
+			listWorktrees: () => [],
+			appendLog: (entry) => logs.push(entry),
+		});
+
+		assert.equal(result.outcome, "parked");
+		assert.equal(ratchetCalls, 0);
+		assert.match(logs[0]?.parkReason ?? "", /missing-store-content/);
+		assert.match(logs[0]?.parkReason ?? "", /resume: pnpm pelaggio --resume TOOL-99/);
+		assert.equal(calls.filter((call) => call.step === "ship").length, 0);
+	});
+
 	it("up-to-date path runs one cold gate before ship with origin/main pin and no comment callback", async () => {
 		const worktree = makeDeliverableRepo();
 		const parkSignal = makeParkSignal();
@@ -4969,8 +5274,9 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 				seats.push(key.seatId);
 				return join(tmpdir(), `preflight-seat-${key.seatId}`);
 			},
-			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+			cleanupAuthoringReviewSeatsForSha: async (_main, sha) => {
 				cleaned.push(sha);
+				return { status: "healthy", repaired: [] };
 			},
 			runPrReviewGate: async (opts) => {
 				assert.ok(opts.runStep);
@@ -5125,8 +5431,9 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			prepareAuthoringReviewSeat: () => {
 				throw new Error("seat boom");
 			},
-			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+			cleanupAuthoringReviewSeatsForSha: async (_main, sha) => {
 				cleaned.push(sha);
+				return { status: "healthy", repaired: [] };
 			},
 			runPrReviewGate: async () => {
 				gateCalls += 1;
@@ -5199,6 +5506,62 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		assert.notEqual(result.outcome, "completed");
 		assert.match(failedError(result) ?? "", /HEAD moved during pre-flight/);
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0, "a mutated tree must never ship");
+	});
+
+	it("a cleanup restoration failure parks, preserves guidance, and halts the campaign", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<{ parkReason?: string | null }> = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			cleanupAuthoringReviewSeatsForSha: async () => {
+				throw new Error("repair lock unavailable");
+			},
+			runPrReviewGate: async () => passGate(),
+			listWorktrees: () => [],
+			appendLog: (entry) => logs.push(entry),
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.outcome, "parked");
+		assert.equal(result.disposition, "halt-campaign");
+		assert.match(logs[0]?.parkReason ?? "", /preserved state: claim worktree/);
+		assert.match(logs[0]?.parkReason ?? "", /resume: pnpm pelaggio --resume TOOL-99/);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
+	});
+
+	it("the mutation guard outranks a cleanup restoration park and never checkpoints reviewer-authored state", async () => {
+		const worktree = makeDeliverableRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<{ parkReason?: string | null }> = [];
+		const { runStep, calls } = createMockRunStep({ ship: prShipDecision() }, parkSignal);
+		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
+			runStep,
+			...defaultPrPreflightStubs(),
+			cleanupAuthoringReviewSeatsForSha: async () => {
+				throw new Error("repair lock unavailable");
+			},
+			runPrReviewGate: async () => {
+				// A mutated claim tree AND a parking cleanup on the same exit: the
+				// deterministic mutation guard must fire first, before the park path's
+				// checkpoint can commit reviewer-authored state.
+				execSync("git commit -q --allow-empty -m sneaky-seat-commit", { cwd: worktree });
+				writeFileSync(join(worktree, "reviewer-dropping.txt"), "unauthorized");
+				return passGate();
+			},
+			listWorktrees: () => [],
+			appendLog: (entry) => logs.push(entry),
+			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
+		});
+		assert.equal(result.outcome, "failed");
+		assert.match(failedError(result) ?? "", /HEAD moved during pre-flight/);
+		assert.match(failedError(result) ?? "", /cleanup restoration also parked/);
+		assert.equal(calls.filter((c) => c.step === "ship").length, 0, "a mutated tree must never ship");
+		// No park checkpoint ran: the reviewer's commit is still HEAD and its dirty
+		// write is still uncommitted, not folded into a checkpoint commit.
+		assert.equal(execSync("git log -1 --format=%s", { cwd: worktree }).toString().trim(), "sneaky-seat-commit");
+		assert.match(execSync("git status --porcelain", { cwd: worktree }).toString(), /reviewer-dropping\.txt/);
 	});
 
 	it("a type-breaking pre-flight author revision fails the deterministic backstop and never opens the PR", async () => {
@@ -5293,8 +5656,9 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		const result = await runPipeline(shipFrom(worktree), parkSignal, baseFlags, {
 			runStep,
 			...defaultPrPreflightStubs(),
-			cleanupAuthoringReviewSeatsForSha: (_main, sha) => {
+			cleanupAuthoringReviewSeatsForSha: async (_main, sha) => {
 				cleaned.push(sha);
+				return { status: "healthy", repaired: [] };
 			},
 			runPrReviewGate: async () => {
 				throw new Error("gate exploded");

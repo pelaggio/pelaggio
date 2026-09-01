@@ -8,8 +8,9 @@ import { classifyFailure } from "../cycle-outcome.js";
 import { __setProviderAvailableForTests, type PipelineDeps, type RunStepFn, type runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult } from "../pr-review-gate.js";
 import type { RoadmapSource } from "../roadmap/index.js";
+import { createProviderObservationHandler } from "../step-runner.js";
 import { LiveStatus, StatusBar } from "../tui.js";
-import type { BlockedKind, CycleResult, CycleResultBase, FailureClass, Flags, ParkClass, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
+import type { BlockedKind, CycleResult, CycleResultBase, FailureClass, Flags, ParkClass, ParkSignal, PipelineOpts, ProviderObservation, Step, StepResult } from "../types.js";
 
 // Shared hermetic setup for test files that drive the real runPipeline (pipeline.test.ts,
 // ship.test.ts). These flow tests exercise pick/plan/implement/ship control flow, not the
@@ -54,6 +55,8 @@ export interface StepOutcome extends Partial<StepResult> {
 	 * tests give a concurrent mid-step confinement prober (#388) a chance to tick — and,
 	 * unlike `awaitAbort`, still resolve naturally when nothing trips it. */
 	delayMs?: number;
+	/** If set, emitted through the injected callback or the mock's dispatcher-funnel emulation. */
+	observation?: ProviderObservation;
 }
 
 /** Per-step behavior. Array = sequential attempts; single = every call. */
@@ -98,6 +101,23 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 		}
 		outcome.sideEffect?.(opts.cwd);
 		if (outcome.park) Object.assign(parkSignal, outcome.park);
+		if (outcome.observation) {
+			const provider = opts.executionOverride?.provider ?? outcome.observation.provider;
+			const onProviderObservation =
+				opts.onProviderObservation ??
+				(opts.eventWriter
+					? createProviderObservationHandler({
+							writer: opts.eventWriter,
+							provider,
+							step: name,
+							model: opts.executionOverride?.model ?? opts.executionOverride?.codexModel ?? "mock",
+							...(opts.itemId !== undefined ? { itemId: opts.itemId } : {}),
+							...(opts.providerObservationAttempt !== undefined ? { attempt: opts.providerObservationAttempt } : {}),
+							...(opts.providerObservationLog ? { log: opts.providerObservationLog } : {}),
+						})
+					: undefined);
+			onProviderObservation?.({ ...outcome.observation, provider });
+		}
 		const result: StepResult = {
 			ok: outcome.ok ?? true,
 			subtype: outcome.subtype ?? "success",
@@ -229,7 +249,15 @@ export const STUB_ORIGIN_MAIN_OID = "f".repeat(40);
  *  pre-flight diff/seat checkouts) run `git worktree add` against the HOST repo. */
 export function defaultPrPreflightStubs(): Pick<
 	PipelineDeps,
-	"preparePrShipFreshness" | "runPrReviewGate" | "runTypecheckRatchet" | "verifyPrShipFreshness" | "readFreshnessGateRecord" | "writeFreshnessGateRecord" | "prepareAuthoringReviewSeat" | "cleanupAuthoringReviewSeatsForSha"
+	| "preparePrShipFreshness"
+	| "runPrReviewGate"
+	| "runTypecheckRatchet"
+	| "verifyPrShipFreshness"
+	| "readFreshnessGateRecord"
+	| "writeFreshnessGateRecord"
+	| "prepareAuthoringReviewSeat"
+	| "cleanupAuthoringReviewSeatsForSha"
+	| "verifyOrRepairAuthoringReviewHostDependencies"
 > {
 	return {
 		preparePrShipFreshness: () => ({ kind: "up-to-date", originMainOid: STUB_ORIGIN_MAIN_OID }),
@@ -237,7 +265,8 @@ export function defaultPrPreflightStubs(): Pick<
 		readFreshnessGateRecord: () => null,
 		writeFreshnessGateRecord: () => "",
 		prepareAuthoringReviewSeat: (_main, key) => join(tmpdir(), `pelaggio-test-seat-${key.seatId}-p${key.pass}`),
-		cleanupAuthoringReviewSeatsForSha: () => {},
+		cleanupAuthoringReviewSeatsForSha: async () => ({ status: "healthy", repaired: [] }),
+		verifyOrRepairAuthoringReviewHostDependencies: async () => ({ status: "healthy", repaired: [] }),
 		runPrReviewGate: async (): Promise<PrReviewGateResult> => ({
 			gate: "pass",
 			body: "preflight pass",
