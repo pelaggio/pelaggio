@@ -23,7 +23,7 @@ import type { preparePrShipFreshness as preparePrShipFreshnessDefault, verifyPrS
 import type { runShipBookkeeping as runShipBookkeepingDefault } from "../ship/index.js";
 import type { PrShipGateBinding } from "../ship/pr-effects.js";
 import type { RunStepOpts } from "../step-runner.js";
-import type { CycleResult, ParkSignal, ProviderName, Step, StepResult } from "../types.js";
+import type { BlockedKind, CycleResult, CycleResultBase, FailureClass, ParkSignal, ProviderName, Step, StepResult } from "../types.js";
 /**
  * Outcome of a step run through `runStepWithRetry`: either a success carrying the `StepResult`
  * for step-specific follow-up (verdict parse, etc.), or a terminal cycle result the caller should
@@ -87,6 +87,10 @@ export interface CycleHelpers {
 	readonly cost: () => number;
 	readonly addCost: (delta: number) => void;
 	readonly finish: (result: CycleResult) => CycleResult;
+	readonly finishFailed: (error: string, failureClass: FailureClass, extra?: Partial<CycleResultBase>) => CycleResult;
+	readonly finishBlocked: (blockedKind: BlockedKind, reason: string, extra?: Partial<CycleResultBase> & { blockedStep?: Step }) => CycleResult;
+	readonly finishCompleted: (extra?: Partial<CycleResultBase>) => CycleResult;
+	readonly finishParked: (extra?: Partial<CycleResultBase>) => CycleResult;
 	readonly parkExit: (reason?: string) => CycleResult | null;
 	readonly runStepWithRetry: (cfg: RunStepWithRetryConfig) => Promise<StepAttempt>;
 	readonly step: (name: Step, prompt: string, cwd: string, options?: StepRunOptions) => Promise<StepResult>;
@@ -106,7 +110,7 @@ export interface CycleHelpers {
 	readonly createSessionController: typeof createSessionControllerDefault;
 	readonly isQuickScope: FlowPolicy["isQuickScope"];
 	/** Ship-tail capabilities (all injectable through PipelineDeps for tests). */
-	readonly quarantineExit: (error: string, extra?: Pick<CycleResult, "verdict">) => CycleResult;
+	readonly quarantineExit: (opts: { blockedKind: BlockedKind; reason: string; step: Step } & Pick<CycleResult, "verdict">) => CycleResult;
 	readonly markShipwrecked: () => void;
 	readonly now: () => number;
 	readonly runShipBookkeeping: typeof runShipBookkeepingDefault;

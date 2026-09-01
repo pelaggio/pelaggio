@@ -69,7 +69,11 @@ The review-time sibling of plan-polish lives in `/shakedown`'s code-review mode:
 
 ## Phantom-Ship Guard
 
-`pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship`. A cycle whose branch only touches `docs/plans/` (the `/plan` artifact with no implementation) is flagged `completed: false` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline use.
+`pipeline.ts` calls `hasDeliverableCommits()` before invoking `ship`. A cycle whose branch only touches `docs/plans/` (the `/plan` artifact with no implementation) is flagged `outcome: "failed", failureClass: "verification"` with a "nothing to ship" error, and ship is never invoked. Doc-only work outside `docs/plans/` (rubric, skill bodies, README, roadmap edits) is still deliverable. The identical guard inside `/ship`'s SKILL.md is defense in depth for inline use.
+
+## Cycle outcome classification (#672)
+
+`finish()` persists a closed `CycleOutcome` discriminant (`completed` / `parked` / `blocked` / `failed`) assigned at the emission boundary. Classification is harness-structured (`classifyFailure` on the raw step subtype, `parseBlockedSignal` on the trailing `BLOCKED:` marker, explicit guard classes at the `finish()` call site) — never inferred later by stats or regex over model prose. A blocked cycle is a distinct typed/recorded/statistical identity; operational routing is unchanged (quarantine-and-continue when the checkpoint succeeds; pick-step `BLOCKED:` still halt-campaigns; `pick:blocked` remains a failed pick / `selection`). `ParkClass` assignment, park precedence, and the known post-log `sdk-outage` relabel gap (#458) are unchanged.
 
 ## PR-only pre-ship tail (#424)
 
@@ -127,7 +131,7 @@ role-bearing reviewer and Judge configuration.
 
 Issue `#80` relies on conservative rate-limit waits when Codex does not report an exact reset time.
 
-**Sustained SDK outage (#128)**: a single `"transient sdk error"` cycle (retries exhausted, see #127) stays recoverable so the worker keeps pulling — a blip shouldn't stall a run. `runOrchestrator` tracks consecutive `"transient sdk error"` cycle outcomes (reset by any other outcome); at `CONSECUTIVE_TRANSIENT_ERROR_LIMIT` in a row it relabels the tripping cycle's error to `"parked"` (`limitType: "sdk-outage"`, `resetsAt: 0`) so it pages and flows through the same park-and-resume path as a rate-limit park. `resetsAt: 0` means it can't auto-resume by time — like a manual `SIGUSR2` pause, it hands back with a `--resume` hint instead of waiting.
+**Sustained SDK outage (#128)**: a single `"transient sdk error"` cycle (retries exhausted, see #127) stays recoverable so the worker keeps pulling — a blip shouldn't stall a run. `runOrchestrator` tracks consecutive failed/provider `"transient sdk error"` outcomes (reset by any other outcome); at `CONSECUTIVE_TRANSIENT_ERROR_LIMIT` in a row it replaces the tripping in-memory result with a parked branch (`parkClass: "sdk-outage"`, `limitType: "sdk-outage"`, `resetsAt: 0`) so it pages and flows through the same park-and-resume path as a rate-limit park. The cycle JSONL row was already appended as failed/provider and is not reconciled (#458). `resetsAt: 0` means it can't auto-resume by time — like a manual `SIGUSR2` pause, it hands back with a `--resume` hint instead of waiting.
 
 ## Continuous mode (#82)
 

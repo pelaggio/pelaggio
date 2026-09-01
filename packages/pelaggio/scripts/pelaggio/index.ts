@@ -6,6 +6,7 @@
  */
 
 export { loadConfig, logPathFor } from "./config.js";
+export { decodeCycleOutcome } from "./cycle-outcome.js";
 export type { AppendDecisionsInput, DecisionAppendInput, DecisionWriteResult, MigrateDecisionsResult, RebuildIndexResult } from "./decisions.js";
 export {
 	appendDecisions,
@@ -42,8 +43,12 @@ export { getRoadmapSource } from "./roadmap/index.js";
 export type { Stats } from "./stats.js";
 export { computeStats, runStatsCommand } from "./stats.js";
 export type {
+	BlockedKind,
+	ClassificationProvenance,
 	CoreFlowEvent,
 	CycleCompletedEvent,
+	CycleLogEntry,
+	CycleOutcome,
 	CycleResult,
 	Decision,
 	EmittedDecision,
@@ -51,14 +56,18 @@ export type {
 	EventLogDiagnosticKind,
 	EventLogDiagnostics,
 	EventWriter,
+	FailureClass,
 	Flags,
 	FlowEvent,
 	FlowEventEnvelope,
 	FlowEventInput,
 	FlowEventProjection,
 	LegacyCycleCompletedEvent,
+	ParkClass,
 	PelaggioEventType,
 	PipelineOpts,
+	PreUnionCycleLogEntry,
+	RawCycleLogRecord,
 	ReadEventLogResult,
 	RunFinishedEvent,
 	RunHeartbeatEvent,

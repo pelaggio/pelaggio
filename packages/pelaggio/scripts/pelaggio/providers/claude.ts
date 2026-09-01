@@ -8,16 +8,23 @@ import { CONFIG, REPO, resolveStepSettings } from "../config.js";
 import type { MainCheckoutDeltaObserver } from "../confinement/roots.js";
 import { sessionsDir } from "../confinement/sessions.js";
 import { emitDecisionsFromText } from "../decisions.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedSignal, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
 import { bashDeniedRegisterPattern, bashDeniedRegisters, registerRelativePath, writeDeniedRegisterFor } from "../registers.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
-import type { ProviderCapabilities, TokenUsage } from "../types.js";
+import type { BlockedKind, ProviderCapabilities, StepResult, TokenUsage } from "../types.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
 import type { RunStepFn, StepProvider } from "./types.js";
 
 export type { StepTextProjection } from "../step-runner-shared.js";
 export { composeSystemAppend, createStepTextProjection, isWorktreePath } from "../step-runner-shared.js";
+
+export function classifyClaudeTerminalText(input: Pick<StepResult, "ok" | "subtype" | "text">): Pick<StepResult, "ok" | "subtype" | "text" | "blockedKind" | "stalledAsk"> {
+	if (!input.ok) return input;
+	const blocked = parseBlockedSignal(input.text);
+	if (blocked) return { ok: false, subtype: "blocked", text: blocked.reason, blockedKind: blocked.kind };
+	return looksLikeStalledAsk(input.text) ? { ...input, stalledAsk: true } : input;
+}
 
 /** Pure walker over Claude assistant content blocks. Tests feed synthetic blocks; `claudeRunStep` calls this on each message. */
 export function projectClaudeAssistantBlocks(blocks: ReadonlyArray<{ type: string; text?: string; input?: unknown }>, projection: StepTextProjection): void {
@@ -583,21 +590,17 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	}
 
 	// Structured stall contract (AUTONOMY_APPEND): a step that self-reports it can't
-	// finish ends with a trailing `BLOCKED: <reason>` line. The SDK reports this as
+	// finish ends with a trailing `BLOCKED: <kind> | <reason>` line. The SDK reports this as
 	// subtype:"success", so reclassify out-of-band — but only when the step otherwise
 	// succeeded (edit-loop / refusal / errors already own `ok` + `subtype`).
-	if (ok) {
-		const blockedReason = parseBlockedReason(text);
-		if (blockedReason) {
-			ok = false;
-			subtype = "blocked";
-			text = blockedReason;
-			emit({ type: "blocked", reason: blockedReason });
-		} else if (looksLikeStalledAsk(text)) {
-			stalledAsk = true;
-			emit({ type: "stalled_ask", tail: text.replace(/\s+$/, "").slice(-160) });
-		}
-	}
+	const terminal = classifyClaudeTerminalText({ ok, subtype, text });
+	ok = terminal.ok;
+	subtype = terminal.subtype;
+	text = terminal.text;
+	const blockedKind: BlockedKind | undefined = terminal.blockedKind;
+	stalledAsk = terminal.stalledAsk ?? false;
+	if (blockedKind) emit({ type: "blocked", reason: text });
+	else if (stalledAsk) emit({ type: "stalled_ask", tail: text.replace(/\s+$/, "").slice(-160) });
 
 	// Resolve the park reset by precedence: event reset > reset parsed from text > conservative
 	// estimate for a rate-limit park with no reset anywhere (#68). See resolveParkReset.
@@ -631,6 +634,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		...(outputTail ? { outputTail } : {}),
 		...(stalledAsk ? { stalledAsk: true } : {}),
 		...(decisions.length ? { decisions } : {}),
+		...(blockedKind ? { blockedKind } : {}),
 	};
 };
 

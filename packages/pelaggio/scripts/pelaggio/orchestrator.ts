@@ -9,8 +9,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { CONFIG, DEFAULT_SHIP_TARGET, LOG_PATH, REPO, REVIEW_CONFIG, REVISE_LOCAL, type ReviewRunner, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, SHIP_TARGET } from "./config.js";
 import { continuousCycleCap, DayBudgetTracker, dayKey, freeQueueProbe, nextLocalMidnightMs, resolveContinuousConfig, sumDaySpendFromLog } from "./continuous.js";
 import { RECOVERABLE_ERRORS } from "./cycle-errors.js";
-import { classifyCycleDisposition } from "./cycle-outcome.js";
-import { resultDetail, resultIcon, resultStatus } from "./cycle-result.js";
+import { classifyCycleDisposition, cycleResultBase } from "./cycle-outcome.js";
+import { cycleDiagnostic, resultDetail, resultIcon, resultStatus } from "./cycle-result.js";
 import { createMutex, detectResumeStep } from "./cycle-support.js";
 import { tryWithFileLock, withFileLock } from "./file-lock.js";
 import { createEventWriter } from "./flow-events.js";
@@ -289,7 +289,7 @@ function hasUnresolvedPark(results: CycleResult[]): boolean {
 	// A later attempt for the same item resolves its earlier parked result.
 	const latestByItem = new Map<string | null, CycleResult>();
 	for (const result of results) latestByItem.set(result.itemId, result);
-	return [...latestByItem.values()].some((result) => result.error === "parked");
+	return [...latestByItem.values()].some((result) => result.outcome === "parked");
 }
 
 export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {}, statusBar: StatusBar = new StatusBar(), signal?: AbortSignal): Promise<{ exitCode: number; results: CycleResult[] }> {
@@ -756,7 +756,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// #369: each cycle captures its own evaluator inventory + starttime inside
 				// runPipeline when sessionEvaluator is omitted — so later cycles still see
 				// peers that registered after process start. (Orchestrator does not pre-capture.)
-				const result = await _runPipeline(
+				let result = await _runPipeline(
 					{
 						itemId: items[cycle - 1],
 						cycle,
@@ -785,7 +785,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				// relabel this cycle `parked` so it pages (notify's classifier pages `parked`
 				// but not `transient sdk error`) and flows into the same park-and-resume path
 				// a rate-limit park uses, instead of quietly burning the rest of --cycles.
-				if (result.error === "transient sdk error") {
+				if (result.outcome === "failed" && result.failureClass === "provider" && result.error === "transient sdk error") {
 					consecutiveTransientErrors++;
 					consecutiveQuarantines = 0;
 					if (consecutiveTransientErrors >= CONSECUTIVE_TRANSIENT_ERROR_LIMIT && !parkSignal.parked) {
@@ -800,7 +800,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						parkSignal.resetsAt = 0;
 						parkSignal.limitType = "sdk-outage";
 						parkSignal.triggerWorker = result.itemId ?? "";
-						result.error = "parked";
+						result = { ...cycleResultBase(result), outcome: "parked", parkClass: "sdk-outage", parkReason: "transient sdk error" };
 					}
 				} else if (result.disposition === "quarantine-and-continue") {
 					consecutiveQuarantines++;
@@ -857,7 +857,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				}
 				// Continuous drain: a race can leave pick:queue-empty after the free probe
 				// saw work (another process claimed it). Stop rather than spinning paid picks.
-				if (continuous?.preset === "drain" && result.error === "pick:queue-empty") {
+				if (continuous?.preset === "drain" && result.outcome === "failed" && result.error === "pick:queue-empty") {
 					console.log(`${A.green("✓")} queue empty — drain complete`);
 					drainComplete = true;
 					return;
@@ -929,7 +929,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				const leased = await acquireRevisionResumeLease(id);
 				if (!leased.ok) {
 					console.log(`${A.red("✗")} resume ${id} — ${leased.refusal}`);
-					return { itemId: id, completed: false, cost: 0, error: "revise lease unavailable", detail: leased.refusal, disposition: "continue" };
+					return { itemId: id, cost: 0, outcome: "failed", failureClass: "selection", error: "revise lease unavailable", detail: leased.refusal, disposition: "continue" };
 				}
 				releaseLease = leased.release;
 			}
@@ -1058,8 +1058,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					quick: false,
 					steps: [],
 					total_cost: Number(cost.toFixed(4)),
-					completed: true,
-					error: null,
+					outcome: "completed",
 					verdict: null,
 					budgetCharge: true,
 				});
@@ -1455,7 +1454,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				statusBar.teardown();
 			}
 			const detail = resultDetail(result);
-			console.log(`\n${result.completed ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}$${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
+			console.log(`\n${result.outcome === "completed" ? A.green("✓") : A.red("✗")} ${id} — ${result.costEstimated ? "~" : ""}${result.cost.toFixed(2)}${detail ? `  ${A.dim(detail)}` : ""}`);
 
 			// Operator-revision park parity: stay inside this `--resume` branch. Never fall
 			// out into pick, the revise sweep, or campaign-start drain. Ordinary `--resume`
@@ -1511,7 +1510,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 				}
 			}
 			const last = results[results.length - 1];
-			return { exitCode: parkSignal.parked || hasUnresolvedPark(results) ? PARKED_EXIT_CODE : last?.completed ? 0 : 1, results };
+			return { exitCode: parkSignal.parked || hasUnresolvedPark(results) ? PARKED_EXIT_CODE : last?.outcome === "completed" ? 0 : 1, results };
 		}
 
 		// Campaign-start drain: cold-start backlog + statusless PRs from prior runs (all modes incl.
@@ -1671,7 +1670,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// (shared with operator-revision and the review-retry loop). The park signal is
 			// reset by `awaitParkReset` on a successful wait.
 
-			let pending = results.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+			let pending = results.filter((r) => r.outcome === "parked" && r.itemId).map((r) => r.itemId!);
 
 			if (pending.length === 0) {
 				// Reached when a rate-limit park has no parked *pipeline* item to resume — e.g. the local
@@ -1734,7 +1733,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 					if (remaining.length) console.log(`${A.yellow("⏸")} halt-campaign during auto-resume — leaving ${remaining.length} item(s) parked`);
 					break;
 				}
-				pending = batch.filter((r) => r.error === "parked" && r.itemId).map((r) => r.itemId!);
+				pending = batch.filter((r) => r.outcome === "parked" && r.itemId).map((r) => r.itemId!);
 				// #387: an auto-resumed cycle can ship a PR; drain its enqueued review
 				// request like the worker-pool and explicit --resume paths do, or the
 				// process can exit 0 with the required review status absent.
@@ -1753,17 +1752,17 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		if (v) statusBar.teardown();
 		if (statusInterval) clearInterval(statusInterval);
 		console.log("");
-		console.log(`${A.bold("summary")}  $${totalSpent.toFixed(2)} across ${results.length} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}`);
+		console.log(`${A.bold("summary")}  ${totalSpent.toFixed(2)} across ${results.length} cycle(s)${isParallel ? `  ${A.dim("×")}${parallel} parallel` : ""}`);
 		for (const r of results) {
 			let label: string;
-			if (r.completed && r.awaitingMerge) {
+			if (r.outcome === "completed" && r.awaitingMerge) {
 				label = `${A.green("↗ PR opened")}${r.prUrl ? ` ${A.dim(r.prUrl)}` : ""}`;
-			} else if (r.completed && r.bookkeepingWarnings?.length) {
+			} else if (r.outcome === "completed" && r.bookkeepingWarnings?.length) {
 				label = A.yellow(resultDetail(r));
-			} else if (r.completed) {
+			} else if (r.outcome === "completed") {
 				label = A.green("shipped");
 			} else {
-				label = A.dim(r.error ?? "failed");
+				label = A.dim(cycleDiagnostic(r) || "failed");
 			}
 			console.log(`  ${resultIcon(r)} ${r.itemId ?? "?"}: ${label}`);
 		}
@@ -1779,7 +1778,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			return { exitCode: campaignHalted ? 1 : PARKED_EXIT_CODE, results };
 		}
 		if (!campaignHalted && (parkSignal.parked || hasUnresolvedPark(results))) return { exitCode: PARKED_EXIT_CODE, results };
-		return { exitCode: results.every((r) => r.completed) ? 0 : 1, results };
+		return { exitCode: results.every((r) => r.outcome === "completed") ? 0 : 1, results };
 	} finally {
 		process.off("SIGUSR2", onPause);
 	}

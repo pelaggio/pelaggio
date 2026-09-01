@@ -1,6 +1,50 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { canRetryWithinBudget, classifyCycleDisposition, classifyOutcome, parseVerdict } from "../cycle-outcome.js";
+import { BLOCKED_KINDS, canRetryWithinBudget, classifyCycleDisposition, classifyFailure, classifyOutcome, decodeCycleOutcome, FAILURE_CLASSES, parseVerdict } from "../cycle-outcome.js";
+
+describe("classifyFailure", () => {
+	it("maps raw provider subtypes before harness error strings", () => {
+		assert.equal(classifyFailure({ error: "implement failed", subtype: "error_sdk" }), "provider");
+		assert.equal(classifyFailure({ error: "x", subtype: "error_budget" }), "budget");
+		assert.equal(classifyFailure({ error: "x", subtype: "error_max_turns" }), "turn-limit");
+		assert.equal(classifyFailure({ error: "x", subtype: "error_effects_manifest" }), "effects");
+		assert.equal(classifyFailure({ error: "x", subtype: "error_abort" }), "aborted");
+	});
+
+	it("covers the explicit harness assignment table", () => {
+		assert.equal(classifyFailure({ error: "pick:blocked" }), "selection");
+		assert.equal(classifyFailure({ error: "transient sdk error" }), "provider");
+		assert.equal(classifyFailure({ error: "plan needs rethink" }), "verification");
+		assert.equal(classifyFailure({ error: "ship failed (recovery also failed)" }), "delivery");
+		assert.equal(classifyFailure({ error: "implement failed" }), "unclassified");
+	});
+});
+
+describe("decodeCycleOutcome", () => {
+	it("decodes current outcomes and records class provenance", () => {
+		assert.deepEqual(decodeCycleOutcome({ outcome: "failed", failureClass: "provider", error: "transient sdk error", completed: true }), {
+			outcome: "failed",
+			failureClass: "provider",
+			error: "transient sdk error",
+			failureClassProvenance: "recorded",
+		});
+		assert.deepEqual(decodeCycleOutcome({ outcome: "blocked", blockedKind: "future-kind", reason: "x" }), { outcome: "blocked", blockedKind: "unknown", reason: "x", blockedKindProvenance: "unknown" });
+		assert.deepEqual(decodeCycleOutcome({ outcome: "parked", parkClass: "future-class", parkReason: "x" }), { outcome: "parked", parkClass: "unknown", parkReason: "x", parkClassProvenance: "unknown" });
+	});
+
+	it("decodes pre-union flags with completed/parked/blocked/failed precedence", () => {
+		assert.deepEqual(decodeCycleOutcome({ completed: true, error: "ignored", parked: true }), { outcome: "completed" });
+		assert.equal(decodeCycleOutcome({ completed: false, error: "parked" })?.outcome, "parked");
+		assert.deepEqual(decodeCycleOutcome({ completed: false, error: "parked", parkClass: "constructor" }), { outcome: "parked", parkClass: "unknown", parkReason: null, parkClassProvenance: "unknown" });
+		assert.equal(decodeCycleOutcome({ completed: false, error: "implement blocked: missing API key" })?.outcome, "blocked");
+		assert.equal(decodeCycleOutcome({ completed: false, error: "pick:blocked" })?.outcome, "failed");
+	});
+
+	it("keeps the class allowlists exhaustive", () => {
+		assert.deepEqual([...FAILURE_CLASSES].sort(), ["aborted", "budget", "confinement", "delivery", "effects", "provider", "refusal", "selection", "turn-limit", "unclassified", "verification"].sort());
+		assert.deepEqual([...BLOCKED_KINDS].sort(), ["capability", "charter-defect", "environment", "prerequisite", "spec-defect", "unclassified"].sort());
+	});
+});
 
 describe("canRetryWithinBudget", () => {
 	it("allows the retry when remaining budget ≥ step budget", () => {
@@ -73,20 +117,20 @@ describe("classifyCycleDisposition", () => {
 	const recoverable = new Set(["transient sdk error"]);
 
 	it("continues completed and recoverable cycles", () => {
-		assert.equal(classifyCycleDisposition({ completed: true }, recoverable), "continue");
-		assert.equal(classifyCycleDisposition({ completed: false, error: "transient sdk error" }, recoverable), "continue");
+		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "completed" }, recoverable), "continue");
+		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "failed", failureClass: "provider", error: "transient sdk error" }, recoverable), "continue");
 	});
 
 	it("lets aborted override a stale disposition", () => {
-		assert.equal(classifyCycleDisposition({ completed: false, error: "aborted", disposition: "quarantine-and-continue" }, recoverable), "halt-campaign");
+		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "failed", failureClass: "aborted", error: "aborted", disposition: "quarantine-and-continue" }, recoverable), "halt-campaign");
 	});
 
 	it("passes through explicit dispositions", () => {
-		assert.equal(classifyCycleDisposition({ completed: false, disposition: "quarantine-and-continue" }, recoverable), "quarantine-and-continue");
-		assert.equal(classifyCycleDisposition({ completed: false, disposition: "halt-campaign" }, recoverable), "halt-campaign");
+		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "blocked", blockedKind: "unclassified", reason: "x", disposition: "quarantine-and-continue" }, recoverable), "quarantine-and-continue");
+		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "blocked", blockedKind: "unclassified", reason: "x", disposition: "halt-campaign" }, recoverable), "halt-campaign");
 	});
 
 	it("halts unknown non-recoverable failures", () => {
-		assert.equal(classifyCycleDisposition({ completed: false, error: "unknown failure" }, recoverable), "halt-campaign");
+		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "failed", failureClass: "unclassified", error: "unknown failure" }, recoverable), "halt-campaign");
 	});
 });

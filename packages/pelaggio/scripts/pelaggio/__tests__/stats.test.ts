@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { reduce, renderDashboard, renderJson } from "../stats.js";
-import type { CycleLogEntry, StepLog } from "../types.js";
+import type { StepLog } from "../types.js";
 
 function mkStep(partial: Partial<StepLog> & { name: string }): StepLog {
 	return {
@@ -13,7 +13,7 @@ function mkStep(partial: Partial<StepLog> & { name: string }): StepLog {
 	};
 }
 
-function mkEntry(partial: Partial<CycleLogEntry> & { cycle: number }): CycleLogEntry {
+function mkEntry(partial: Record<string, unknown> & { cycle: number }): Record<string, unknown> {
 	return {
 		ts: "2026-04-17T12:00:00.000Z",
 		item: null,
@@ -34,6 +34,7 @@ describe("reduce — empty log", () => {
 		assert.equal(s.completedCycles, 0);
 		assert.equal(s.failedCycles, 0);
 		assert.equal(s.parkedCycles, 0);
+		assert.equal(s.blockedCycles, 0);
 		assert.equal(s.shipwreckedCycles, 0);
 		assert.equal(s.totalCostUsd, 0);
 		assert.equal(s.cacheHitRatio, 0);
@@ -175,7 +176,7 @@ describe("reduce — parked cycle", () => {
 		assert.equal(s.failedCycles, 1);
 		assert.equal(s.completedCycles, 1);
 		// The three buckets partition the cycle set exactly once.
-		assert.equal(s.completedCycles + s.failedCycles + s.parkedCycles, s.totalCycles);
+		assert.equal(s.completedCycles + s.failedCycles + s.parkedCycles + s.blockedCycles, s.totalCycles);
 	});
 
 	it("groups parks by class and files unclassified legacy records under `unrecorded`", () => {
@@ -189,64 +190,76 @@ describe("reduce — parked cycle", () => {
 });
 
 describe("reduce — failure attribution", () => {
-	it("attributes a failed cycle to its failing step", () => {
+	it("groups pre-union failures under unrecorded rather than prefix-sliced step names", () => {
 		const entry = mkEntry({
 			cycle: 1,
 			completed: false,
 			steps: [mkStep({ name: "plan", ok: true }), mkStep({ name: "implement", ok: false })],
 		});
 		const s = reduce([entry]);
-		assert.deepEqual(s.failuresByCause, { implement: 1 });
+		assert.deepEqual(s.failuresByCause, { unrecorded: 1 });
 	});
 
-	it("files a failed cycle with no failing step and no error under `unattributed`", () => {
+	it("files a failed cycle with no stored class under `unrecorded`", () => {
 		const s = reduce([mkEntry({ cycle: 1, completed: false, steps: [] })]);
-		assert.deepEqual(s.failuresByCause, { unattributed: 1 });
+		assert.deepEqual(s.failuresByCause, { unrecorded: 1 });
 	});
 
-	it("attributes guard rejections to the stable error prefix, not one bucket", () => {
+	it("does not infer prefix taxonomies from error strings on pre-union rows", () => {
 		const entries = [
 			mkEntry({ cycle: 1, completed: false, error: "pick:worktree-exists" }),
 			mkEntry({ cycle: 2, completed: false, error: "pick:diverted" }),
 			mkEntry({ cycle: 3, completed: false, error: "plan needs rethink" }),
-			// Variable trailing detail must not fragment the grouping.
 			mkEntry({ cycle: 4, completed: false, error: "nothing to ship: branch only touches docs/plans/" }),
 			mkEntry({ cycle: 5, completed: false, error: "nothing to ship: some other detail entirely" }),
 		];
 		const s = reduce(entries);
-		assert.deepEqual(s.failuresByCause, { pick: 2, "plan needs rethink": 1, "nothing to ship": 2 });
+		assert.deepEqual(s.failuresByCause, { unrecorded: 5 });
 	});
 
-	it("prefers the failing step over the cycle error when both are present", () => {
-		const entry = mkEntry({ cycle: 1, completed: false, error: "implement failed", steps: [mkStep({ name: "implement", ok: false })] });
-		assert.deepEqual(reduce([entry]).failuresByCause, { implement: 1 });
+	it("groups current records solely by stored failureClass", () => {
+		const entry = mkEntry({ cycle: 1, outcome: "failed", failureClass: "delivery", error: "ship failed", steps: [mkStep({ name: "implement", ok: false })] });
+		assert.deepEqual(reduce([entry]).failuresByCause, { delivery: 1 });
 	});
 
-	it("ignores a step that failed once but recovered on retry", () => {
-		// The pipeline logs every attempt. implement failed then succeeded, so the cycle died on
-		// the later guard — attributing this to implement would blame a step that recovered.
-		const entry = mkEntry({
-			cycle: 1,
-			completed: false,
-			error: "nothing to ship: branch only touches docs/plans/",
-			steps: [mkStep({ name: "implement", attempt: 1, ok: false }), mkStep({ name: "implement", attempt: 2, ok: true })],
-		});
-		assert.deepEqual(reduce([entry]).failuresByCause, { "nothing to ship": 1 });
+	it("renders unknown stored members honestly", () => {
+		const s = reduce([mkEntry({ cycle: 1, outcome: "failed", failureClass: "future-class", error: "boom" })]);
+		assert.deepEqual(s.failuresByCause, { unknown: 1 });
+	});
+});
+
+describe("reduce — blocked partition", () => {
+	it("counts blocked-shaped pre-union rows as blocked/unrecorded, not failed", () => {
+		const blocked = mkEntry({ cycle: 1, item: "A", completed: false, error: "implement blocked: missing API key" });
+		const failed = mkEntry({ cycle: 2, item: "B", completed: false, error: "pick:blocked" });
+		const s = reduce([blocked, failed]);
+		assert.equal(s.blockedCycles, 1);
+		assert.equal(s.failedCycles, 1);
+		assert.deepEqual(s.blocksByKind, { unrecorded: 1 });
+		assert.deepEqual(s.failuresByCause, { unrecorded: 1 });
+		assert.deepEqual(
+			s.recentFailures.map((f) => f.item),
+			["B"],
+			"blocked cycles stay out of recentFailures",
+		);
+		assert.equal(s.completedCycles + s.parkedCycles + s.blockedCycles + s.failedCycles, s.totalCycles);
 	});
 
-	it("attributes to the terminal failure, not the first, when several steps failed", () => {
-		const entry = mkEntry({
-			cycle: 1,
-			completed: false,
-			steps: [mkStep({ name: "implement", attempt: 1, ok: false }), mkStep({ name: "implement", attempt: 2, ok: true }), mkStep({ name: "ship", ok: false })],
-		});
-		assert.deepEqual(reduce([entry]).failuresByCause, { ship: 1 });
+	it("groups current blocked records by stored kind", () => {
+		const s = reduce([
+			mkEntry({ cycle: 1, outcome: "blocked", blockedKind: "capability", reason: "no key" }),
+			mkEntry({ cycle: 2, outcome: "blocked", blockedKind: "capability", reason: "no token" }),
+			mkEntry({ cycle: 3, outcome: "blocked", blockedKind: "spec-defect", reason: "gap" }),
+		]);
+		assert.equal(s.blockedCycles, 3);
+		assert.deepEqual(s.blocksByKind, { capability: 2, "spec-defect": 1 });
+		assert.equal(s.failedCycles, 0);
 	});
 });
 
 describe("reduce — recentFailures excludes parked", () => {
 	it("omits parked cycles so the list agrees with the disjoint outcome counts", () => {
-		const entries: CycleLogEntry[] = [
+		const entries = [
 			mkEntry({ cycle: 1, item: "BAD", completed: false, error: "implement failed", steps: [mkStep({ name: "implement", ok: false })] }),
 			mkEntry({ cycle: 2, item: "PARKED", completed: false, parked: true, error: "parked", parkClass: "review-blocked" }),
 		];
@@ -363,7 +376,7 @@ describe("reduce — legacy entry without tokens", () => {
 
 describe("reduce — recentFailures basics", () => {
 	it("returns 5 newest-first from 7 failed entries with distinct timestamps", () => {
-		const entries: CycleLogEntry[] = [];
+		const entries = [];
 		for (let i = 1; i <= 7; i++) {
 			entries.push(
 				mkEntry({
@@ -410,7 +423,7 @@ describe("reduce — recentFailures outputTail sourcing", () => {
 
 describe("reduce — recentFailures excludes completed", () => {
 	it("filters only completed=false entries", () => {
-		const entries: CycleLogEntry[] = [
+		const entries = [
 			mkEntry({ cycle: 1, item: "OK1", completed: true }),
 			mkEntry({ cycle: 2, item: "BAD1", completed: false, error: "x" }),
 			mkEntry({ cycle: 3, item: "OK2", completed: true }),
@@ -442,10 +455,7 @@ describe("reduce — recentFailures legacy entries", () => {
 
 describe("renderJson round-trip", () => {
 	it("JSON.parse(renderJson(stats)) equals the stats object", () => {
-		const entries: CycleLogEntry[] = [
-			mkEntry({ cycle: 1, item: "A", completed: true, total_cost: 0.5 }),
-			mkEntry({ cycle: 2, item: "B", completed: false, error: "failed", steps: [mkStep({ name: "implement", ok: false, outputTail: "boom" })] }),
-		];
+		const entries = [mkEntry({ cycle: 1, item: "A", completed: true, total_cost: 0.5 }), mkEntry({ cycle: 2, item: "B", completed: false, error: "failed", steps: [mkStep({ name: "implement", ok: false, outputTail: "boom" })] })];
 		const stats = reduce(entries);
 		const parsed = JSON.parse(renderJson(stats));
 		assert.deepEqual(parsed, stats);
@@ -477,5 +487,25 @@ describe("reduce — mixed legacy and new entries", () => {
 		assert.equal(s.totalCostUsd, 1.5);
 		assert.equal(s.totalTokens.input, 100);
 		assert.equal(s.totalTokens.output, 100);
+	});
+});
+
+describe("renderDashboard — four-way outcomes", () => {
+	it("shows blocked totals and the blocked-by-kind table with unrecorded/unknown notes", () => {
+		const s = reduce([
+			mkEntry({ cycle: 1, completed: true }),
+			mkEntry({ cycle: 2, completed: false, parked: true, error: "parked", parkClass: "rate-limit" }),
+			mkEntry({ cycle: 3, outcome: "blocked", blockedKind: "capability", reason: "no key" }),
+			mkEntry({ cycle: 4, outcome: "blocked", blockedKind: "not-a-kind", reason: "x" }),
+			mkEntry({ cycle: 5, completed: false, error: "boom" }),
+		]);
+		const dash = renderDashboard(s);
+		assert.match(dash, /blocked 2/);
+		assert.match(dash, /Blocked by kind/);
+		assert.match(dash, /capability/);
+		assert.match(dash, /unknown/);
+		assert.match(dash, /stored member not in runtime allowlist/);
+		assert.match(dash, /Failed by cause/);
+		assert.match(dash, /unrecorded/);
 	});
 });

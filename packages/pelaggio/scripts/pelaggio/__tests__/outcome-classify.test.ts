@@ -1,6 +1,26 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { classifyParkReason, classifyStepError, isRefusal, isTransientSdkError, looksLikeRefusal, looksLikeStalledAsk, parseBlockedReason, parseResetTime, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+import { classifyParkReason, classifyStepError, isRefusal, isTransientSdkError, looksLikeRefusal, looksLikeStalledAsk, parseBlockedReason, parseBlockedSignal, parseResetTime, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+
+describe("parseBlockedSignal", () => {
+	it("parses every named kind and preserves pipe-delimited reasons", () => {
+		for (const kind of ["spec-defect", "prerequisite", "capability", "environment", "charter-defect"] as const) {
+			assert.deepEqual(parseBlockedSignal(`BLOCKED: ${kind} | because | details`), { kind, reason: "because | details" });
+		}
+	});
+
+	it("keeps legacy and unknown kinds losslessly as unclassified", () => {
+		assert.deepEqual(parseBlockedSignal("BLOCKED: missing API key"), { kind: "unclassified", reason: "missing API key" });
+		assert.deepEqual(parseBlockedSignal("BLOCKED: mystery | still blocked"), { kind: "unclassified", reason: "mystery | still blocked" });
+		assert.deepEqual(parseBlockedSignal("BLOCKED: environment |"), { kind: "environment", reason: "(no reason given)" });
+	});
+
+	it("uses trailing-line, case-sensitive semantics", () => {
+		assert.deepEqual(parseBlockedSignal("done\n**BLOCKED:** prerequisite | missing X\n\n"), { kind: "prerequisite", reason: "missing X" });
+		assert.equal(parseBlockedSignal("BLOCKED: no\nImplemented successfully."), null);
+		assert.equal(parseBlockedSignal("the task is blocked: dependency"), null);
+	});
+});
 
 describe("parseWaitFlag", () => {
 	it("parses hours", () => {
