@@ -3943,6 +3943,69 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		}
 	});
 
+	it("a rejecting review loop parks with checkpoint and halt-campaign even when cleanup succeeds", async () => {
+		const saved = {
+			enabled: REVIEW_CONFIG.authoring.enabled,
+			reviewers: REVIEW_CONFIG.authoring.reviewers.map((seat) => ({ ...seat })),
+			judge: { ...REVIEW_CONFIG.authoring.judge },
+		};
+		REVIEW_CONFIG.authoring.enabled = "local";
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "claude", provider: "claude" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+
+		const worktree = makeTempGitRepo();
+		writeFileSync(join(worktree, "seed.txt"), "seed");
+		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
+		const parkSignal = makeParkSignal();
+		const findings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "fixable defect", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const judge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [{ candidateId: "C1", decision: "survives", rationale: "revise", ruling: "fixable-blocker" }] })}\nEND_AUTHORING_REVIEW_JUDGE`;
+		const { runStep: mockRunStep, calls } = createMockRunStep(
+			{
+				implement: { ok: true, writes: { "impl.txt": "x" } },
+				"pr-review": { ok: true, text: findings, fullText: findings },
+				"pr-verify": { ok: true, text: judge, fullText: judge },
+			},
+			parkSignal,
+		);
+		const runStep: RunStepFn = async (name, prompt, opts, emit) => {
+			if (name === "shakedown-code") {
+				// The author seat dirties the claim tree, then its await rejects: the
+				// escape must become a checkpointing park, never an unhandled rejection.
+				writeFileSync(join(worktree, "author-in-flight.txt"), "unsaved author work");
+				throw new Error("author seat rejected");
+			}
+			return mockRunStep(name, prompt, opts, emit);
+		};
+		const logs: Array<Record<string, unknown>> = [];
+
+		try {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+				runStep,
+				mainRepo: worktree,
+				listWorktrees: () => [worktree],
+				appendLog: (entry) => logs.push(entry),
+				runShipBookkeeping: noopBookkeeping,
+				prepareAuthoringReviewSeat: (_main, key) => join(tmpdir(), `rejecting-loop-seat-${key.seatId}-p${key.pass}`),
+				cleanupAuthoringReviewSeatsForSha: async () => ({ status: "healthy", repaired: [] }),
+			});
+
+			assert.equal(result.outcome, "parked");
+			assert.equal(result.disposition, "halt-campaign");
+			assert.ok(calls.some((call) => call.step === "pr-review"));
+			assert.match(String(logs[0]?.parkReason), /adversarial review loop failed: author seat rejected/);
+			// The park checkpointed the author's in-flight work instead of dropping it.
+			assert.equal(execSync("git status --porcelain", { cwd: worktree }).toString().trim(), "");
+			assert.match(execSync("git log --format=%s", { cwd: worktree }).toString(), /wip: pelaggio/);
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+		}
+	});
+
 	it("fails before seat setup when authoring seating is ineligible", async () => {
 		const saved = {
 			enabled: REVIEW_CONFIG.authoring.enabled,

@@ -254,7 +254,13 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 				}
 			}
 			if (cleanupParkReason) return { kind: "terminal", result: parkExit(cleanupParkReason, "halt-campaign")! };
-			if (loopFailure) throw loopFailure.error;
+			// A rejecting review loop (e.g. the author-seat await in review/loop.ts throwing)
+			// takes the same checkpoint-and-park exit a returned park does — never an escaping
+			// rejection that would bypass the disposition and checkpoint entirely.
+			if (loopFailure) {
+				const detail = loopFailure.error instanceof Error ? loopFailure.error.message : String(loopFailure.error);
+				return { kind: "terminal", result: parkExit(`adversarial review loop failed: ${detail}`, "halt-campaign")! };
+			}
 		}
 		if (!loop) {
 			// loop is only skipped for resolved-proceed; narrow before reading audit fields.
