@@ -1,7 +1,7 @@
 /**
  * #751 campaign composer / mutation oracle. Not a production workflow engine.
  *
- * usage: npx tsx ci/reconciled-change-751.ts --out <dir> [--cwd <repo>] [--publish-to <mainRepo>]
+ * usage: npx tsx ci/reconciled-change-751.ts --out <dir> [--cwd <repo>] [--matrix-json <path>] [--publish-to <mainRepo>]
  * `--out` is required so a confined worktree never writes MAIN_REPO by default.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -17,13 +17,43 @@ import { registerPath } from "../packages/pelaggio/scripts/pelaggio/registers.js
 const ISSUED = new Date().toISOString();
 const ISSUER = { kind: "local" as const, id: "pelaggio-shadow-751" };
 const CONTEXT_PATHS = ["AGENTS.md", "docs/agent-context/pipeline.md", "docs/agent-context/testing-and-quality.md"].sort();
-const MUTATION_NAMES = ["result-tree", "missing-attachment", "other-subject", "open-finding", "missing-disposition", "wrong-authority"] as const;
+const HANDOFF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "reconciled-change-751-handoff.md");
+const PIPELINE_TEST = join("packages", "pelaggio", "scripts", "pelaggio", "__tests__", "pipeline.test.ts");
+const ACCEPTANCE_TESTS = [
+	{ ac: "AC-1", configuration: "automatic-quick", title: "quick item + committed plan + resume plan skips plan and shakedown-plan" },
+	{ ac: "AC-2", configuration: "automatic-quick", title: "quick item + committed plan + resume shakedown-plan clamps to implement" },
+	{ ac: "AC-3", configuration: "automatic-quick", title: "quick item + later resume keeps shakedown-code (no rewind)" },
+	{ ac: "AC-3", configuration: "automatic-quick", title: "quick item + later resume keeps ship (no rewind)" },
+	{ ac: "AC-4", configuration: "standard", title: "standard item + committed plan + resume plan still runs shakedown-plan" },
+	{ ac: "AC-4", configuration: "profile-pin", title: "explicit --profile quick with no start still enters plan" },
+	{ ac: "AC-4", configuration: "profile-pin", title: "explicit --profile standard on a quick-scoped item is not auto-downgraded" },
+] as const;
+const MUTATION_NAMES = ["result-tree", "missing-attachment", "other-subject", "open-finding", "missing-disposition", "wrong-authority", "landing-tree"] as const;
 export type MutationName = (typeof MUTATION_NAMES)[number];
+
+type AcceptanceStatus = "pass" | "fail" | "missing" | "invalid";
+
+interface AcceptanceObservation {
+	ac: (typeof ACCEPTANCE_TESTS)[number]["ac"];
+	configuration: (typeof ACCEPTANCE_TESTS)[number]["configuration"];
+	title: (typeof ACCEPTANCE_TESTS)[number]["title"];
+	status: AcceptanceStatus;
+}
+
+interface AcceptanceInput {
+	observations: AcceptanceObservation[];
+	complete: boolean;
+	evidence?: Buffer;
+	residuals: string[];
+}
 
 export interface ComposeArgs {
 	out: string;
 	cwd: string;
+	matrixJson?: string;
 	publishTo?: string;
+	/** Test-only schema/oracle mode for hermetic temp repositories. Never exposed by argv. */
+	fixtureObservations?: boolean;
 }
 
 export interface ComposeResult {
@@ -39,6 +69,7 @@ export interface ComposeResult {
 export function parseComposeArgs(argv: string[]): ComposeArgs {
 	let out: string | undefined;
 	let cwd = process.cwd();
+	let matrixJson: string | undefined;
 	let publishTo: string | undefined;
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
@@ -50,14 +81,23 @@ export function parseComposeArgs(argv: string[]): ComposeArgs {
 			cwd = argv[++i] ?? cwd;
 			continue;
 		}
+		if (a === "--matrix-json") {
+			matrixJson = argv[++i];
+			continue;
+		}
 		if (a === "--publish-to") {
 			publishTo = argv[++i];
 			continue;
 		}
-		throw new Error(`usage: npx tsx ci/reconciled-change-751.ts --out <dir> [--cwd <repo>] [--publish-to <mainRepo>] (unknown: ${a})`);
+		throw new Error(`usage: npx tsx ci/reconciled-change-751.ts --out <dir> [--cwd <repo>] [--matrix-json <path>] [--publish-to <mainRepo>] (unknown: ${a})`);
 	}
-	if (!out) throw new Error("usage: npx tsx ci/reconciled-change-751.ts --out <dir> [--cwd <repo>] [--publish-to <mainRepo>]");
-	return { out: resolve(out), cwd: resolve(cwd), ...(publishTo ? { publishTo: resolve(publishTo) } : {}) };
+	if (!out) throw new Error("usage: npx tsx ci/reconciled-change-751.ts --out <dir> [--cwd <repo>] [--matrix-json <path>] [--publish-to <mainRepo>]");
+	return {
+		out: resolve(out),
+		cwd: resolve(cwd),
+		...(matrixJson ? { matrixJson: resolve(matrixJson) } : {}),
+		...(publishTo ? { publishTo: resolve(publishTo) } : {}),
+	};
 }
 
 function rec(overrides: Partial<DeliveryRecord>): DeliveryRecord {
@@ -86,6 +126,40 @@ function contextFacts(cwd: string): { facts: { key: string; value: string }[]; r
 	return { facts, residuals };
 }
 
+function loadAcceptanceInput(args: ComposeArgs): AcceptanceInput {
+	const evidencePath = join(args.cwd, PIPELINE_TEST);
+	const evidence = existsSync(evidencePath) ? readFileSync(evidencePath) : undefined;
+	if (args.fixtureObservations) {
+		return {
+			observations: ACCEPTANCE_TESTS.map((test) => ({ ...test, status: "pass" })),
+			complete: true,
+			residuals: ["acceptance results are fixture observations for a hermetic schema/oracle run"],
+		};
+	}
+
+	let matrix: Record<string, unknown> = {};
+	const residuals: string[] = [];
+	if (!args.matrixJson) {
+		residuals.push("acceptance matrix missing: compose requires --matrix-json outside fixture mode");
+	} else {
+		try {
+			const parsed: unknown = JSON.parse(readFileSync(args.matrixJson, "utf8"));
+			if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) matrix = parsed as Record<string, unknown>;
+			else residuals.push("acceptance matrix must be a JSON object");
+		} catch (error) {
+			residuals.push(`acceptance matrix unreadable: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	const observations = ACCEPTANCE_TESTS.map((test): AcceptanceObservation => {
+		const value = matrix[test.title];
+		const status: AcceptanceStatus = value === "pass" || value === "fail" ? value : value === undefined ? "missing" : "invalid";
+		if (status !== "pass") residuals.push(`${test.title}: ${status}`);
+		return { ...test, status };
+	});
+	if (!evidence) residuals.push(`acceptance evidence missing: ${PIPELINE_TEST}`);
+	return { observations, complete: observations.every((observation) => observation.status === "pass") && evidence !== undefined, ...(evidence ? { evidence } : {}), residuals };
+}
+
 function writeProjections(dir: string, git: DeliverySubject): ReturnType<typeof verifyLoadedBundle> {
 	const result = verifyLoadedBundle(loadBundle(dir), git, `npx pelaggio verify --bundle ${dir}`);
 	writeFileSync(join(dir, "dossier.md"), renderDossier(result));
@@ -98,10 +172,12 @@ function writeProjections(dir: string, git: DeliverySubject): ReturnType<typeof 
 interface GoldenInput {
 	git: DeliverySubject;
 	handoff: string;
+	acceptance: AcceptanceInput;
 	findings?: DeliveryRecord["findings"];
 	subjectBindingTree?: string;
 	caseTree?: string;
 	human?: DeliveryRecord;
+	landingTree?: string;
 	omitAttachment?: boolean;
 }
 
@@ -113,6 +189,7 @@ function publishPacket(dest: string, input: GoldenInput, subjectRoot: string): {
 	const bindingTree = input.subjectBindingTree ?? git.resultTree;
 	const { facts: ctxFacts, residuals: ctxResiduals } = contextFacts(subjectRoot);
 	const att = input.omitAttachment ? undefined : publishAttachment(dest, input.handoff);
+	const acceptanceAtt = input.acceptance.evidence ? publishAttachment(dest, input.acceptance.evidence) : undefined;
 	const subject = rec({
 		id: "subject-751",
 		role: "subject",
@@ -146,17 +223,16 @@ function publishPacket(dest: string, input: GoldenInput, subjectRoot: string): {
 		subjectBinding: { resultTree: git.resultTree },
 		facts: ctxFacts,
 	});
-	const ac = rec({
-		id: "ac-706",
-		role: "acceptance-claim",
-		claims: ["AC-1", "AC-2", "AC-3", "AC-4"],
-		subjectBinding: { resultTree: bindingTree, configuration: "automatic-quick" },
-		facts: [
-			{ key: "AC-1", value: "automatic-quick + committed plan + resume plan does not enter plan/shakedown-plan; entryDecision recorded" },
-			{ key: "AC-2", value: "automatic-quick + resume shakedown-plan clamps to implement" },
-			{ key: "AC-3", value: "automatic-quick + later resume shakedown-code/ship is not rewound" },
-			{ key: "AC-4", value: "standard mode and explicit --profile pins keep existing start semantics" },
-		],
+	const acceptanceRecords = ["automatic-quick", "profile-pin", "standard"].map((configuration) => {
+		const observations = input.acceptance.observations.filter((observation) => observation.configuration === configuration);
+		return rec({
+			id: `ac-706-${configuration}`,
+			role: "acceptance-claim",
+			claims: [...new Set(observations.map((observation) => observation.ac))],
+			subjectBinding: { resultTree: bindingTree, configuration },
+			...(acceptanceAtt ? { attachments: [{ digest: acceptanceAtt, role: "evidence" as const }] } : {}),
+			facts: observations.map((observation) => ({ key: `${observation.ac}:${observation.title}`, value: observation.status })),
+		});
 	});
 	const review = rec({
 		kind: "Assessment",
@@ -168,8 +244,19 @@ function publishPacket(dest: string, input: GoldenInput, subjectRoot: string): {
 			{ id: "pr-gate", severity: "note", summary: "PR-gate records do not yet exist", disposition: "residual" },
 		],
 	});
-	const records = [subject, intent, scope, context, ac, review];
+	const records = [subject, intent, scope, context, ...acceptanceRecords, review];
 	const digests = records.map((r) => publishObject(dest, r));
+	const subjectDigest = digests[0];
+	const intentDigest = digests[1];
+	const scopeDigest = digests[2];
+	const contextDigest = digests[3];
+	const acceptanceDigests = digests.slice(4, 4 + acceptanceRecords.length);
+	const reviewDigest = digests[4 + acceptanceRecords.length];
+	if (!subjectDigest || !intentDigest || !scopeDigest || !contextDigest || acceptanceDigests.length !== 3 || !reviewDigest) {
+		throw new Error("campaign record publication was incomplete");
+	}
+	const acceptanceAttachmentDigests = acceptanceAtt ? [acceptanceAtt] : [];
+	if (!input.acceptance.complete) acceptanceAttachmentDigests.push("0".repeat(64));
 	const deliveryCase: DeliveryCase = {
 		schemaVersion: 1,
 		kind: "Case",
@@ -179,15 +266,15 @@ function publishPacket(dest: string, input: GoldenInput, subjectRoot: string): {
 		subject: { ...git, resultTree },
 		admittedRecords: digests,
 		obligations: [
-			{ id: "intent", group: "intent", recordDigests: [digests[1]], attachmentDigests: att ? [att] : ["0".repeat(64)] },
-			{ id: "subject", group: "subject-result-tree", recordDigests: [digests[0]], attachmentDigests: [] },
-			{ id: "binding", group: "subject-config-binding", recordDigests: [digests[4]], attachmentDigests: [] },
-			{ id: "scope", group: "scope", recordDigests: [digests[2]], attachmentDigests: [] },
-			{ id: "context", group: "governing-context", recordDigests: [digests[3]], attachmentDigests: [] },
-			{ id: "acceptance", group: "acceptance", recordDigests: [digests[4]], attachmentDigests: [] },
-			{ id: "review", group: "review-findings", recordDigests: [digests[5]], attachmentDigests: [] },
+			{ id: "intent", group: "intent", recordDigests: [intentDigest], attachmentDigests: att ? [att] : ["0".repeat(64)] },
+			{ id: "subject", group: "subject-result-tree", recordDigests: [subjectDigest], attachmentDigests: [] },
+			{ id: "binding", group: "subject-config-binding", recordDigests: acceptanceDigests, attachmentDigests: [] },
+			{ id: "scope", group: "scope", recordDigests: [scopeDigest], attachmentDigests: [] },
+			{ id: "context", group: "governing-context", recordDigests: [contextDigest], attachmentDigests: [] },
+			{ id: "acceptance", group: "acceptance", recordDigests: acceptanceDigests, attachmentDigests: acceptanceAttachmentDigests },
+			{ id: "review", group: "review-findings", recordDigests: [reviewDigest], attachmentDigests: [] },
 		],
-		residuals: [...ctxResiduals, "PR-gate records do not yet exist", "Human authorization pending"],
+		residuals: [...ctxResiduals, ...input.acceptance.residuals, "PR-gate records do not yet exist", "Human authorization pending"],
 	};
 	const caseDigest = publishObject(dest, deliveryCase);
 	const policy = rec({
@@ -199,12 +286,15 @@ function publishPacket(dest: string, input: GoldenInput, subjectRoot: string): {
 		facts: [{ key: "over", value: caseDigest }],
 	});
 	const policyDigest = publishObject(dest, policy);
-	const roots: { schemaVersion: 1; case: string; policyDecision: string; humanDecision?: string } = {
+	const roots: { schemaVersion: 1; case: string; policyDecision: string; humanDecision?: string; effects?: string[] } = {
 		schemaVersion: 1,
 		case: caseDigest,
 		policyDecision: policyDigest,
 	};
 	if (input.human) roots.humanDecision = publishObject(dest, { ...input.human, caseDigest: input.human.caseDigest ?? caseDigest });
+	if (input.landingTree) {
+		roots.effects = [publishObject(dest, rec({ kind: "Effect", id: "landing-751", role: "landing", caseDigest, resultTree: input.landingTree }))];
+	}
 	writeRoots(dest, roots);
 	return { caseDigest };
 }
@@ -231,11 +321,12 @@ function packetHasForbiddenLeak(dir: string): string[] {
 
 export function composeReconciledChange751(args: ComposeArgs): ComposeResult {
 	const git = inspectGitSubject(args.cwd);
-	const handoff = `#751 authorized intent\nSelected payload: #706 automatic-quick resume clamp.\n`;
+	const handoff = readFileSync(HANDOFF_FIXTURE, "utf8");
+	const acceptance = loadAcceptanceInput(args);
 	const out = args.out;
 	mkdirSync(out, { recursive: true });
 	const goldenDir = join(out, "golden");
-	const { caseDigest } = publishPacket(goldenDir, { git, handoff }, args.cwd);
+	const { caseDigest } = publishPacket(goldenDir, { git, handoff, acceptance }, args.cwd);
 	const goldenVerify = writeProjections(goldenDir, git);
 	if (goldenVerify.caseDisposition !== "ACCEPTED") {
 		const payload = { caseDigest, status: "withheld" as const, reason: "golden Case is not ACCEPTED", verify: goldenVerify };
@@ -252,22 +343,25 @@ export function composeReconciledChange751(args: ComposeArgs): ComposeResult {
 	}
 
 	const mutationSpecs: Record<MutationName, GoldenInput> = {
-		"result-tree": { git, handoff, caseTree: "0".repeat(40) },
-		"missing-attachment": { git, handoff, omitAttachment: true },
-		"other-subject": { git, handoff, subjectBindingTree: "e".repeat(40) },
+		"result-tree": { git, handoff, acceptance, caseTree: "0".repeat(40) },
+		"missing-attachment": { git, handoff, acceptance, omitAttachment: true },
+		"other-subject": { git, handoff, acceptance, subjectBindingTree: "e".repeat(40) },
 		"open-finding": {
 			git,
 			handoff,
+			acceptance,
 			findings: [{ id: "blocker", severity: "material", summary: "open material defect", disposition: "open" }],
 		},
 		"missing-disposition": {
 			git,
 			handoff,
+			acceptance,
 			findings: [{ id: "needs-call", severity: "material", summary: "material finding without disposition" }],
 		},
 		"wrong-authority": {
 			git,
 			handoff,
+			acceptance,
 			human: rec({
 				kind: "Decision",
 				id: "human-wrong",
@@ -276,6 +370,7 @@ export function composeReconciledChange751(args: ComposeArgs): ComposeResult {
 				caseDigest: "f".repeat(64),
 			}),
 		},
+		"landing-tree": { git, handoff, acceptance, landingTree: "0".repeat(40) },
 	};
 
 	const mutations = {} as ComposeResult["mutations"];

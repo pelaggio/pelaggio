@@ -102,9 +102,9 @@ function worseCase(current: DeliveryDisposition, next: DeliveryDisposition): Del
 	return "ACCEPTED";
 }
 
-function overallDisposition(caseDisposition: DeliveryDisposition, authorization: DeliveryAuthorizationState, effect: DeliveryEffectState): DeliveryDisposition {
+function overallDisposition(caseDisposition: DeliveryDisposition, policySatisfied: boolean, authorization: DeliveryAuthorizationState, effect: DeliveryEffectState): DeliveryDisposition {
 	if (caseDisposition === "REJECTED" || effect === "rejected") return "REJECTED";
-	if (caseDisposition === "WITHHOLD" || authorization !== "authorized") return "WITHHOLD";
+	if (caseDisposition === "WITHHOLD" || !policySatisfied || authorization !== "authorized") return "WITHHOLD";
 	return "ACCEPTED";
 }
 
@@ -113,6 +113,7 @@ export function verifyLoadedBundle(bundle: LoadedBundle, git: DeliverySubject, i
 	const diagnostics: string[] = [];
 	const obligationRows: DeliveryObligationRow[] = [];
 	let caseDisposition: DeliveryDisposition = "ACCEPTED";
+	let policySatisfied = false;
 	let authorization: DeliveryAuthorizationState = "AWAITING AUTHORIZATION";
 	let effect: DeliveryEffectState = "EFFECT UNPROVEN";
 
@@ -142,12 +143,12 @@ export function verifyLoadedBundle(bundle: LoadedBundle, git: DeliverySubject, i
 		};
 	}
 
-	if (deliveryCase.subject.resultTree !== git.resultTree || deliveryCase.subject.candidateCommit !== git.candidateCommit) {
+	if (deliveryCase.subject.resultTree !== git.resultTree) {
 		failCase("REJECTED", {
 			code: "subject-result-tree",
 			group: "subject-result-tree",
 			disposition: "REJECTED",
-			detail: `Case result tree ${deliveryCase.subject.resultTree} / candidate ${deliveryCase.subject.candidateCommit} does not match injected git ${git.resultTree} / ${git.candidateCommit}`,
+			detail: `Case result tree ${deliveryCase.subject.resultTree} does not match injected git ${git.resultTree}`,
 		});
 	} else if (deliveryCase.subject.diffTreeDigest !== git.diffTreeDigest || deliveryCase.subject.baseTree !== git.baseTree) {
 		failCase("REJECTED", {
@@ -265,6 +266,44 @@ export function verifyLoadedBundle(bundle: LoadedBundle, git: DeliverySubject, i
 		}
 	}
 
+	if (bundle.roots.policyDecision) {
+		try {
+			const obj = requireObject(bundle, bundle.roots.policyDecision);
+			const decision = validateDeliveryRecord(obj.value);
+			if (decision.kind !== "Decision" || decision.role !== "policy") {
+				reasons.push({
+					code: "policy-unsatisfied",
+					group: "policy",
+					disposition: "WITHHOLD",
+					detail: "policyDecision root is not a policy Decision",
+				});
+			} else if (decision.caseDigest !== bundle.roots.case) {
+				reasons.push({
+					code: "policy-unsatisfied",
+					group: "policy",
+					disposition: "WITHHOLD",
+					detail: `Policy Decision refers to Case ${decision.caseDigest ?? "missing"}, not ${bundle.roots.case}`,
+				});
+			} else {
+				policySatisfied = true;
+			}
+		} catch (e) {
+			reasons.push({
+				code: "policy-unsatisfied",
+				group: "policy",
+				disposition: "WITHHOLD",
+				detail: e instanceof Error ? e.message : String(e),
+			});
+		}
+	} else {
+		reasons.push({
+			code: "policy-unsatisfied",
+			group: "policy",
+			disposition: "WITHHOLD",
+			detail: "no Policy Decision in roots",
+		});
+	}
+
 	if (bundle.roots.humanDecision) {
 		try {
 			const obj = requireObject(bundle, bundle.roots.humanDecision);
@@ -373,7 +412,7 @@ export function verifyLoadedBundle(bundle: LoadedBundle, git: DeliverySubject, i
 		});
 	}
 
-	const overall = overallDisposition(caseDisposition, authorization, effect);
+	const overall = overallDisposition(caseDisposition, policySatisfied, authorization, effect);
 
 	return {
 		overall,

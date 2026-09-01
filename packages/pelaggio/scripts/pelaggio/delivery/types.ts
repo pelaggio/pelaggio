@@ -130,6 +130,7 @@ export type DeliveryReasonCode =
 	| "obligation-evidence-tampered"
 	| "finding-closure"
 	| "finding-disposition-missing"
+	| "policy-unsatisfied"
 	| "awaiting-authorization"
 	| "wrong-authority"
 	| "cross-case-decision"
@@ -140,7 +141,7 @@ export type DeliveryReasonCode =
 
 export interface DeliveryLocalizedReason {
 	code: DeliveryReasonCode;
-	group: DeliveryObligationGroup | "authorization" | "landing" | "graph";
+	group: DeliveryObligationGroup | "policy" | "authorization" | "landing" | "graph";
 	disposition: DeliveryDisposition | DeliveryAuthorizationState | DeliveryEffectState;
 	detail: string;
 }

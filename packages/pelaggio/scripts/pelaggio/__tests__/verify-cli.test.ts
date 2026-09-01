@@ -52,12 +52,24 @@ function publishFor(repo: string, dest: string, extra?: { human?: boolean; mutat
 		facts: subjectFacts(git),
 	});
 	const intent = rec({ kind: "Decision", id: "intent", role: "authorized-intent" });
+	const scope = rec({ kind: "Assessment", id: "scope", role: "scope" });
+	const context = rec({ id: "context", role: "governing-context" });
+	const acceptance = rec({
+		id: "acceptance",
+		role: "acceptance-claim",
+		subjectBinding: { resultTree: git.resultTree, configuration: "automatic-quick" },
+	});
+	const review = rec({ kind: "Assessment", id: "review", role: "review" });
 	const att = publishAttachment(dest, "handoff\n");
 	intent.attachments = [{ digest: att, role: "handoff" }];
-	const digests = [subject, intent].map((r) => publishObject(dest, r));
+	const digests = [subject, intent, scope, context, acceptance, review].map((r) => publishObject(dest, r));
 	const subjectD = digests[0];
 	const intentD = digests[1];
-	if (!subjectD || !intentD) throw new Error("expected subject and intent digests");
+	const scopeD = digests[2];
+	const contextD = digests[3];
+	const acceptanceD = digests[4];
+	const reviewD = digests[5];
+	if (!subjectD || !intentD || !scopeD || !contextD || !acceptanceD || !reviewD) throw new Error("expected six record digests");
 	const subjectTree = extra?.mutateTree ? "0".repeat(40) : git.resultTree;
 	const deliveryCase: DeliveryCase = {
 		schemaVersion: 1,
@@ -70,11 +82,26 @@ function publishFor(repo: string, dest: string, extra?: { human?: boolean; mutat
 		obligations: [
 			{ id: "intent", group: "intent", recordDigests: [intentD], attachmentDigests: [att] },
 			{ id: "subject", group: "subject-result-tree", recordDigests: [subjectD], attachmentDigests: [] },
+			{ id: "binding", group: "subject-config-binding", recordDigests: [acceptanceD], attachmentDigests: [] },
+			{ id: "scope", group: "scope", recordDigests: [scopeD], attachmentDigests: [] },
+			{ id: "context", group: "governing-context", recordDigests: [contextD], attachmentDigests: [] },
+			{ id: "acceptance", group: "acceptance", recordDigests: [acceptanceD], attachmentDigests: [] },
+			{ id: "review", group: "review-findings", recordDigests: [reviewD], attachmentDigests: [] },
 		],
 		residuals: ["Human authorization pending"],
 	};
 	const caseDigest = publishObject(dest, deliveryCase);
-	const roots: { schemaVersion: 1; case: string; humanDecision?: string } = { schemaVersion: 1, case: caseDigest };
+	const policyDecision = publishObject(
+		dest,
+		rec({
+			kind: "Decision",
+			id: "policy",
+			role: "policy",
+			caseDigest,
+			authority: "harness-policy",
+		}),
+	);
+	const roots: { schemaVersion: 1; case: string; policyDecision: string; humanDecision?: string } = { schemaVersion: 1, case: caseDigest, policyDecision };
 	if (extra?.human) {
 		roots.humanDecision = publishObject(
 			dest,
@@ -158,6 +185,31 @@ describe("pelaggio verify CLI", () => {
 		assert.equal(code, 0, log.join("\n"));
 		const parsed = JSON.parse(log[0] ?? "{}") as { overall: string };
 		assert.equal(parsed.overall, "ACCEPTED");
+	});
+
+	it("discovers a same-tree sidecar and keeps the Case ACCEPTED for a successor commit", () => {
+		const repo = tempGit();
+		const first = inspectGitSubject(repo);
+		const sidecar = registerPath(repo, "delivery-cases", "by-tree", first.resultTree);
+		publishFor(repo, sidecar, { human: true });
+		execSync("git commit -q --allow-empty -m same-tree-successor", { cwd: repo });
+		const successor = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf-8" }).trim();
+		assert.notEqual(successor, first.candidateCommit);
+		assert.equal(inspectGitSubject(repo, successor).resultTree, first.resultTree);
+
+		const log: string[] = [];
+		const code = main([successor, "--json"], {
+			cwd: repo,
+			log: (m) => log.push(m),
+			inspectGit: inspectGitSubject,
+			loadBundle,
+			readFile: (p) => readFileSync(p, "utf8"),
+			exists: (p) => existsSync(p),
+		});
+		assert.equal(code, 0, log.join("\n"));
+		const parsed = JSON.parse(log[0] ?? "{}") as { overall: string; case: string };
+		assert.equal(parsed.overall, "ACCEPTED");
+		assert.equal(parsed.case, "ACCEPTED");
 	});
 
 	it("a mutated result-tree bundle exits 1 with REJECTED", () => {

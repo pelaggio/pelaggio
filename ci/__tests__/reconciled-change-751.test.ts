@@ -41,22 +41,40 @@ describe("parseComposeArgs", () => {
 	it("requires --out", () => {
 		assert.throws(() => parseComposeArgs([]), /--out/);
 	});
+
+	it("accepts an explicit acceptance matrix", () => {
+		const parsed = parseComposeArgs(["--out", "/tmp/out", "--matrix-json", "/tmp/matrix.json"]);
+		assert.equal(parsed.matrixJson, "/tmp/matrix.json");
+	});
 });
 
 describe("reconciled-change-751 composer", () => {
-	it("composes a Case-complete golden packet, six mutations, and two randomized cold packets", () => {
+	it("composes a Case-complete golden packet, seven mutations, and two randomized cold packets", () => {
 		const repo = tempGit();
 		const out = mkdtempSync(join(tmpdir(), "pelaggio-751-out-"));
-		const result = composeReconciledChange751({ out, cwd: repo });
+		const result = composeReconciledChange751({ out, cwd: repo, fixtureObservations: true });
 		assert.equal(result.status, "withheld");
 		assert.match(result.caseDigest, /^[0-9a-f]{64}$/);
 
 		const git = inspectGitSubject(repo);
-		const golden = verifyLoadedBundle(loadBundle(join(out, "golden")), git, "npx pelaggio verify --bundle golden");
+		const goldenBundle = loadBundle(join(out, "golden"));
+		const golden = verifyLoadedBundle(goldenBundle, git, "npx pelaggio verify --bundle golden");
 		assert.equal(golden.caseDisposition, "ACCEPTED");
 		assert.equal(golden.authorization, "AWAITING AUTHORIZATION");
 		assert.equal(golden.effect, "EFFECT UNPROVEN");
 		assert.equal(golden.overall, "WITHHOLD");
+		assert.ok(goldenBundle.roots.policyDecision);
+		assert.equal(goldenBundle.roots.humanDecision, undefined);
+		assert.equal(goldenBundle.roots.effects, undefined);
+
+		const intent = [...goldenBundle.objects.values()]
+			.map((object) => object.value)
+			.filter((value) => typeof value === "object" && value !== null && "kind" in value && value.kind !== "Case")
+			.map(validateDeliveryRecord)
+			.find((record) => record.role === "authorized-intent");
+		const handoffDigest = intent?.attachments?.find((attachment) => attachment.role === "handoff")?.digest;
+		assert.ok(handoffDigest);
+		assert.deepEqual(Buffer.from(goldenBundle.attachments.get(handoffDigest)?.bytes ?? []), readFileSync(join(process.cwd(), "ci", "fixtures", "reconciled-change-751-handoff.md")));
 
 		assert.equal(result.mutations["result-tree"].caseDisposition, "REJECTED");
 		assert.equal(result.mutations["result-tree"].overall, "REJECTED");
@@ -66,6 +84,8 @@ describe("reconciled-change-751 composer", () => {
 		assert.equal(result.mutations["missing-disposition"].caseDisposition, "WITHHOLD");
 		assert.equal(result.mutations["wrong-authority"].caseDisposition, "ACCEPTED");
 		assert.equal(result.mutations["wrong-authority"].overall, "WITHHOLD");
+		assert.equal(result.mutations["landing-tree"].caseDisposition, "ACCEPTED");
+		assert.equal(result.mutations["landing-tree"].overall, "REJECTED");
 
 		const mapping = JSON.parse(readFileSync(result.sealedMappingPath, "utf8")) as { valid: string; mutation: string; order: string[] };
 		assert.equal(existsSync(join(out, "cold", mapping.valid, "roots.json")), true);
@@ -104,7 +124,7 @@ describe("reconciled-change-751 composer", () => {
 		const out = mkdtempSync(join(tmpdir(), "pelaggio-751-out-"));
 		const publishTo = mkdtempSync(join(tmpdir(), "pelaggio-751-main-"));
 		const git = inspectGitSubject(repo);
-		composeReconciledChange751({ out, cwd: repo, publishTo });
+		composeReconciledChange751({ out, cwd: repo, publishTo, fixtureObservations: true });
 		const sidecar = registerPath(publishTo, "delivery-cases", "by-tree", git.resultTree, "roots.json");
 		assert.equal(existsSync(sidecar), true);
 		const logs: string[] = [];
@@ -126,7 +146,7 @@ describe("reconciled-change-751 composer", () => {
 		const targetContext = "# target repository context\n";
 		writeFileSync(join(repo, "AGENTS.md"), targetContext);
 		const out = mkdtempSync(join(tmpdir(), "pelaggio-751-out-"));
-		composeReconciledChange751({ out, cwd: repo });
+		composeReconciledChange751({ out, cwd: repo, fixtureObservations: true });
 
 		const bundle = loadBundle(join(out, "golden"));
 		const contextRecords = [...bundle.objects.values()]
@@ -136,5 +156,16 @@ describe("reconciled-change-751 composer", () => {
 		assert.equal(contextRecords.length, 1);
 		const agentsFact = contextRecords[0]?.facts?.find((fact) => fact.key === "AGENTS.md");
 		assert.equal(agentsFact?.value, createHash("sha256").update(targetContext).digest("hex"));
+	});
+
+	it("withholds a non-fixture compose when --matrix-json is absent", () => {
+		const repo = tempGit();
+		const out = mkdtempSync(join(tmpdir(), "pelaggio-751-out-"));
+		const result = composeReconciledChange751({ out, cwd: repo });
+		assert.equal(result.status, "withheld");
+		assert.deepEqual(result.coldPackets, []);
+		const golden = verifyLoadedBundle(loadBundle(join(out, "golden")), inspectGitSubject(repo), "npx pelaggio verify --bundle golden");
+		assert.equal(golden.caseDisposition, "WITHHOLD");
+		assert.ok(golden.residuals.some((residual) => residual.includes("--matrix-json")));
 	});
 });

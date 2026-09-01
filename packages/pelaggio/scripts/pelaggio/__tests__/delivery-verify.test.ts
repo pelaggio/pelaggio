@@ -119,7 +119,7 @@ function publishGolden(opts: { findings?: DeliveryRecord["findings"]; extraRecor
 	});
 	const policyDigest = publishObject(root, policy);
 	writeRoots(root, { schemaVersion: 1, case: caseDigest, policyDecision: policyDigest });
-	return { root, caseDigest, att, digests, deliveryCase };
+	return { root, caseDigest, policyDigest, att, digests, deliveryCase };
 }
 
 describe("verifyLoadedBundle — golden cold packet", () => {
@@ -177,6 +177,14 @@ describe("verifyLoadedBundle — golden cold packet", () => {
 });
 
 describe("verifyLoadedBundle — mutations", () => {
+	it("same result/base/diff with a different candidate commit keeps the Case ACCEPTED", () => {
+		const { root } = publishGolden();
+		const result = verifyLoadedBundle(loadBundle(root), git({ candidateCommit: "9".repeat(40) }), INSPECT);
+		assert.equal(result.caseDisposition, "ACCEPTED");
+		assert.equal(result.overall, "WITHHOLD");
+		assert.ok(!result.reasons.some((r) => r.code === "subject-result-tree"));
+	});
+
 	it("result tree differs from the candidate → REJECTED subject-result-tree", () => {
 		const { root } = publishGolden();
 		const result = verifyLoadedBundle(loadBundle(root), git({ resultTree: "9".repeat(40) }), INSPECT);
@@ -241,7 +249,7 @@ describe("verifyLoadedBundle — mutations", () => {
 	});
 
 	it("Human Decision with wrong authority leaves Case unchanged and overall WITHHOLD", () => {
-		const { root, caseDigest } = publishGolden();
+		const { root, caseDigest, policyDigest } = publishGolden();
 		const human = rec({
 			kind: "Decision",
 			id: "human",
@@ -250,7 +258,7 @@ describe("verifyLoadedBundle — mutations", () => {
 			authority: "imposter",
 		});
 		const humanDigest = publishObject(root, human);
-		writeRoots(root, { schemaVersion: 1, case: caseDigest, humanDecision: humanDigest });
+		writeRoots(root, { schemaVersion: 1, case: caseDigest, policyDecision: policyDigest, humanDecision: humanDigest });
 		const result = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
 		assert.equal(result.caseDisposition, "ACCEPTED");
 		assert.equal(result.authorization, "AWAITING AUTHORIZATION");
@@ -259,7 +267,7 @@ describe("verifyLoadedBundle — mutations", () => {
 	});
 
 	it("Human Decision for another Case leaves Case unchanged", () => {
-		const { root, caseDigest } = publishGolden();
+		const { root, caseDigest, policyDigest } = publishGolden();
 		const human = rec({
 			kind: "Decision",
 			id: "human",
@@ -268,7 +276,7 @@ describe("verifyLoadedBundle — mutations", () => {
 			authority: "operator",
 		});
 		const humanDigest = publishObject(root, human);
-		writeRoots(root, { schemaVersion: 1, case: caseDigest, humanDecision: humanDigest });
+		writeRoots(root, { schemaVersion: 1, case: caseDigest, policyDecision: policyDigest, humanDecision: humanDigest });
 		const result = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
 		assert.equal(result.caseDisposition, "ACCEPTED");
 		assert.equal(result.authorization, "AWAITING AUTHORIZATION");
@@ -276,7 +284,7 @@ describe("verifyLoadedBundle — mutations", () => {
 	});
 
 	it("landing Effect tree mismatch rejects landing/overall, Case digest intact", () => {
-		const { root, caseDigest } = publishGolden();
+		const { root, caseDigest, policyDigest } = publishGolden();
 		const landing = rec({
 			kind: "Effect",
 			id: "land",
@@ -285,7 +293,7 @@ describe("verifyLoadedBundle — mutations", () => {
 			resultTree: "0".repeat(40),
 		});
 		const effectDigest = publishObject(root, landing);
-		writeRoots(root, { schemaVersion: 1, case: caseDigest, effects: [effectDigest] });
+		writeRoots(root, { schemaVersion: 1, case: caseDigest, policyDecision: policyDigest, effects: [effectDigest] });
 		const result = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
 		assert.equal(result.caseDisposition, "ACCEPTED");
 		assert.equal(result.effect, "rejected");
@@ -295,7 +303,7 @@ describe("verifyLoadedBundle — mutations", () => {
 	});
 
 	it("same-tree squash/merge Effect is proven; Human Decision authorizes overall ACCEPTED", () => {
-		const { root, caseDigest } = publishGolden();
+		const { root, caseDigest, policyDigest } = publishGolden();
 		const landing = rec({
 			kind: "Effect",
 			id: "land",
@@ -313,6 +321,7 @@ describe("verifyLoadedBundle — mutations", () => {
 		writeRoots(root, {
 			schemaVersion: 1,
 			case: caseDigest,
+			policyDecision: policyDigest,
 			humanDecision: publishObject(root, human),
 			effects: [publishObject(root, landing)],
 		});
@@ -321,6 +330,37 @@ describe("verifyLoadedBundle — mutations", () => {
 		assert.equal(result.authorization, "authorized");
 		assert.equal(result.effect, "proven");
 		assert.equal(result.overall, "ACCEPTED");
+	});
+
+	it("missing Policy withholds overall without changing an accepted Case", () => {
+		const { root, caseDigest } = publishGolden();
+		const humanDecision = publishObject(root, rec({ kind: "Decision", id: "human", role: "human-authorization", caseDigest, authority: "operator" }));
+		writeRoots(root, { schemaVersion: 1, case: caseDigest, humanDecision });
+		const result = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
+		assert.equal(result.caseDisposition, "ACCEPTED");
+		assert.equal(result.authorization, "authorized");
+		assert.equal(result.overall, "WITHHOLD");
+		assert.ok(result.reasons.some((r) => r.code === "policy-unsatisfied" && r.group === "policy"));
+	});
+
+	it("cross-Case Policy withholds overall without changing an accepted Case", () => {
+		const { root, caseDigest } = publishGolden();
+		const humanDecision = publishObject(root, rec({ kind: "Decision", id: "human", role: "human-authorization", caseDigest, authority: "operator" }));
+		const policyDigest = publishObject(
+			root,
+			rec({
+				kind: "Decision",
+				id: "other-policy",
+				role: "policy",
+				caseDigest: "f".repeat(64),
+			}),
+		);
+		writeRoots(root, { schemaVersion: 1, case: caseDigest, policyDecision: policyDigest, humanDecision });
+		const result = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
+		assert.equal(result.caseDisposition, "ACCEPTED");
+		assert.equal(result.authorization, "authorized");
+		assert.equal(result.overall, "WITHHOLD");
+		assert.ok(result.reasons.some((r) => r.code === "policy-unsatisfied" && r.group === "policy"));
 	});
 
 	it("unattached extra objects do not change disposition", () => {
