@@ -210,6 +210,31 @@ export interface CycleProvenance {
 	 * resolution-time console line is not durable. Present only when non-empty.
 	 */
 	unattendedSignalSuppressions?: string[];
+	/**
+	 * Durable pipeline-entry decision (#706). Optional for legacy log compatibility —
+	 * early pick failures and pre-#706 records omit it.
+	 */
+	entryDecision?: PipelineEntryDecision;
+}
+
+/** How the requested start was obtained. Derived from flags already on PickInput. */
+export type PipelineEntryStartSource = "from-flag" | "review-findings" | "supplied" | "default";
+
+/** Closed reason for the effective start after automatic-quick classification. */
+export type PipelineEntryReason = "automatic-quick-fresh" | "automatic-quick-clamped" | "automatic-quick-kept" | "profile-pin" | "standard";
+
+/**
+ * One recorded pipeline-entry decision. Type-only: the runtime object is built in
+ * `runPick` and persisted on `CycleProvenance` by `finish()`.
+ */
+export interface PipelineEntryDecision {
+	requestedStart: Step | null;
+	requestedSource: PipelineEntryStartSource;
+	profile: string;
+	automaticQuick: boolean;
+	effectiveStart: Step;
+	excludedQuickSteps: readonly ("plan" | "shakedown-plan")[];
+	reason: PipelineEntryReason;
 }
 
 // ── Log entries (read from .dev/pelaggio-log.jsonl) ───────────────────

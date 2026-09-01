@@ -33,7 +33,7 @@ import { runShakedownCode } from "./steps/shakedown-code.js";
 import { runShakedownPlan } from "./steps/shakedown-plan.js";
 import { runShip } from "./steps/ship.js";
 import { A, fmtElapsed } from "./tui.js";
-import type { CycleDisposition, CycleGitBinding, CycleResult, CycleVersionProvenance, ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, Step, StepLog } from "./types.js";
+import type { CycleDisposition, CycleGitBinding, CycleResult, CycleVersionProvenance, ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineEntryDecision, PipelineOpts, Step, StepLog } from "./types.js";
 
 // Re-exported for pipeline.test.ts; the implementation moved with the implement step (plan step 9).
 export { archiveReviewFindingsAfterImplement };
@@ -232,6 +232,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	// A pinned --profile (issue #247) takes control of the whole run; otherwise default to
 	// "standard" and let quick-scope detection downgrade to "quick" below.
 	let profile = flags.profile ?? "standard";
+	let entryDecision: PipelineEntryDecision | undefined;
 	const steps: StepLog[] = [];
 	const provenanceUnavailable: string[] = [];
 	// Attestation audit (#276): PELAGGIO_OPERATOR_ATTENDED suppressions are cycle-scoped
@@ -409,6 +410,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 					challengeDigest: cycleChallengeDigest,
 					...(executionReceipts.length > 0 ? { executionReceipts: [...executionReceipts] } : {}),
 					...(unattendedSignalSuppressions.length > 0 ? { unattendedSignalSuppressions: [...unattendedSignalSuppressions] } : {}),
+					...(entryDecision ? { entryDecision } : {}),
 				},
 			});
 		}
@@ -454,6 +456,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	worktree = picked.worktree;
 	startFrom = picked.startFrom;
 	profile = picked.profile;
+	entryDecision = picked.entryDecision;
 	sessionController = picked.sessionController;
 	logLabel = itemId;
 

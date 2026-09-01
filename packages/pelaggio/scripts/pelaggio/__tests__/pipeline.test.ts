@@ -2976,6 +2976,7 @@ describe("runPipeline — pick step", () => {
 		assert.deepEqual(provenance.git, git);
 		assert.deepEqual(provenance.versions, { pelaggio: "0.1.0", node: "v22", drivers: { claude: "sdk 1" } });
 		assert.equal((provenance.drivers as Array<{ provider: string }>)[0].provider, "claude");
+		assert.equal("entryDecision" in provenance, false, "early pick failure omits entryDecision (legacy-compatible)");
 	});
 
 	it("queue empty — maps pick-result: queue-empty to error 'pick:queue-empty' (recoverable)", async () => {
@@ -3519,6 +3520,343 @@ describe("runPipeline — pick step", () => {
 			[],
 			"pick must not run against an unreattachable main checkout",
 		);
+	});
+});
+
+describe("runPipeline — automatic-quick resume clamp (#706)", () => {
+	function committedPlanWorktree(itemId = "TOOL-99", opts: { implement?: boolean } = {}): { worktree: string; planPath: string } {
+		const worktree = makeTempGitRepo();
+		const planPath = join(worktree, "docs", "plans", `${itemId.toLowerCase()}.md`);
+		mkdirSync(join(worktree, "docs", "plans"), { recursive: true });
+		writeFileSync(planPath, "# Plan\ncommitted\n");
+		if (opts.implement) writeFileSync(join(worktree, "impl.txt"), "x\n");
+		execSync("git add -A && git commit -q -m plan", { cwd: worktree });
+		return { worktree, planPath };
+	}
+
+	function remainingSteps(repo: string) {
+		return {
+			plan: { ok: true as const },
+			"shakedown-plan": { ok: true as const, text: "VERDICT: APPROVE" },
+			implement: { ok: true as const, writes: { "impl.txt": "x" } },
+			"shakedown-code": { ok: true as const },
+			ship: {
+				ok: true as const,
+				text: "ship-merged: TOOL-99",
+				sideEffect: (cwd: string) => {
+					execSync("git checkout -q main", { cwd });
+					execSync("git merge -q --no-ff feat/tool-99", { cwd: repo === cwd ? repo : cwd });
+					execSync("git checkout -q feat/tool-99", { cwd });
+				},
+			},
+		};
+	}
+
+	function quickItem(id: string) {
+		return {
+			id,
+			title: "Fix a small bug",
+			deps: "—",
+			sourceRef: `cdhorne/pelaggio#${id}`,
+			status: "in-progress" as const,
+			body: "Scope: S\n\nA small bug fix.",
+		};
+	}
+
+	function standardItem(id: string) {
+		return {
+			id,
+			title: "Large feature",
+			deps: "—",
+			sourceRef: `cdhorne/pelaggio#${id}`,
+			status: "in-progress" as const,
+			body: "Scope: M\n\nA standard-sized change.",
+		};
+	}
+
+	function entryOf(logs: Array<Record<string, unknown>>) {
+		return (logs[0]?.provenance as { entryDecision?: Record<string, unknown> } | undefined)?.entryDecision;
+	}
+
+	it("quick item + committed plan + resume plan skips plan and shakedown-plan", async () => {
+		const { worktree, planPath } = committedPlanWorktree();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "plan" }, parkSignal, baseFlags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		const steps = calls.map((c) => c.step);
+		assert.equal(steps[0], "implement");
+		assert.ok(!steps.includes("plan"), `plan must not run; got ${steps.join(",")}`);
+		assert.ok(!steps.includes("shakedown-plan"), `shakedown-plan must not run; got ${steps.join(",")}`);
+		assert.equal(logs[0]?.quick, true);
+		assert.deepEqual(entryOf(logs), {
+			requestedStart: "plan",
+			requestedSource: "supplied",
+			profile: "quick",
+			automaticQuick: true,
+			effectiveStart: "implement",
+			excludedQuickSteps: ["plan", "shakedown-plan"],
+			reason: "automatic-quick-clamped",
+		});
+	});
+
+	it("quick item + committed plan + resume shakedown-plan clamps to implement", async () => {
+		const { worktree, planPath } = committedPlanWorktree();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "shakedown-plan" }, parkSignal, baseFlags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		const steps = calls.map((c) => c.step);
+		assert.equal(steps[0], "implement");
+		assert.ok(!steps.includes("shakedown-plan"));
+		assert.equal(entryOf(logs)?.effectiveStart, "implement");
+		assert.equal(entryOf(logs)?.reason, "automatic-quick-clamped");
+		assert.equal(entryOf(logs)?.requestedStart, "shakedown-plan");
+	});
+
+	it("quick item + later resume keeps shakedown-code (no rewind)", async () => {
+		const { worktree, planPath } = committedPlanWorktree("TOOL-99", { implement: true });
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "shakedown-code" }, parkSignal, baseFlags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["shakedown-code", "ship"],
+		);
+		assert.equal(entryOf(logs)?.effectiveStart, "shakedown-code");
+		assert.equal(entryOf(logs)?.reason, "automatic-quick-kept");
+	});
+
+	it("quick item + later resume keeps ship (no rewind)", async () => {
+		const { worktree, planPath } = committedPlanWorktree("TOOL-99", { implement: true });
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "ship" }, parkSignal, baseFlags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["ship"],
+		);
+		assert.equal(entryOf(logs)?.effectiveStart, "ship");
+		assert.equal(entryOf(logs)?.reason, "automatic-quick-kept");
+	});
+
+	it("fresh quick item (no startFrom) still goes direct to implement", async () => {
+		const { worktree, planPath } = committedPlanWorktree();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		assert.equal(calls.map((c) => c.step)[0], "implement");
+		assert.ok(!calls.some((c) => c.step === "plan" || c.step === "shakedown-plan"));
+		assert.deepEqual(entryOf(logs), {
+			requestedStart: null,
+			requestedSource: "default",
+			profile: "quick",
+			automaticQuick: true,
+			effectiveStart: "implement",
+			excludedQuickSteps: ["plan", "shakedown-plan"],
+			reason: "automatic-quick-fresh",
+		});
+	});
+
+	it("standard item + committed plan + resume plan still runs shakedown-plan", async () => {
+		const { worktree, planPath } = committedPlanWorktree();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "plan" }, parkSignal, baseFlags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? standardItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+		assert.equal(logs[0]?.quick, false);
+		assert.equal(entryOf(logs)?.automaticQuick, false);
+		assert.equal(entryOf(logs)?.effectiveStart, "plan");
+		assert.equal(entryOf(logs)?.reason, "standard");
+		assert.equal(entryOf(logs)?.requestedSource, "supplied");
+	});
+
+	it("explicit --profile quick with no start still enters plan", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const flags: Flags = { ...baseFlags, profile: "quick" };
+		const result = await runPipeline(baseOpts(worktree), parkSignal, flags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(calls.map((c) => c.step)[0], "plan", `expected plan entry; steps=${calls.map((c) => c.step).join(",")}; error=${result.error}`);
+		assert.equal(entryOf(logs)?.automaticQuick, false);
+		assert.equal(entryOf(logs)?.effectiveStart, "plan");
+		assert.equal(entryOf(logs)?.reason, "profile-pin");
+		assert.equal(entryOf(logs)?.profile, "quick");
+		assert.equal(entryOf(logs)?.requestedStart, null);
+		assert.equal(entryOf(logs)?.requestedSource, "default");
+	});
+
+	it("explicit --profile standard on a quick-scoped item is not auto-downgraded", async () => {
+		const { worktree, planPath } = committedPlanWorktree();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const flags: Flags = { ...baseFlags, profile: "standard" };
+		const result = await runPipeline(baseOpts(worktree), parkSignal, flags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		assert.equal(logs[0]?.quick, false);
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["shakedown-plan", "implement", "shakedown-code", "ship"],
+		);
+		assert.equal(entryOf(logs)?.profile, "standard");
+		assert.equal(entryOf(logs)?.automaticQuick, false);
+		assert.equal(entryOf(logs)?.reason, "profile-pin");
+	});
+
+	it("automatic quick + flags.from plan clamps to implement and records from-flag", async () => {
+		const { worktree, planPath } = committedPlanWorktree();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(remainingSteps(worktree), parkSignal);
+		const flags: Flags = { ...baseFlags, from: "plan" };
+		const result = await runPipeline({ ...baseOpts(worktree), startFrom: "plan" }, parkSignal, flags, {
+			runStep,
+			roadmap: makeMockRoadmap({
+				async getItem(id) {
+					return id === "TOOL-99" ? quickItem("TOOL-99") : null;
+				},
+				resolvePlanPath: () => planPath,
+			}),
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+			runShipBookkeeping: noopBookkeeping,
+		});
+		assert.equal(result.completed, true, result.error);
+		assert.equal(calls.map((c) => c.step)[0], "implement");
+		assert.ok(!calls.some((c) => c.step === "plan" || c.step === "shakedown-plan"));
+		assert.equal(entryOf(logs)?.requestedSource, "from-flag");
+		assert.equal(entryOf(logs)?.requestedStart, "plan");
+		assert.equal(entryOf(logs)?.effectiveStart, "implement");
+		assert.equal(entryOf(logs)?.reason, "automatic-quick-clamped");
 	});
 });
 
@@ -4420,6 +4758,7 @@ describe("execution receipts (#188)", () => {
 		};
 		assert.equal("challengeDigest" in legacy.provenance, false);
 		assert.equal("executionReceipts" in legacy.provenance, false);
+		assert.equal("entryDecision" in legacy.provenance, false);
 		assert.equal(legacy.provenance.runId, "cycle-1");
 	});
 });

@@ -70,6 +70,7 @@ export const REGISTERS = [
 	{ name: "doc-review-transcripts", kind: "harness", shape: "dir" },
 	{ name: "review-requests", kind: "harness", shape: "dir" },
 	{ name: "archive", kind: "harness", shape: "dir" },
+	{ name: "delivery-cases", kind: "harness", shape: "dir" },
 	{ name: "revise-exec", kind: "harness", shape: "dir" },
 	{ name: "roadmap-mutation.lock", kind: "harness", shape: "file" },
 	{ name: "revise-claim.lock", kind: "harness", shape: "file" },

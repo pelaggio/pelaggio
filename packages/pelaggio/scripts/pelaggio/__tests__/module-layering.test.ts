@@ -34,6 +34,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"review/taxonomy.ts": 0,
 	"review/document.ts": 0,
 	"roadmap/types.ts": 0,
+	"delivery/types.ts": 0,
 	// L1 infra — writes a register, takes a lock, runs git, or confines; never policy.
 	"attempt-identity.ts": 1,
 	"file-lock.ts": 1,
@@ -62,6 +63,8 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"roadmap/mutation-lock.ts": 1,
 	"roadmap/stale-quarantine.ts": 1,
 	"roadmap/stale-scan.ts": 1,
+	"delivery/bundle.ts": 1,
+	"delivery/git-subject.ts": 1,
 	// L2 domain — decides policy/verdicts/dispositions without spawning a provider.
 	"effects.ts": 2,
 	"decisions.ts": 2,
@@ -94,6 +97,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"worktree-deps.ts": 2,
 	"run-lifecycle.ts": 2,
 	"run-lifecycle-worker.ts": 2,
+	"delivery/verify.ts": 2,
 	// L3 execution — spawns or talks to a model/agent process.
 	"step-runner.ts": 3,
 	"step-runner-shared.ts": 3,
@@ -140,6 +144,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"run-contained-cli.ts": 5,
 	"sessions-cli.ts": 5,
 	"taxonomy-cli.ts": 5,
+	"verify-cli.ts": 5,
 };
 
 const ENTRY_IMPORTERS = new Set(["index.ts", "main.ts"]);

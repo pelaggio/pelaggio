@@ -293,7 +293,7 @@ describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
 		for (const name of bashDeniedRegisters()) {
 			assert.equal(blockForeignRootWrite(bash(`cat > .dev/${name}/x.json`), wt, main, [main, wt], wt).decision, "block", name);
 		}
-		for (const name of ["effects", "execution-receipts", "attempts", "flow-events"]) {
+		for (const name of ["effects", "execution-receipts", "attempts", "flow-events", "delivery-cases"]) {
 			assert.equal(blockForeignRootWrite(bash(`echo '{}' >> .dev/${name}/run/1.json`), wt, main, [main, wt], wt).decision, "block", name);
 		}
 		for (const cmd of ["cat > .dev//effects/run/1.json", "cat > .dev/./effects/run/1.json", "cat > .dev/././execution-receipts/x"]) assert.equal(blockForeignRootWrite(bash(cmd), wt, main, [main, wt], wt).decision, "block", cmd);

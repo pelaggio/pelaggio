@@ -92,6 +92,7 @@ Read only the detail docs needed for the task:
 - `docs/config.md`: `.pelaggio.yml` schema.
 - `docs/server.md`: daemon and web UI setup.
 - `docs/pr-review.md`: PR review and revise behavior.
+- `docs/reconciled-change.md`: bounded Case verifier (`npx pelaggio verify`), object-trust limits, and cold-packet inspection.
 
 ## Coding Conventions
 
