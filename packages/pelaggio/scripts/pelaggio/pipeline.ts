@@ -404,6 +404,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				...(costEstimated ? { costEstimated: true } : {}),
 				verdict: result.verdict ?? null,
 				...persistedOutcome,
+				...(result.outcome === "parked" && parkSignal.rateLimit ? { parkProvider: parkSignal.rateLimit.provider, parkWindow: parkSignal.rateLimit.window } : {}),
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 				provenance: {

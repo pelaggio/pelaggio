@@ -104,6 +104,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"providers/types.ts": 3,
 	"providers/index.ts": 3,
 	"providers/claude.ts": 3,
+	"providers/claude-pool-id.ts": 3,
 	"providers/codex.ts": 3,
 	"providers/grok.ts": 3,
 	"providers/opencode.ts": 3,

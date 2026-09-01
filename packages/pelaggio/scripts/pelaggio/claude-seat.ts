@@ -118,6 +118,11 @@ function providerModeEnabled(bag: NodeJS.ProcessEnv, selectors: readonly string[
 	return selectors.some((name) => envFlagEnabled(bag, name));
 }
 
+/** True when Claude is configured for a third-party provider rather than direct Anthropic auth. */
+export function claudeUsesThirdPartyProvider(bag: NodeJS.ProcessEnv): boolean {
+	return providerModeEnabled(bag, THIRD_PARTY_PROVIDER_MODE_SELECTORS);
+}
+
 function providerAuthRequired(bag: NodeJS.ProcessEnv, modes: ReadonlyArray<readonly [selector: string, skipAuth: string]>): boolean {
 	return modes.some(([selector, skipAuth]) => envFlagEnabled(bag, selector) && !envFlagEnabled(bag, skipAuth));
 }
@@ -349,6 +354,23 @@ function copyPresent(source: NodeJS.ProcessEnv, names: readonly string[], extra:
 }
 
 /**
+ * The active auth/config inputs that define one Claude quota realm. This shares the seat's
+ * mode/auth gates so telemetry cannot drift from the credentials the child actually receives.
+ */
+export function claudeAuthRealmInputs(source: NodeJS.ProcessEnv | undefined): ReadonlyArray<readonly [string, string]> {
+	const bag = source ?? {};
+	const inputs: Record<string, string> = {};
+	copyPresent(bag, CLAUDE_CLI_SHARED_AUTH_VARS, inputs);
+	if (!claudeUsesThirdPartyProvider(bag)) copyPresent(bag, DIRECT_ANTHROPIC_CREDENTIAL_VARS, inputs);
+	copyPresent(bag, CLAUDE_CLI_PROVIDER_CONFIG_VARS, inputs);
+	if (providerAuthRequired(bag, FOUNDRY_AUTH_MODES)) copyPresent(bag, FOUNDRY_MODE_CREDENTIAL_VARS, inputs);
+	if (providerAuthRequired(bag, ANTHROPIC_AWS_AUTH_MODES)) copyPresent(bag, ANTHROPIC_AWS_MODE_CREDENTIAL_VARS, inputs);
+	if (providerAuthRequired(bag, AWS_AUTH_MODES)) copyPresent(bag, AWS_MODE_CREDENTIAL_VARS, inputs);
+	if (providerAuthRequired(bag, GOOGLE_AUTH_MODES)) copyPresent(bag, GOOGLE_MODE_CREDENTIAL_VARS, inputs);
+	return Object.entries(inputs).sort(([left], [right]) => left.localeCompare(right));
+}
+
+/**
  * Deny-by-default child environment for the unconditional Claude spawn seam.
  * Source is the SDK-built `SpawnOptions.env` bag (control markers live there), never a fresh `process.env` read.
  */
@@ -356,18 +378,10 @@ export function buildClaudeSeatEnv(source: NodeJS.ProcessEnv | undefined, step: 
 	const bag = source ?? {};
 	const extra: Record<string, string> = {};
 	copyPresent(bag, CLAUDE_SDK_CONTROL_VARS, extra);
-	copyPresent(bag, CLAUDE_CLI_SHARED_AUTH_VARS, extra);
-	if (!providerModeEnabled(bag, THIRD_PARTY_PROVIDER_MODE_SELECTORS)) copyPresent(bag, DIRECT_ANTHROPIC_CREDENTIAL_VARS, extra);
-	copyPresent(bag, CLAUDE_CLI_PROVIDER_CONFIG_VARS, extra);
+	for (const [name, value] of claudeAuthRealmInputs(bag)) extra[name] = value;
 	copyPresent(bag, PELAGGIO_HARNESS_CONFIG_VARS, extra);
 	copyPresent(bag, PRIVACY_CONTROL_VARS, extra);
 	copyPresent(bag, METADATA_CREDENTIAL_SUPPRESSION_VARS, extra);
-	// Provider credential chains pass only when a matching mode is selected and its gateway
-	// has not explicitly disabled native authentication.
-	if (providerAuthRequired(bag, FOUNDRY_AUTH_MODES)) copyPresent(bag, FOUNDRY_MODE_CREDENTIAL_VARS, extra);
-	if (providerAuthRequired(bag, ANTHROPIC_AWS_AUTH_MODES)) copyPresent(bag, ANTHROPIC_AWS_MODE_CREDENTIAL_VARS, extra);
-	if (providerAuthRequired(bag, AWS_AUTH_MODES)) copyPresent(bag, AWS_MODE_CREDENTIAL_VARS, extra);
-	if (providerAuthRequired(bag, GOOGLE_AUTH_MODES)) copyPresent(bag, GOOGLE_MODE_CREDENTIAL_VARS, extra);
 	if (claudeSeatHoldsForgeAuthority(step)) copyPresent(bag, FORGE_REMOTE_VARS, extra);
 	// Mode/auth-gated credentials are controlled only by their selector/skip-auth pairs. Granted
 	// values are already in `extra`; denied values must not reopen through security.env-allowlist.

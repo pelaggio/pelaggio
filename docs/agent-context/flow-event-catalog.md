@@ -159,6 +159,10 @@ tolerant-with-diagnostic; new names are additive. The set currently contains:
   `pelaggio.watch-wake`, `pelaggio.budget-idle`, `pelaggio.budget-wake`.
 - **#40 process lifecycle** (every CLI `orchestrate()` invocation, not only continuous runs):
   `pelaggio.run-started`, `pelaggio.run-heartbeat`, `pelaggio.run-finished`.
+- **#581 provider quota observations** (reported windows/faults only — never a projected
+	`PoolState`): `pelaggio.provider-usage`, `pelaggio.provider-limit`. Both carry the required
+	non-secret `poolId` auth-realm digest so observations from different credential/account realms
+	never merge. Payload contracts live in `types.ts`.
 
 Emission of most #170 item-flow names is still wired in #177. #83 and #40 emit from the
 orchestrator / `orchestrate()` wrapper.

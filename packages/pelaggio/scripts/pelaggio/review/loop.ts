@@ -154,7 +154,16 @@ function observeSeatAttempt(options: {
 				source: { chars: assistantText.length, ...reviewBlockMarkers(assistantText, options.role) },
 			};
 	options.onSeatAttempt?.({ role: options.role, identity: options.identity, pass: options.pass, attempt, output, result: options.result });
-	return { completion: "returned", attempt, ok: options.result.ok, subtype: options.result.subtype, cost: options.result.cost, turns: options.result.turns, output };
+	return {
+		completion: "returned",
+		attempt,
+		ok: options.result.ok,
+		subtype: options.result.subtype,
+		cost: options.result.cost,
+		turns: options.result.turns,
+		...(options.result.tokens ? { tokens: options.result.tokens } : {}),
+		output,
+	};
 }
 
 export function classifyReviewDisagreement(
@@ -277,6 +286,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 					ok: false,
 					cost: result.value.cost,
 					turns: result.value.turns,
+					...(result.value.tokens ? { tokens: result.value.tokens } : {}),
 					diagnostic: parseFailureDiagnostic("reviewer"),
 					attempts,
 				});
@@ -310,6 +320,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 				ok: result.value.ok,
 				cost: result.value.cost,
 				turns: result.value.turns,
+				...(result.value.tokens ? { tokens: result.value.tokens } : {}),
 				attempts,
 				// A parseable but non-ok seat (max-turns / provider-reported failure) has no trustworthy
 				// verdict — record WHY (subtype + turns) so it isn't a reasonless `ok:false` (#268 legibility).
@@ -460,7 +471,15 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		passes.push({
 			pass,
 			reviewers: reviewerRecords,
-			judge: { identity: judgeIdentity, valid: Boolean(report), cost: judgeResult.cost, turns: judgeResult.turns, attempts: judgeAttempts, ...(diagnostic ? { diagnostic } : {}) },
+			judge: {
+				identity: judgeIdentity,
+				valid: Boolean(report),
+				cost: judgeResult.cost,
+				turns: judgeResult.turns,
+				...(judgeResult.tokens ? { tokens: judgeResult.tokens } : {}),
+				attempts: judgeAttempts,
+				...(diagnostic ? { diagnostic } : {}),
+			},
 			carriedBefore,
 			carriedAfter: carried.map((item) => item.fingerprint),
 		});

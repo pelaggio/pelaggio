@@ -5,7 +5,7 @@ import { type AuthoringReviewFinding, isSafetyClass, type JudgeRuling, materiali
 import { classifyReviewDisagreement, classifyReviewOutcome, type DriverIdentity, deduplicateCandidates, type ReviewCandidate, type ReviewLoopResult, type ReviewPassRecord, runReviewLoop, type SeatAttemptRecord } from "../review/loop.js";
 import { renderReviewRecord } from "../review/record.js";
 import { BASELINE_TAXONOMY, resolveTaxonomy } from "../review/taxonomy.js";
-import type { StepResult } from "../types.js";
+import type { StepResult, TokenUsage } from "../types.js";
 
 const emptyClassification = { changedFiles: [] as string[] };
 
@@ -108,6 +108,44 @@ describe("authoring review loop controller", () => {
 			runSeat: async (req) => ok(req.role === "reviewer" ? reviewerText : req.role === "judge" ? judgeText : ""),
 			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
 		});
+
+	it("retains returned reviewer and Judge tokens and leaves rejected/skipped seats tokenless", async () => {
+		const tokens: TokenUsage = { input: 11, output: 7, cacheCreation: 1, cacheRead: 2 };
+		const judgeTokens: TokenUsage = { input: 5, output: 3, cacheCreation: 0, cacheRead: 0 };
+		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "clean", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const result = await runReviewLoop({
+			policy: {
+				...basePolicy,
+				reviewers: [
+					{ id: "grok", provider: "grok" },
+					{ id: "codex", provider: "codex" },
+				],
+			},
+			author: { provider: "claude" },
+			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
+			classificationContext: emptyClassification,
+			taxonomy: BASELINE_TAXONOMY,
+			runSeat: async (req) => {
+				if (req.role === "reviewer" && req.slot.provider === "codex") throw new Error("seat rejected");
+				if (req.role === "judge") return { ...ok(judgeReport([])), tokens: judgeTokens, cost: 0.2, turns: 2 };
+				return { ...ok(clean), tokens, cost: 0.1, turns: 1 };
+			},
+			prompts: { review: () => "r", judge: () => "j", revise: () => "rev" },
+		});
+		assert.equal(result.outcome, "converged-clean");
+		const grok = result.passes[0]?.reviewers.find((seat) => seat.identity.seatId === "grok");
+		const rejected = result.passes[0]?.reviewers.find((seat) => seat.identity.seatId === "codex");
+		assert.deepEqual(grok?.tokens, tokens);
+		assert.equal(grok?.attempts?.[0]?.completion, "returned");
+		assert.deepEqual(grok?.attempts?.[0]?.completion === "returned" ? grok.attempts[0].tokens : undefined, tokens);
+		assert.ok(rejected);
+		assert.equal("tokens" in rejected, false);
+		assert.equal(rejected.attempts?.[0]?.completion, "rejected");
+		assert.equal(rejected.attempts?.[0] && "tokens" in rejected.attempts[0], false);
+		assert.deepEqual(result.passes[0]?.judge.tokens, judgeTokens);
+		assert.equal(result.passes[0]?.judge.attempts?.[0]?.completion, "returned");
+		assert.deepEqual(result.passes[0]?.judge.attempts?.[0]?.completion === "returned" ? result.passes[0].judge.attempts[0].tokens : undefined, judgeTokens);
+	});
 
 	it("excludes the artifact author from configured review seats", async () => {
 		const invoked: string[] = [];

@@ -195,6 +195,7 @@ export function createStepExecutor(env: StepExecutorEnv): StepExecutor {
 			liveStatus: opts.liveStatus!,
 			workerStatus: opts.workerStatus,
 		});
+		const eventWriter = opts.eventWriter;
 
 		const preSha = getHeadSha(cwd);
 		// Observer construction may stay outside; finish() must be inside the critical section.
@@ -372,6 +373,7 @@ export function createStepExecutor(env: StepExecutorEnv): StepExecutor {
 							...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
 							foreignRootDenial,
 							...(onChildSpawn ? { onChildSpawn } : {}),
+							...(eventWriter ? { eventWriter, providerObservationAttempt: attempt, providerObservationLog: log } : {}),
 						},
 						emit,
 					);

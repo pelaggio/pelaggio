@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { createEventWriter, decodeFlowEventLine, eventStreamPath, foldEvents, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog, tailEventStream } from "../flow-events.js";
+import { appendProviderObservation, createEventWriter, decodeFlowEvent, decodeFlowEventLine, eventStreamPath, foldEvents, MAX_FLOW_EVENT_BYTES, PELAGGIO_EVENT_TYPES, projectEvents, readEventLog, tailEventStream } from "../flow-events.js";
 import { computeStats } from "../stats.js";
-import type { FlowEventInput } from "../types.js";
+import type { EventWriter, FlowEvent, FlowEventInput, ProviderObservation } from "../types.js";
 
 const FIXTURES = join(dirname(new URL(import.meta.url).pathname), "fixtures", "flow-events");
 const IDS = Array.from({ length: 30 }, (_, index) => `01J${String(index).padStart(23, "0")}`);
@@ -46,7 +46,7 @@ describe("flow event writer", () => {
 		const base = { type: "pelaggio.cycle-completed" as const, cycle: 1, item: "672", quick: false, steps: [], total_cost: 1, verdict: null };
 		const inputs = [
 			{ ...base, outcome: "completed" },
-			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: "quota" },
+			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: "quota", parkProvider: "claude", parkWindow: "five_hour" },
 			{ ...base, outcome: "blocked", blockedKind: "capability", reason: "missing token" },
 			{ ...base, outcome: "failed", failureClass: "provider", error: "sdk failure" },
 		] satisfies FlowEventInput[];
@@ -69,8 +69,13 @@ describe("flow event writer", () => {
 		const invalid = [
 			{ ...base, outcome: "completed", failureClass: "provider", error: "boom" },
 			{ ...base, outcome: "parked", parkClass: "rate-limit" },
+			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: null, parkProvider: "claude" },
+			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: null, parkWindow: "five_hour" },
+			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: null, parkProvider: "future-provider", parkWindow: null },
+			{ ...base, outcome: "parked", parkClass: "paused", parkReason: null, parkProvider: "claude", parkWindow: null },
 			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: null, blockedKind: "capability", reason: "overlap" },
 			{ ...base, outcome: "blocked", blockedKind: "capability" },
+			{ ...base, outcome: "blocked", blockedKind: "capability", reason: "blocked", parkProvider: "claude", parkWindow: null },
 			{ ...base, outcome: "blocked", blockedKind: "capability", reason: "blocked", failureClass: "provider", error: "overlap" },
 			{ ...base, outcome: "failed", error: "missing class" },
 			{ ...base, outcome: "failed", failureClass: "provider", error: "boom", parkClass: "rate-limit", parkReason: null },
@@ -82,8 +87,12 @@ describe("flow event writer", () => {
 
 		const event = writer.append({ ...base, outcome: "failed", failureClass: "provider", error: "valid" });
 		assert.equal(event.seq, 1);
+		// Legacy-compatible rate-limit park: rows written before #581 (or text-classified parks) carry
+		// no parkProvider/parkWindow and must stay valid; identity is all-or-nothing, not required.
+		const legacyPark = writer.append({ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: null } as unknown as FlowEventInput);
+		assert.equal(legacyPark.seq, 2);
 		const persisted = readFileSync(join(root, ".dev", "flow-events", `${writer.streamId}.jsonl`), "utf8");
-		assert.equal(persisted, `${JSON.stringify(event)}\n`);
+		assert.equal(persisted, `${JSON.stringify(event)}\n${JSON.stringify(legacyPark)}\n`);
 	});
 
 	it("owns immutable identities and contiguous writer-local sequence", () => {
@@ -333,6 +342,8 @@ describe("dual-format reader", () => {
 			if (type === "pelaggio.cycle-completed") Object.assign(value, { cycle: 1, item: "170", quick: false, steps: [], total_cost: 0, verdict: null, completed: true, error: null });
 			if (type === "pelaggio.run-started") Object.assign(value, { heartbeatMs: 15_000, mode: "watch" });
 			if (type === "pelaggio.run-finished") Object.assign(value, { outcome: "completed", exitCode: 0 });
+			if (type === "pelaggio.provider-usage") Object.assign(value, { provider: "claude", poolId: "k:0123456789ab", windows: [] });
+			if (type === "pelaggio.provider-limit") Object.assign(value, { provider: "claude", poolId: "k:0123456789ab", fault: "rate-limit", window: null });
 			return JSON.stringify(value);
 		});
 		writeFileSync(path, `${records.join("\n")}\n`);
@@ -478,5 +489,226 @@ describe("tailEventStream", () => {
 			tail.offset,
 			chunks.reduce((n, c) => n + Buffer.byteLength(c, "utf8"), 0),
 		);
+	});
+});
+
+describe("provider observation events", () => {
+	const poolId = "k:0123456789ab";
+	const usageEnvelope = (overrides: Record<string, unknown> = {}) =>
+		envelope("pelaggio.provider-usage", {
+			provider: "claude",
+			poolId,
+			windows: [{ name: "five_hour", channel: "reported", observedAt: 1_700_000_000_000, usedFraction: 0.47, resetsAt: 1_700_000_360_000 }],
+			...overrides,
+		});
+	const limitEnvelope = (overrides: Record<string, unknown> = {}) =>
+		envelope("pelaggio.provider-limit", {
+			provider: "claude",
+			poolId,
+			fault: "rate-limit",
+			window: "seven_day_opus",
+			resetsAt: 1_700_000_360_000,
+			parked: true,
+			...overrides,
+		});
+
+	it("round-trips known usage and limit payloads", () => {
+		assert.equal(decodeFlowEvent(usageEnvelope())?.type, "pelaggio.provider-usage");
+		assert.equal(decodeFlowEvent(limitEnvelope())?.type, "pelaggio.provider-limit");
+		assert.equal(decodeFlowEvent(limitEnvelope({ window: null, parked: undefined }))?.type, "pelaggio.provider-limit");
+	});
+
+	it("fails closed on malformed provider, channel, window, usedFraction, reset, token, and native shapes", () => {
+		assert.equal(decodeFlowEvent(usageEnvelope({ provider: "unknown" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolId: "not-a-digest" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolId: undefined })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ step: "not-a-step" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ step: "pr-review" }))?.type, "pelaggio.provider-usage");
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolId: "e:0123456789ab" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolId: "e:0123456789ab", poolIdChannel: "epoch" }))?.type, "pelaggio.provider-usage");
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolIdChannel: "epoch" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolIdChannel: "garbage" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolIdChannel: 42 })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ poolId: "e:0123456789ab", poolIdChannel: "garbage" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "five_hour", channel: "invented", observedAt: 1 }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "", channel: "reported", observedAt: 1 }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "x".repeat(65), channel: "reported", observedAt: 1 }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "five_hour", channel: "reported", observedAt: 1, usedFraction: 1.1 }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "five_hour", channel: "reported", observedAt: 1, usedFraction: -0.1 }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "five_hour", channel: "reported", observedAt: Number.NaN }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "five_hour", channel: "reported", observedAt: 1, reportedUtilization: 47 }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ windows: [{ name: "five_hour", channel: "reported", observedAt: 1, resetsAt: Number.POSITIVE_INFINITY }] })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ "gen_ai.usage.input_tokens": -1 })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ truncated: "nope" })), undefined);
+		assert.equal(decodeFlowEvent(limitEnvelope({ fault: "balance-exhausted" })), undefined);
+		assert.equal(decodeFlowEvent(limitEnvelope({ parked: false })), undefined);
+		assert.equal(decodeFlowEvent(limitEnvelope({ window: "" })), undefined);
+		assert.equal(decodeFlowEvent(usageEnvelope({ native: { too: { deep: { for: { the: { cap: 1 } } } } } })), undefined);
+	});
+
+	it("rejects an unknown type before payload decoding", () => {
+		const root = tempRoot();
+		const path = join(root, ".dev", "flow-events", "unknown-provider.jsonl");
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, `${JSON.stringify(envelope("pelaggio.not-a-type", { provider: "claude" }))}\n`);
+		const result = readEventLog({ root, cycleLogPath: null });
+		assert.equal(result.events.length, 0);
+		assert.equal(result.diagnostics.counts.unknownType, 1);
+		assert.equal(decodeFlowEvent(envelope("pelaggio.not-a-type")), undefined);
+	});
+
+	it("bounds oversized native data, scrubs secrets, retries once without native, and consumes one sequence number", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++] as string });
+		const planted = "planted-secret-value-xyz";
+		const previous = process.env.PELAGGIO_TEST_TOKEN;
+		process.env.PELAGGIO_TEST_TOKEN = planted;
+		try {
+			const blob = "x".repeat(1024);
+			const native = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [String(i), Array.from({ length: 32 }, () => `${planted}-${blob}`)]));
+			const warnings: string[] = [];
+			const event = appendProviderObservation(
+				writer,
+				{
+					observation: {
+						kind: "usage",
+						provider: "claude",
+						poolId,
+						windows: [{ name: "five_hour", channel: "reported", observedAt: 1, usedFraction: 0.47, resetsAt: 2 }],
+						native,
+					},
+				},
+				(msg) => warnings.push(msg),
+			);
+			assert.ok(event);
+			assert.equal(event.seq, 1);
+			assert.equal(event.type, "pelaggio.provider-usage");
+			assert.equal("truncated" in event ? event.truncated : undefined, "event-oversize");
+			assert.equal("native" in event && event.native !== undefined, false);
+			const persisted = readFileSync(join(root, ".dev", "flow-events", `${writer.streamId}.jsonl`), "utf8");
+			assert.equal(persisted.includes(planted), false);
+			assert.equal(persisted.split("\n").filter(Boolean).length, 1);
+			assert.equal(warnings.length, 0);
+			assert.ok(Buffer.byteLength(persisted, "utf8") <= MAX_FLOW_EVENT_BYTES);
+		} finally {
+			if (previous === undefined) delete process.env.PELAGGIO_TEST_TOKEN;
+			else process.env.PELAGGIO_TEST_TOKEN = previous;
+		}
+	});
+
+	it("scrubs planted secrets on a native payload that fits the byte cap", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++] as string });
+		const planted = "planted-secret-value-xyz";
+		const previous = process.env.PELAGGIO_TEST_TOKEN;
+		process.env.PELAGGIO_TEST_TOKEN = planted;
+		try {
+			const event = appendProviderObservation(
+				writer,
+				{
+					observation: {
+						kind: "limit",
+						provider: "claude",
+						poolId,
+						fault: "rate-limit",
+						window: "five_hour",
+						native: { status: "rejected", note: `token=${planted}` },
+					},
+				},
+				() => {
+					throw new Error("must not warn");
+				},
+			);
+			assert.equal(event?.type, "pelaggio.provider-limit");
+			assert.equal(event?.seq, 1);
+			const persisted = readFileSync(join(root, ".dev", "flow-events", `${writer.streamId}.jsonl`), "utf8");
+			assert.equal(persisted.includes(planted), false);
+			assert.match(persisted, /token=\[REDACTED\]/);
+		} finally {
+			if (previous === undefined) delete process.env.PELAGGIO_TEST_TOKEN;
+			else process.env.PELAGGIO_TEST_TOKEN = previous;
+		}
+	});
+
+	it("log-and-drops validation failures without retrying or consuming sequence", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++] as string });
+		const warnings: string[] = [];
+		const dropped = appendProviderObservation(
+			writer,
+			{
+				observation: {
+					kind: "usage",
+					provider: "claude",
+					poolId,
+					windows: [{ name: "five_hour", channel: "reported", observedAt: 1, usedFraction: 2 }],
+				},
+			},
+			(msg) => warnings.push(msg),
+		);
+		assert.equal(dropped, undefined);
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0] ?? "", /dropped/);
+		const ok = writer.append({ type: "pelaggio.claimed" });
+		assert.equal(ok.seq, 1);
+		assert.equal(
+			readFileSync(join(root, ".dev", "flow-events", `${writer.streamId}.jsonl`), "utf8")
+				.split("\n")
+				.filter(Boolean).length,
+			1,
+		);
+	});
+
+	it("never lets a forced append failure escape the telemetry helper", () => {
+		const warnings: string[] = [];
+		const writer: EventWriter = {
+			streamId: IDS[0] as string,
+			executionId: IDS[1] as string,
+			append() {
+				throw new Error("disk exploded");
+			},
+		};
+		const observation: ProviderObservation = { kind: "usage", provider: "claude", poolId, windows: [] };
+		assert.equal(
+			appendProviderObservation(writer, { observation }, (msg) => warnings.push(msg)),
+			undefined,
+		);
+		assert.match(warnings[0] ?? "", /disk exploded/);
+	});
+
+	it("other validation failures do not retry as event-oversize", () => {
+		const warnings: string[] = [];
+		let appends = 0;
+		const writer: EventWriter = {
+			streamId: IDS[0] as string,
+			executionId: IDS[1] as string,
+			append(_input: FlowEventInput): FlowEvent {
+				appends++;
+				throw new Error("Invalid flow event");
+			},
+		};
+		assert.equal(
+			appendProviderObservation(writer, { observation: { kind: "usage", provider: "claude", poolId, windows: [], native: { status: "allowed" } } }, (msg) => warnings.push(msg)),
+			undefined,
+		);
+		assert.equal(appends, 1);
+		assert.equal(warnings.length, 1);
+	});
+
+	it("truncates a three-byte native string on a UTF-8 character boundary", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++] as string });
+		const event = appendProviderObservation(writer, { observation: { kind: "usage", provider: "claude", poolId, windows: [], native: { note: "€".repeat(342) } } }, () => {
+			throw new Error("must not warn");
+		});
+		assert.equal(event?.type, "pelaggio.provider-usage");
+		const note = event && "native" in event ? event.native?.note : undefined;
+		assert.equal(typeof note, "string");
+		assert.equal(Buffer.byteLength(String(note), "utf8"), 1023);
+		assert.equal(String(note).includes("�"), false);
 	});
 });
