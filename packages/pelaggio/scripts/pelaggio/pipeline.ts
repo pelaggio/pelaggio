@@ -18,6 +18,7 @@ import { readFreshnessGateRecord, writeFreshnessGateRecord } from "./freshness-g
 import { checkpoint, listWorktrees as listWorktreesDefault, quarantineCheckpoint, readGitBinding, resolveWorktree } from "./git.js";
 import { classifyParkReason, isTransientSdkError } from "./outcome-classify.js";
 import { runPrReviewGate } from "./pr-review-gate.js";
+import { verifyOrRepairAuthoringReviewHostDependencies } from "./review/seat-deps.js";
 import { cleanupAuthoringReviewSeatsForSha, prepareAuthoringReviewSeat } from "./review/seats.js";
 import { getRoadmapSource, type RoadmapSource } from "./roadmap/index.js";
 import { preparePrShipFreshness, verifyPrShipFreshness } from "./ship/freshness.js";
@@ -119,6 +120,8 @@ export interface PipelineDeps {
 	/** Test seam: per-invocation cold seats around pre-flight. */
 	prepareAuthoringReviewSeat?: typeof prepareAuthoringReviewSeat;
 	cleanupAuthoringReviewSeatsForSha?: typeof cleanupAuthoringReviewSeatsForSha;
+	/** Fail-closed canonical-link verification before the ship-candidate typecheck. */
+	verifyOrRepairAuthoringReviewHostDependencies?: typeof verifyOrRepairAuthoringReviewHostDependencies;
 	/** Mark a one-shot findings task consumed after implement succeeds. The orchestrator uses
 	 *  this to retain the revision lease if a later step parks without re-injecting findings. */
 	onReviewFindingsConsumed?: (itemId: string) => void;
@@ -213,6 +216,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	const writeFreshnessGateRecordFn = deps.writeFreshnessGateRecord ?? writeFreshnessGateRecord;
 	const prepareAuthoringReviewSeatFn = deps.prepareAuthoringReviewSeat ?? prepareAuthoringReviewSeat;
 	const cleanupAuthoringReviewSeatsForShaFn = deps.cleanupAuthoringReviewSeatsForSha ?? cleanupAuthoringReviewSeatsForSha;
+	const verifyOrRepairAuthoringReviewHostDependenciesFn = deps.verifyOrRepairAuthoringReviewHostDependencies ?? verifyOrRepairAuthoringReviewHostDependencies;
 	// Per-cycle challenge for execution receipts (#188). Held in process memory only;
 	// only challengeDigest is persisted on receipts / cycle provenance.
 	const cycleChallenge = randomBytes(32);
@@ -496,12 +500,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 	const shouldRun = (s: PipelineStep): boolean => stepIndex(startFrom as PipelineStep) <= stepIndex(s);
 
-	function parkExit(reason?: string): CycleResult | null {
+	function parkExit(reason?: string, disposition?: CycleDisposition): CycleResult | null {
 		if (!parkSignal.parked && !reason) return null;
 		if (reason) parkReasonDetail = reason;
 		if (worktree) checkpoint(worktree, reason ? "review-loop park" : "rate-limit park");
 		log(`⏸ parked (${reason ?? parkSignal.limitType})`);
-		return finishParked();
+		return finishParked(disposition ? { disposition } : {});
 	}
 
 	function quarantineExit(opts: { blockedKind: BlockedKind; reason: string; step: Step } & Pick<CycleResult, "verdict">): CycleResult {
@@ -711,6 +715,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		writeFreshnessGateRecord: writeFreshnessGateRecordFn,
 		prepareAuthoringReviewSeat: prepareAuthoringReviewSeatFn,
 		cleanupAuthoringReviewSeatsForSha: cleanupAuthoringReviewSeatsForShaFn,
+		verifyOrRepairAuthoringReviewHostDependencies: verifyOrRepairAuthoringReviewHostDependenciesFn,
 	};
 
 	if (shouldRun("plan")) {

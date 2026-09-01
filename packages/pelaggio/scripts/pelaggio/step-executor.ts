@@ -353,28 +353,33 @@ export function createStepExecutor(env: StepExecutorEnv): StepExecutor {
 					}
 				})();
 
-				providerResult = await runStep(
-					name,
-					prompt,
-					{
-						cwd,
-						profile,
-						trace: flags.trace,
-						itemId: itemId ?? undefined,
-						parkSignal: parkSignalOverride ?? parkSignal,
-						...(workspaceAccess ? { workspaceAccess } : {}),
-						...(executionOverride ? { executionOverride } : {}),
-						...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
-						signal: stepAbort.signal,
-						...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
-						foreignRootDenial,
-						...(onChildSpawn ? { onChildSpawn } : {}),
-					},
-					emit,
-				);
-				midStepSettled = true;
-				settledController.abort();
-				await probeLoop;
+				// The probe loop is retired in a finally: a rejecting runStep must not leave
+				// it re-arming its delay timer forever (the process would never exit).
+				try {
+					providerResult = await runStep(
+						name,
+						prompt,
+						{
+							cwd,
+							profile,
+							trace: flags.trace,
+							itemId: itemId ?? undefined,
+							parkSignal: parkSignalOverride ?? parkSignal,
+							...(workspaceAccess ? { workspaceAccess } : {}),
+							...(executionOverride ? { executionOverride } : {}),
+							...(maxTurnsOverride !== undefined ? { maxTurnsOverride } : {}),
+							signal: stepAbort.signal,
+							...(mainCheckoutObserver ? { mainCheckoutObserver } : {}),
+							foreignRootDenial,
+							...(onChildSpawn ? { onChildSpawn } : {}),
+						},
+						emit,
+					);
+				} finally {
+					midStepSettled = true;
+					settledController.abort();
+					await probeLoop;
+				}
 			}
 
 			if (confinementRoots.length === 0 && confinementAuditError === undefined) {

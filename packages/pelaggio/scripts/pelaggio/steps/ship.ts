@@ -13,6 +13,7 @@ import { classifyFailure, classifyOutcome } from "../cycle-outcome.js";
 import type { DriverAssignmentState } from "../driver-assignment.js";
 import { getArtifactHeadSha, getHeadSha, hasDeliverableCommits } from "../git.js";
 import type { PrReviewGateResult } from "../pr-review-gate.js";
+import type { AuthoringReviewHostDependencyRepairResult } from "../review/seat-deps.js";
 import { cleanupShipBodyFile, parseShipDecisionEffect, shipBodyFile } from "../ship/decision.js";
 import { captureShipState, type PrShipFreshnessResult, parseShipMerged, verifyConflictRepairComplete, verifyShipLanded } from "../ship/freshness.js";
 import { commitStrayBookkeeping } from "../ship/index.js";
@@ -55,7 +56,8 @@ type ShipDepNames =
 	| "readFreshnessGateRecord"
 	| "writeFreshnessGateRecord"
 	| "prepareAuthoringReviewSeat"
-	| "cleanupAuthoringReviewSeatsForSha";
+	| "cleanupAuthoringReviewSeatsForSha"
+	| "verifyOrRepairAuthoringReviewHostDependencies";
 /** Exactly the cycle helpers `runShip` calls. */
 export type ShipDeps = Pick<CycleHelpers, ShipDepNames> & {
 	/** Run options carry the ship target and callbacks, so they ride as a Dep. */
@@ -87,7 +89,21 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		writeFreshnessGateRecord,
 		prepareAuthoringReviewSeat,
 		cleanupAuthoringReviewSeatsForSha,
+		verifyOrRepairAuthoringReviewHostDependencies,
 	} = helpers;
+	const hostDependencyParkExit = (reason: string): CycleResult => parkExit(reason, "halt-campaign")!;
+	const hostDependencyParkReason = (result: Extract<AuthoringReviewHostDependencyRepairResult, { status: "park" }>, context: string): string =>
+		[
+			`authoring-review host dependency restoration parked ${context} (${result.reason}): ${result.detail}`,
+			`preserved state: claim worktree ${worktree} will be checkpointed; MAIN links remain at the last repair state`,
+			`resume: pnpm pelaggio --resume ${itemId}`,
+		].join("\n");
+	const hostDependencyVerificationFailure = (detail: string, context: string): string =>
+		[
+			`authoring-review host dependency restoration parked ${context} (verification-failed): ${detail}`,
+			`preserved state: claim worktree ${worktree} will be checkpointed; MAIN links remain at the last repair state`,
+			`resume: pnpm pelaggio --resume ${itemId}`,
+		].join("\n");
 	function isAuthorActionablePreflight(review: PrReviewGateResult): boolean {
 		return review.gate === "block" && review.ok && (review.survivorCount ?? 0) > 0 && (review.agreement === "consensus-block" || review.agreement === "disagreement");
 	}
@@ -192,6 +208,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 			});
 		};
 		let outcome: { kind: "review"; review: PrReviewGateResult };
+		let cleanupParkReason: string | undefined;
 		try {
 			// #424 gate fix: the diff source handed to the gate — the harness inspection diff
 			// AND the seats' trusted local context (`git -C <diffCwd> …`) — is a detached,
@@ -226,17 +243,29 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 				review: { gate: "block", body: `pre-flight threw: ${message}`, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "error_crash", agreement: "invalid" },
 			};
 		} finally {
-			for (const prepared of preparedShas) cleanupAuthoringReviewSeatsForSha(mainRepo, prepared);
+			for (const prepared of preparedShas) {
+				try {
+					const repair = await cleanupAuthoringReviewSeatsForSha(mainRepo, prepared);
+					if (repair.status === "park") cleanupParkReason ??= hostDependencyParkReason(repair, `after pre-flight seat teardown for ${prepared.slice(0, 12)}`);
+				} catch (error) {
+					cleanupParkReason ??= hostDependencyVerificationFailure(error instanceof Error ? error.message : String(error), `after pre-flight seat teardown for ${prepared.slice(0, 12)}`);
+				}
+			}
 		}
 		// #424 gate fix: deterministic clean-commit guard (see preflightHeadBefore above).
 		// Checked on every exit from the gate — including the thrown-advisory path — and
-		// outranks the advisory outcome: a mutated tree must never proceed to ship.
+		// outranks the advisory outcome AND cleanup restoration: a park checkpoint must
+		// never preserve reviewer-authored claim-tree state.
 		const preflightHeadAfter = getHeadSha(worktree!);
 		if (preflightHeadAfter !== preflightHeadBefore) {
-			const detail = `claim worktree HEAD moved during pre-flight (${preflightHeadBefore.slice(0, 12)} → ${preflightHeadAfter?.slice(0, 12) ?? "unreadable"})`;
+			const detail = [
+				`claim worktree HEAD moved during pre-flight (${preflightHeadBefore.slice(0, 12)} → ${preflightHeadAfter?.slice(0, 12) ?? "unreadable"})`,
+				...(cleanupParkReason ? [`cleanup restoration also parked: ${cleanupParkReason}`] : []),
+			].join("\n");
 			log(`⚠ ${detail} — refusing to ship`);
 			return { kind: "terminal", cycleResult: finishFailed(detail, "verification", { itemId, cost: cost() }) };
 		}
+		if (cleanupParkReason) return { kind: "terminal", cycleResult: hostDependencyParkExit(cleanupParkReason) };
 		return outcome;
 	}
 
@@ -261,12 +290,24 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 
 	// PR-only pre-ship tail (#424): freshness + cold pre-flight. Not a PipelineStep.
 	if (!opts.dryRun && (target.name === "pull-request" || target.name === "auto-merge-pr")) {
+		const verifyMainLinksBeforeTypecheck = async (context: string): Promise<CycleResult | null> => {
+			try {
+				const repair = await verifyOrRepairAuthoringReviewHostDependencies(mainRepo);
+				if (repair.status === "park") return hostDependencyParkExit(hostDependencyParkReason(repair, context));
+				if (repair.status === "repaired") log(`repaired ${repair.repaired.length} lockfile-derived MAIN dependency link(s) ${context}`);
+				return null;
+			} catch (error) {
+				return hostDependencyParkExit(hostDependencyVerificationFailure(error instanceof Error ? error.message : String(error), context));
+			}
+		};
 		// Deterministic freshness gates (typecheck:ratchet backstop + Git verification), with
 		// completion recorded per head SHA (#424 review): a gate failure ends the cycle AFTER
 		// the freshness merge is already committed, so a resume classifies the branch
 		// `up-to-date` — gate completion must be a recorded fact, never inferred from that
 		// state, or the resume would skip the very gates that failed.
 		const runFreshnessGates = async (context: string, fetchedOriginMainOid: string): Promise<CycleResult | null> => {
+			const repairFailure = await verifyMainLinksBeforeTypecheck(context);
+			if (repairFailure) return repairFailure;
 			const typecheck = await runTypecheckRatchet(worktree!);
 			if (!typecheck.ok) {
 				const detail = typecheck.detail ? `: ${typecheck.detail}` : "";
@@ -366,6 +407,8 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 			// pre-flight author revision — the earlier freshness-gate run bound to the
 			// PRE-revision head, so without this a type-breaking revision still opens the PR.
 			// Run it before spending the recheck's review budget.
+			const repairFailure = await verifyMainLinksBeforeTypecheck("after pre-flight revision");
+			if (repairFailure) return repairFailure;
 			const revisionTypecheck = await runTypecheckRatchet(worktree!);
 			if (!revisionTypecheck.ok) {
 				const detail = revisionTypecheck.detail ? `: ${revisionTypecheck.detail}` : "";

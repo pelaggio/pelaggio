@@ -126,6 +126,7 @@ describe("classifyCycleDisposition", () => {
 	});
 
 	it("passes through explicit dispositions", () => {
+		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "parked", parkClass: "unclassified", parkReason: "repair failed", disposition: "halt-campaign" }, recoverable), "halt-campaign");
 		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "blocked", blockedKind: "unclassified", reason: "x", disposition: "quarantine-and-continue" }, recoverable), "quarantine-and-continue");
 		assert.equal(classifyCycleDisposition({ itemId: "1", cost: 0, outcome: "blocked", blockedKind: "unclassified", reason: "x", disposition: "halt-campaign" }, recoverable), "halt-campaign");
 	});
