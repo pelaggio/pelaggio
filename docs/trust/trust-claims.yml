@@ -31,14 +31,14 @@ claims:
     claim: "Known secret environment variables are not interpolated into prompts or structured run logs."
     status: guarantee
     applies_to: ">=0.1.0"
-    mechanism: "Prompts are built from skill bodies + args (expandSkill/buildPrompt); provider and pipeline prompt/log paths do not read known secret env vars. The .jsonl log stores cycle metadata plus a bounded outputTail."
-    evidence_command: "grep -En 'ANTHROPIC_API_KEY|LINEAR_API_KEY|GH_TOKEN|CONTROL_PLANE_TOKEN' packages/pelaggio/scripts/pelaggio/step-runner.ts packages/pelaggio/scripts/pelaggio/providers/claude.ts packages/pelaggio/scripts/pelaggio/providers/codex.ts packages/pelaggio/scripts/pelaggio/pipeline.ts # expect: none"
+    mechanism: "Prompts are built from skill bodies + args (expandSkill/buildPrompt); provider and pipeline prompt/log paths do not read known secret env vars. Credential env/file reads are confined to the single providers/claude-pool-id.ts chokepoint, which derives only non-secret digests (the poolId auth-realm discriminator) and never returns raw credential values. The .jsonl log stores cycle metadata plus a bounded outputTail."
+    evidence_command: "grep -En 'ANTHROPIC_API_KEY|LINEAR_API_KEY|GH_TOKEN|CONTROL_PLANE_TOKEN' packages/pelaggio/scripts/pelaggio/step-runner.ts packages/pelaggio/scripts/pelaggio/pipeline.ts packages/pelaggio/scripts/pelaggio/flow-events.ts packages/pelaggio/scripts/pelaggio/providers/*.ts | grep -v 'providers/claude-pool-id.ts:' # expect: none"
     test_file: "packages/pelaggio/scripts/pelaggio/__tests__/skills.test.ts"
     failure_mode: "n/a — secrets are never read into these paths"
-    known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; as of TC-014 that sink is secret-scrubbed before write, but a novel credential format the scrubber does not recognize could still land there."
+    known_limits: "Verbose (--verbose) transcripts in .dev/*.log (gitignored) capture raw child stdout; as of TC-014 that sink is secret-scrubbed before write, but a novel credential format the scrubber does not recognize could still land there. providers/claude-pool-id.ts intentionally reads credential material to derive the non-secret poolId digest; the evidence command allowlists that one module and fails if any other audited provider/pipeline/log path names a known secret env var."
     standards: ["OWASP-LLM02", "ASVS-V6"]
     adr: null
-    last_verified: "2026-07-07"
+    last_verified: "2026-08-31"
 
   - id: TC-002
     claim: "No telemetry. Nothing phones home — there's no analytics to turn off because there's none to begin with."

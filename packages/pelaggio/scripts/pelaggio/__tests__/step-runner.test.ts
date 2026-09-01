@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import { closeSync, mkdtempSync, openSync, readSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
+import { buildClaudeSeatEnv } from "../claude-seat.js";
 import { CONFIG } from "../config.js";
 import type { MainCheckoutDeltaObserver, MainCheckoutDeltaResult } from "../confinement/roots.js";
+import { createEventWriter, readEventLog } from "../flow-events.js";
+import { claudeAccountRealmId } from "../providers/claude-pool-id.js";
 import { codexProvider } from "../providers/codex.js";
 import { grokCapabilities } from "../providers/grok.js";
 import { OPENCODE_CAPABILITIES, opencodeProvider } from "../providers/opencode.js";
@@ -15,12 +21,16 @@ import {
 	classifyClaudeTerminalText,
 	claudeProvider,
 	composeSystemAppend,
+	createClaudeRateLimitObservationDeduper,
+	createProviderObservationHandler,
 	createStepTextProjection,
+	deriveClaudePoolId,
 	endMainCheckoutAttribution,
 	getProvider,
 	isClaudeMaxTurnsError,
 	isWorktreePath,
 	projectClaudeAssistantBlocks,
+	projectClaudeRateLimitInfo,
 	runStep,
 } from "../step-runner.js";
 import type { ProviderName } from "../types.js";
@@ -58,6 +68,17 @@ describe("provider test guard (#420)", () => {
 	});
 });
 
+describe("provider observation dispatcher funnel", () => {
+	it("drops a mismatched provider without relying on the pipeline mock provider rewrite", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-provider-mismatch-"));
+		const warnings: string[] = [];
+		const handler = createProviderObservationHandler({ writer: createEventWriter({ root }), provider: "claude", step: "pr-review", model: "claude-test", log: (message) => warnings.push(message) });
+		handler({ kind: "usage", provider: "codex", poolId: "k:0123456789ab", windows: [] });
+		assert.equal(readEventLog({ root, cycleLogPath: null }).events.length, 0);
+		assert.match(warnings[0] ?? "", /provider mismatch \(codex != claude\)/);
+	});
+});
+
 describe("projectClaudeAssistantBlocks", () => {
 	it("projects text and tool_use input and ignores other block types", () => {
 		const projection = createStepTextProjection({ assistantSeparator: "\n" });
@@ -76,6 +97,220 @@ describe("projectClaudeAssistantBlocks", () => {
 		assert.match(fullText, /say hi/);
 		assert.equal(fullText.includes("secret-output"), false);
 		assert.equal(fullText.includes("FILE_BODY"), false);
+	});
+});
+
+describe("projectClaudeRateLimitInfo", () => {
+	const observedAt = 1_700_000_000_123;
+
+	it("maps an allowed update onto one reported window, carrying the SDK's fractional utilization and converting resetsAt seconds to ms", () => {
+		const observation = projectClaudeRateLimitInfo(
+			{
+				status: "allowed",
+				rateLimitType: "five_hour",
+				utilization: 0.47,
+				resetsAt: 1_700_000_360,
+				surpassedThreshold: 80,
+			},
+			observedAt,
+		);
+		assert.equal(observation.kind, "usage");
+		if (observation.kind !== "usage") return;
+		assert.equal(observation.provider, "claude");
+		assert.deepEqual(observation.windows, [{ name: "five_hour", channel: "reported", observedAt, usedFraction: 0.47, resetsAt: 1_700_000_360_000 }]);
+		assert.equal(observation.native?.utilization, 0.47);
+		assert.equal(observation.native?.status, "allowed");
+		assert.equal(observation.native?.surpassedThreshold, 80);
+		assert.equal("canUserPurchaseCredits" in (observation.native ?? {}), false);
+		assert.equal("hasChargeableSavedPaymentMethod" in (observation.native ?? {}), false);
+		assert.equal("uuid" in (observation.native ?? {}), false);
+	});
+
+	it("maps allowed_warning the same as usage, with its own observedAt", () => {
+		const observation = projectClaudeRateLimitInfo({ status: "allowed_warning", rateLimitType: "seven_day_opus", utilization: 0.9, resetsAt: 9 }, observedAt);
+		assert.equal(observation.kind, "usage");
+		if (observation.kind !== "usage") return;
+		assert.equal(observation.windows[0]?.name, "seven_day_opus");
+		assert.equal(observation.windows[0]?.observedAt, observedAt);
+		assert.equal(observation.windows[0]?.usedFraction, 0.9);
+	});
+
+	it("does not fabricate a window when rateLimitType is missing", () => {
+		const observation = projectClaudeRateLimitInfo({ status: "allowed", utilization: 10 }, observedAt);
+		assert.equal(observation.kind, "usage");
+		if (observation.kind !== "usage") return;
+		assert.deepEqual(observation.windows, []);
+	});
+
+	it("maps rejected/no-overage to a parked limit observation", () => {
+		const observation = projectClaudeRateLimitInfo({ status: "rejected", rateLimitType: "seven_day_opus", resetsAt: 42, utilization: 1 }, observedAt, true);
+		assert.equal(observation.kind, "limit");
+		if (observation.kind !== "limit") return;
+		assert.equal(observation.fault, "rate-limit");
+		assert.equal(observation.window, "seven_day_opus");
+		assert.equal(observation.resetsAt, 42_000);
+		assert.equal(observation.parked, true);
+		assert.equal(observation.native?.utilization, 1);
+	});
+
+	it("maps rejected/overage-allowed to a non-parking limit", () => {
+		const observation = projectClaudeRateLimitInfo({ status: "rejected", rateLimitType: "five_hour", overageStatus: "allowed", resetsAt: 42 }, observedAt, false);
+		assert.equal(observation.kind, "limit");
+		if (observation.kind !== "limit") return;
+		assert.equal(observation.parked, undefined);
+		assert.equal(observation.window, "five_hour");
+	});
+
+	it("clamps normalized utilization while retaining the raw value only in native detail", () => {
+		const high = projectClaudeRateLimitInfo({ status: "allowed", rateLimitType: "five_hour", utilization: 1.5 }, observedAt);
+		const low = projectClaudeRateLimitInfo({ status: "allowed", rateLimitType: "five_hour", utilization: -0.1 }, observedAt);
+		assert.equal(high.kind === "usage" ? high.windows[0]?.usedFraction : undefined, 1);
+		assert.equal(high.native?.utilization, 1.5);
+		assert.equal(low.kind === "usage" ? low.windows[0]?.usedFraction : undefined, 0);
+		assert.equal(low.native?.utilization, -0.1);
+	});
+
+	it("writes one record for ten consecutive unchanged usage updates and never suppresses rejections", () => {
+		const allowed = { status: "allowed" as const, rateLimitType: "five_hour" as const, utilization: 47, resetsAt: 42 };
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-provider-dedup-"));
+		const handler = createProviderObservationHandler({ writer: createEventWriter({ root }), provider: "claude", step: "pr-review", model: "claude-test" });
+		const shouldEmit = createClaudeRateLimitObservationDeduper();
+		for (let index = 0; index < 10; index++) {
+			if (shouldEmit(allowed)) handler(projectClaudeRateLimitInfo(allowed, index, false, "k:0123456789ab"));
+		}
+		assert.equal(readEventLog({ root, cycleLogPath: null }).events.length, 1);
+		assert.equal(shouldEmit({ ...allowed, resetsAt: 43 }), true);
+		assert.equal(shouldEmit({ ...allowed, status: "allowed_warning" }), true);
+		assert.equal(shouldEmit({ ...allowed, surpassedThreshold: 80 }), true);
+		assert.equal(shouldEmit({ status: "rejected", rateLimitType: "five_hour", utilization: 47, resetsAt: 42 }), true);
+		assert.equal(shouldEmit({ status: "rejected", rateLimitType: "five_hour", utilization: 47, resetsAt: 42 }), true);
+	});
+
+	it("derives stable, non-secret pool IDs that distinguish credentials and OAuth accounts", () => {
+		const credential = "sk-ant-api03-planted-secret-value";
+		const envKeyA = deriveClaudePoolId({ ANTHROPIC_API_KEY: credential });
+		const envKeyAAgain = deriveClaudePoolId({ ANTHROPIC_API_KEY: credential });
+		const envKeyB = deriveClaudePoolId({ ANTHROPIC_API_KEY: "different-secret" });
+		const oauthAccount = deriveClaudePoolId({}, "oauth", "account-a");
+		assert.match(envKeyA, /^k:[0-9a-f]{12}$/);
+		assert.equal(envKeyA, envKeyAAgain);
+		assert.notEqual(envKeyA, envKeyB);
+		assert.equal(credential.includes(envKeyA), false);
+		assert.equal(envKeyA.includes(credential), false);
+		assert.equal(oauthAccount, deriveClaudePoolId({}, "oauth", "account-a"));
+		assert.match(oauthAccount, /^a:[0-9a-f]{12}$/);
+		assert.notEqual(oauthAccount, deriveClaudePoolId({}, "oauth", "account-b"));
+
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-pool-secret-"));
+		const handler = createProviderObservationHandler({ writer: createEventWriter({ root }), provider: "claude", step: "implement", model: "claude-test" });
+		handler(projectClaudeRateLimitInfo({ status: "allowed", rateLimitType: "five_hour" }, 1, false, envKeyA));
+		assert.equal(JSON.stringify(readEventLog({ root, cycleLogPath: null }).events).includes(credential), false);
+	});
+
+	it("invalidates the OAuth pool when the subscription tier changes on the same account", () => {
+		const proRealm = claudeAccountRealmId({ organization: "org-1", subscriptionType: "pro" });
+		const maxRealm = claudeAccountRealmId({ organization: "org-1", subscriptionType: "max" });
+		assert.ok(proRealm && maxRealm);
+		assert.notEqual(proRealm, maxRealm);
+		assert.notEqual(deriveClaudePoolId({}, "oauth", proRealm), deriveClaudePoolId({}, "oauth", maxRealm));
+		assert.equal(claudeAccountRealmId({ organization: "org-1", subscriptionType: "pro" }), proRealm);
+		assert.equal(claudeAccountRealmId({ email: "a@b.c" }), claudeAccountRealmId({ email: "a@b.c", subscriptionType: undefined }));
+		assert.equal(claudeAccountRealmId({}), undefined);
+	});
+
+	it("prefers the spawned OAuth profile over stale ambient account metadata when accountInfo is unavailable", () => {
+		const staleAccount = { CLAUDE_CODE_ACCOUNT_UUID: "stale-account" };
+		const profileA = deriveClaudePoolId({ ...staleAccount, CLAUDE_CODE_OAUTH_TOKEN: "oauth-profile-a" }, "oauth");
+		const profileB = deriveClaudePoolId({ ...staleAccount, CLAUDE_CODE_OAUTH_TOKEN: "oauth-profile-b" }, "oauth");
+		assert.match(profileA, /^a:[0-9a-f]{12}$/);
+		assert.notEqual(profileA, profileB);
+		assert.equal(deriveClaudePoolId({ ...staleAccount, CLAUDE_CODE_OAUTH_TOKEN: "oauth-profile-b" }, "oauth", "live-account"), deriveClaudePoolId({}, "oauth", "live-account"));
+	});
+
+	it("derives the OAuth pool from the filtered seat environment", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-pool-seat-env-"));
+		const descriptorPath = join(root, "stale-host-profile");
+		writeFileSync(descriptorPath, "stale-host-profile");
+		const descriptor = openSync(descriptorPath, "r");
+		const unfiltered = {
+			PATH: "/usr/bin",
+			HOME: "/home/agent",
+			CLAUDE_CODE_OAUTH_TOKEN: "active-seat-profile",
+			CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: String(descriptor),
+			CLAUDE_CODE_HOST_CREDS_FILE: "/stale/host-profile.json",
+			CLAUDE_CODE_ACCOUNT_UUID: "stale-host-account",
+		};
+		try {
+			const childEnv = buildClaudeSeatEnv(unfiltered, "pr-review");
+
+			assert.equal(childEnv.CLAUDE_CODE_OAUTH_TOKEN, "active-seat-profile");
+			assert.equal(childEnv.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR, undefined);
+			assert.equal(childEnv.CLAUDE_CODE_HOST_CREDS_FILE, undefined);
+			assert.equal(childEnv.CLAUDE_CODE_ACCOUNT_UUID, undefined);
+			assert.notEqual(deriveClaudePoolId(unfiltered, "oauth"), deriveClaudePoolId(childEnv, "oauth"));
+			assert.equal(deriveClaudePoolId(childEnv, "oauth"), deriveClaudePoolId({ PATH: "/usr/bin", HOME: "/home/agent", CLAUDE_CODE_OAUTH_TOKEN: "active-seat-profile" }, "oauth"));
+		} finally {
+			closeSync(descriptor);
+		}
+	});
+
+	it("marks unresolved auth pool IDs as epoch-channel observations", () => {
+		const poolId = deriveClaudePoolId({}, "oauth");
+		assert.match(poolId, /^e:[0-9a-f]{12}$/);
+		assert.equal(poolId, deriveClaudePoolId({}, "oauth"));
+		assert.notEqual(deriveClaudePoolId({ CLAUDE_CONFIG_DIR: "/profiles/one" }, "oauth"), deriveClaudePoolId({ CLAUDE_CONFIG_DIR: "/profiles/two" }, "oauth"));
+		const observation = projectClaudeRateLimitInfo({ status: "allowed", rateLimitType: "five_hour" }, 1, false, poolId);
+		assert.equal(observation.poolIdChannel, "epoch");
+	});
+
+	it("derives auth-config epochs from active Foundry, AWS, and Vertex realms", () => {
+		const realms: Array<[NodeJS.ProcessEnv, NodeJS.ProcessEnv]> = [
+			[
+				{ CLAUDE_CODE_USE_FOUNDRY: "1", ANTHROPIC_FOUNDRY_API_KEY: "foundry-a", ANTHROPIC_API_KEY: "stale-direct-key" },
+				{ CLAUDE_CODE_USE_FOUNDRY: "1", ANTHROPIC_FOUNDRY_API_KEY: "foundry-b", ANTHROPIC_API_KEY: "stale-direct-key" },
+			],
+			[
+				{ CLAUDE_CODE_USE_BEDROCK: "true", AWS_ACCESS_KEY_ID: "aws-account-a", AWS_SECRET_ACCESS_KEY: "aws-secret" },
+				{ CLAUDE_CODE_USE_BEDROCK: "true", AWS_ACCESS_KEY_ID: "aws-account-b", AWS_SECRET_ACCESS_KEY: "aws-secret" },
+			],
+			[
+				{ CLAUDE_CODE_USE_VERTEX: "yes", GOOGLE_APPLICATION_CREDENTIALS: "/credentials/vertex-a.json", ANTHROPIC_VERTEX_PROJECT_ID: "project" },
+				{ CLAUDE_CODE_USE_VERTEX: "yes", GOOGLE_APPLICATION_CREDENTIALS: "/credentials/vertex-b.json", ANTHROPIC_VERTEX_PROJECT_ID: "project" },
+			],
+		];
+		for (const [left, right] of realms) {
+			const leftPool = deriveClaudePoolId(left, "user");
+			assert.match(leftPool, /^e:[0-9a-f]{12}$/);
+			assert.equal(leftPool, deriveClaudePoolId(left, "user"));
+			assert.notEqual(leftPool, deriveClaudePoolId(right, "user"));
+			assert.equal(leftPool.startsWith("k:"), false);
+		}
+	});
+
+	it("bumps a file-backed auth epoch when credential contents change in place", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-pool-vertex-"));
+		const credentialPath = join(root, "adc.json");
+		const env = { CLAUDE_CODE_USE_VERTEX: "1", GOOGLE_APPLICATION_CREDENTIALS: credentialPath };
+		writeFileSync(credentialPath, '{"account":"vertex-a"}');
+		const first = deriveClaudePoolId(env, "user");
+		writeFileSync(credentialPath, '{"account":"vertex-b"}');
+		assert.notEqual(first, deriveClaudePoolId(env, "user"));
+	});
+
+	it("derives API-key pool identity from the SDK credential file descriptor without consuming it", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-pool-fd-"));
+		const path = join(root, "credential");
+		const credential = "descriptor-secret";
+		writeFileSync(path, credential);
+		const fd = openSync(path, "r");
+		try {
+			assert.equal(deriveClaudePoolId({ CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: String(fd) }), deriveClaudePoolId({ ANTHROPIC_API_KEY: credential }));
+			const bytes = Buffer.alloc(credential.length);
+			assert.equal(readSync(fd, bytes, 0, bytes.length, null), credential.length);
+			assert.equal(bytes.toString("utf8"), credential);
+		} finally {
+			closeSync(fd);
+		}
 	});
 });
 

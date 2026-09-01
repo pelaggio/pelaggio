@@ -7,6 +7,7 @@ import { after, before, describe, it, mock } from "node:test";
 import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
 import { appendReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
 import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
+import { createEventWriter, readEventLog } from "../flow-events.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { runOrchestrator } from "../orchestrator.js";
 import { archiveReviewFindingsAfterImplement, defaultTypecheckRatchet, type RunStepFn, runPipeline } from "../pipeline.js";
@@ -2801,20 +2802,32 @@ describe("runPipeline — rate-limit park preserves state", () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
 		const logs: Array<Record<string, unknown>> = [];
+		const writer = createEventWriter({ root: worktree });
+		const observedAt = 1_700_000_000_000;
+		const poolId = "k:0123456789ab";
 		const { runStep, calls } = createMockRunStep(
 			{
-				plan: { ok: true },
+				plan: {
+					ok: true,
+					observation: {
+						kind: "usage",
+						provider: "claude",
+						poolId,
+						windows: [{ name: "five_hour", channel: "reported", observedAt, usedFraction: 0.47, resetsAt: observedAt + 3_600_000 }],
+					},
+				},
 				"shakedown-plan": {
 					ok: false,
 					subtype: "error_rate_limit",
 					writes: { "wip.txt": "partial work" },
-					park: { parked: true, limitType: "5h", resetsAt: Date.now() + 3_600_000 },
+					park: { parked: true, limitType: "five_hour", resetsAt: Date.now() + 3_600_000, rateLimit: { provider: "claude", window: "five_hour" } },
+					observation: { kind: "limit", provider: "claude", poolId, fault: "rate-limit", window: "five_hour", parked: true, resetsAt: observedAt + 3_600_000 },
 				},
 			},
 			parkSignal,
 		);
 
-		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+		const result = await runPipeline({ ...baseOpts(worktree), eventWriter: writer }, parkSignal, baseFlags, {
 			runStep,
 			mainRepo: worktree,
 			listWorktrees: () => [],
@@ -2836,11 +2849,88 @@ describe("runPipeline — rate-limit park preserves state", () => {
 			`expected rate-limit park commit; got:\n${msgs.join("\n")}`,
 		);
 
-		assert.equal(logs[0].outcome, "parked");
-		assert.equal(logs[0].parkReason, "5h");
+		assert.equal(logs[0]?.outcome, "parked");
+		assert.equal(logs[0]?.parkReason, "five_hour");
 		// Signal-driven park: the structured limitType classifies it, and no review-loop
 		// reason is present to override it.
 		assert.equal(logs[0]?.parkClass, "rate-limit");
+		assert.equal(logs[0]?.parkProvider, "claude");
+		assert.equal(logs[0]?.parkWindow, "five_hour");
+
+		const events = readEventLog({ root: worktree, cycleLogPath: null }).events;
+		const usage = events.find((event) => event.type === "pelaggio.provider-usage");
+		const limit = events.find((event) => event.type === "pelaggio.provider-limit");
+		assert.ok(usage, "expected a correlated usage observation");
+		assert.ok(limit, "expected a parked limit observation");
+		assert.equal(usage.itemId, "TOOL-99");
+		assert.equal("step" in usage ? usage.step : undefined, "plan");
+		assert.ok(["claude", "codex", "grok", "opencode"].includes("provider" in usage ? String(usage.provider) : ""));
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.usedFraction : undefined, 0.47);
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.name : undefined, "five_hour");
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.resetsAt : undefined, observedAt + 3_600_000);
+		assert.equal("windows" in usage && Array.isArray(usage.windows) ? usage.windows[0]?.observedAt : undefined, observedAt);
+		assert.equal("parked" in limit ? limit.parked : undefined, true);
+		assert.equal("window" in limit ? limit.window : undefined, "five_hour");
+	});
+
+	it("distinguishes a weekly Claude window from the five-hour park while keeping coarse parkClass", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": {
+					ok: false,
+					subtype: "error_rate_limit",
+					writes: { "wip.txt": "weekly" },
+					park: { parked: true, limitType: "seven_day_opus", resetsAt: Date.now() + 3_600_000, rateLimit: { provider: "claude", window: "seven_day_opus" } },
+				},
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+		assert.equal(result.outcome, "parked");
+		assert.equal(logs[0]?.parkClass, "rate-limit");
+		assert.equal(logs[0]?.parkProvider, "claude");
+		assert.equal(logs[0]?.parkWindow, "seven_day_opus");
+	});
+
+	it("persists a Codex-shaped park with a null window", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": {
+					ok: false,
+					subtype: "error_rate_limit",
+					writes: { "wip.txt": "codex" },
+					park: { parked: true, limitType: "unknown (estimated)", resetsAt: Date.now() + 3_600_000, rateLimit: { provider: "codex", window: null } },
+				},
+			},
+			parkSignal,
+		);
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+		assert.equal(result.outcome, "parked");
+		assert.equal(logs[0]?.parkClass, "rate-limit");
+		assert.equal(logs[0]?.parkProvider, "codex");
+		assert.equal(logs[0]?.parkWindow, null);
 	});
 });
 
@@ -3765,6 +3855,7 @@ describe("runOrchestrator — SIGUSR2 pause handler", () => {
 		const wrappedRun: typeof mockRun = async (opts, parkSignal, flags) => {
 			const result = await mockRun(opts, parkSignal, flags);
 			if (opts.itemId === "A-1") {
+				parkSignal.rateLimit = { provider: "claude", window: "five_hour" };
 				process.kill(process.pid, "SIGUSR2");
 				// Yield until the signal handler fires.
 				for (let i = 0; i < 5 && !parkSignal.parked; i++) await new Promise(setImmediate);
@@ -3784,6 +3875,7 @@ describe("runOrchestrator — SIGUSR2 pause handler", () => {
 		assert.equal(snap.parked, true);
 		assert.equal(snap.limitType, "paused");
 		assert.equal(snap.resetsAt, 0);
+		assert.equal(snap.rateLimit, undefined);
 	});
 
 	it("removes its SIGUSR2 listener on return so repeated invocations do not leak", async () => {
@@ -3820,13 +3912,19 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		execSync("git add -A && git commit -q -m seed", { cwd: worktree });
 
 		const parkSignal = makeParkSignal();
+		const writer = createEventWriter({ root: worktree });
 		const manifests: Array<{ attempt: number; step: string; effects: unknown[] }> = [];
 		const dispatches: Array<{ attempt: number; step: string }> = [];
 		const { runStep: mockRunStep, calls } = createMockRunStep(
 			{
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"pr-review": { ok: true, text: cleanFindings, fullText: cleanFindings },
-				"pr-verify": { ok: true, text: cleanJudge, fullText: cleanJudge },
+				"pr-verify": {
+					ok: true,
+					text: cleanJudge,
+					fullText: cleanJudge,
+					observation: { kind: "usage", provider: "claude", poolId: "k:0123456789ab", windows: [{ name: "five_hour", channel: "reported", observedAt: 1, usedFraction: 0.25, resetsAt: 2 }] },
+				},
 				ship: {
 					ok: true,
 					text: "ship-merged: TOOL-99",
@@ -3846,7 +3944,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 		};
 
 		try {
-			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement" }, parkSignal, baseFlags, {
+			const result = await runPipeline({ ...baseOpts(worktree), startFrom: "implement", eventWriter: writer }, parkSignal, baseFlags, {
 				runStep,
 				mainRepo: worktree,
 				listWorktrees: () => [worktree],
@@ -3878,6 +3976,8 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			assert.ok(aggregate, `expected shakedown-code attempt 0 manifest; got ${JSON.stringify(manifests)}`);
 			assert.equal(aggregate.effects[0] && (aggregate.effects[0] as { kind: string }).kind, "review.Verdict");
 			assert.ok(dispatches.some((d) => d.step === "shakedown-code" && d.attempt === 0));
+			const reviewUsage = readEventLog({ root: worktree, cycleLogPath: null }).events.find((event) => event.type === "pelaggio.provider-usage" && "step" in event && event.step === "pr-verify");
+			assert.ok(reviewUsage, "the review-loop Judge seat must reach the shared provider-observation append funnel");
 		} finally {
 			REVIEW_CONFIG.authoring.enabled = saved.enabled;
 			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;

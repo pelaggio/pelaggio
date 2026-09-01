@@ -108,10 +108,12 @@ export interface OrchestratorDeps {
 	now?: () => number;
 	/**
 	 * Shared activity-event writer for this process. CLI `orchestrate()` injects a writer
-	 * correlated with the lifecycle worker by executionId; fallback creation stays continuous-only so ordinary
-	 * `runOrchestrator` tests do not write `.dev/flow-events/` under `REPO`.
+	 * correlated with the lifecycle worker by executionId; direct callers receive one fallback
+	 * writer in every mode so operator revision and standalone orchestration retain observations.
 	 */
 	eventWriter?: EventWriter;
+	/** Event-writer factory seam; production uses createEventWriter. */
+	createEventWriter?: typeof createEventWriter;
 	/** Roadmap + flow policy used by the default free queue probe. */
 	roadmap?: RoadmapSource;
 	flowPolicy?: FlowPolicy;
@@ -271,6 +273,7 @@ async function awaitParkReset(parkSignal: ParkSignal, opts: { maxWaitMs: number;
 	parkSignal.resetsAt = 0;
 	parkSignal.limitType = "";
 	parkSignal.triggerWorker = "";
+	parkSignal.rateLimit = undefined;
 	return "resumed";
 }
 
@@ -314,6 +317,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		parkSignal.parked = true;
 		parkSignal.limitType = "paused";
 		parkSignal.resetsAt = 0;
+		parkSignal.rateLimit = undefined;
 	};
 	process.on("SIGUSR2", onPause);
 
@@ -551,8 +555,13 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 		// Emit at most one suspended per park interval (peers may all observe park).
 		let continuousSuspendedEmitted = false;
 		// Correlate activity with this process's lifecycle executionId. CLI `orchestrate()`
-		// injects the activity writer; fallback stays continuous-only.
-		const writer = deps.eventWriter ?? (continuous ? createEventWriter(eventWriterCorrelation()) : undefined);
+		// injects the activity writer; direct runOrchestrator callers share the same fallback in every mode.
+		const writer =
+			deps.eventWriter ??
+			(deps.createEventWriter ?? createEventWriter)({
+				...eventWriterCorrelation(),
+				...(IN_NODE_TEST ? { root: hermeticQueueRoot(() => REPO, "flow-event-root") } : {}),
+			});
 		const emitContinuous = (input: Parameters<NonNullable<typeof writer>["append"]>[0]): void => {
 			try {
 				writer?.append(input);
@@ -774,6 +783,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
+						...(writer ? { eventWriter: writer } : {}),
 					},
 					parkSignal,
 					flags,
@@ -801,6 +811,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						parkSignal.resetsAt = 0;
 						parkSignal.limitType = "sdk-outage";
 						parkSignal.triggerWorker = result.itemId ?? "";
+						parkSignal.rateLimit = undefined;
 						result = { ...cycleResultBase(result), outcome: "parked", parkClass: "sdk-outage", parkReason: "transient sdk error" };
 					}
 				} else if (result.disposition === "quarantine-and-continue") {
@@ -964,6 +975,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
+						...(writer ? { eventWriter: writer } : {}),
 					},
 					parkSignal,
 					resumeFlags,
@@ -1442,6 +1454,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 						...(noWorktree ? { noWorktree: true } : {}),
 						...(signal ? { signal } : {}),
+						...(writer ? { eventWriter: writer } : {}),
 					},
 					parkSignal,
 					flags,
@@ -1619,6 +1632,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							unattendedSignalSuppressions: runUnattendedEvidence.suppressed,
 							...(decisionNotifier ? { notifyDecision: decisionNotifier } : {}),
 							...(signal ? { signal } : {}),
+							...(writer ? { eventWriter: writer } : {}),
 						},
 						parkSignal,
 						{ ...flags, "review-findings": findingsPath }, // per-item findings injection

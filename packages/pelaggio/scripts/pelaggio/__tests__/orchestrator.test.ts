@@ -15,7 +15,7 @@ import { enqueueReviewRequest, type NewReviewRequest, reviewRequestsDir } from "
 import { type AcquireReviseExecutionResult, reviseFindingsPath } from "../revise-sweep.js";
 import type { GhRunner } from "../roadmap/github-issues.js";
 import { LiveStatus, StatusBar } from "../tui.js";
-import type { Flags } from "../types.js";
+import type { Flags, ParkSignal } from "../types.js";
 import { createMockRunPipeline } from "./mocks.js";
 
 // runOrchestrator derives no-worktree (single-shot) mode from ambient env —
@@ -89,6 +89,15 @@ describe("runOrchestrator — resume mode", () => {
 		assert.equal(calls[0].opts.worktree, "/fake/wt-tool-99");
 		assert.equal(results.length, 1);
 		assert.equal(results[0].outcome === "completed", true);
+	});
+
+	it("threads the injected eventWriter into the --resume pipeline call", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const writer = createEventWriter({ root: mkdtempSync(join(tmpdir(), "orch-resume-writer-")) });
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "TOOL-99": { completed: true, cost: 1 } } });
+		await runOrchestrator({ ...baseFlags, resume: "tool-99" }, { runPipeline, eventWriter: writer, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0]?.opts.eventWriter, writer);
 	});
 
 	it("failure: exitCode 1 when runPipeline returns completed false", async (t) => {
@@ -819,13 +828,17 @@ describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
 	it("N consecutive transient sdk errors park + page instead of burning the rest of --cycles", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const { sent, sendNotification } = spySend();
+		let observedSignal: ParkSignal | undefined;
 		const { runPipeline, calls } = createMockRunPipeline({
 			byItem: {
-				"A-1": { completed: false, cost: 0, error: "transient sdk error" },
+				"A-1": { completed: false, cost: 0, error: "transient sdk error", park: { rateLimit: { provider: "claude", window: "five_hour" } } },
 				"A-2": { completed: false, cost: 0, error: "transient sdk error" },
 				"A-3": { completed: false, cost: 0, error: "transient sdk error" },
 				"A-4": { completed: true, cost: 0.1 },
 				"A-5": { completed: true, cost: 0.1 },
+			},
+			onCall: (_opts, parkSignal) => {
+				observedSignal = parkSignal;
 			},
 		});
 		const { exitCode, results } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
@@ -839,6 +852,7 @@ describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
 		assert.equal(sent.length, 1, "the sustained outage must page exactly once");
 		assert.equal(sent[0].payload.event, "parked");
 		assert.equal(sent[0].payload.itemId, "A-3");
+		assert.equal(observedSignal?.rateLimit, undefined, "sdk-outage must clear stale provider/window identity");
 	});
 
 	it("a success between blips resets the streak — 2 blips + success + 2 blips never trips", async (t) => {
@@ -1009,6 +1023,38 @@ describe("runOrchestrator — park-and-resume", () => {
 		assert.equal(results[1].outcome === "completed", true);
 	});
 
+	it("timed resume clears stale rateLimit identity", async (t) => {
+		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
+		t.mock.method(console, "log", () => {});
+		const baseNow = 1_700_000_000_000;
+		t.mock.timers.setTime(baseNow);
+		const snapshots: Array<ParkSignal["rateLimit"]> = [];
+		const writer = createEventWriter({ root: mkdtempSync(join(tmpdir(), "orch-resume-rate-limit-")) });
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"X-1": [
+					{ completed: false, cost: 0.1, error: "parked", park: { parked: true, resetsAt: baseNow + 60_000, limitType: "five_hour", rateLimit: { provider: "claude", window: "five_hour" } } },
+					{ completed: true, cost: 0.5 },
+				],
+			},
+			onCall: (_opts, parkSignal) => {
+				snapshots.push(parkSignal.rateLimit);
+			},
+		});
+		const promise = runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, eventWriter: writer, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		t.mock.timers.tick(60_000 + 30_000);
+		for (let i = 0; i < 5; i++) await new Promise(setImmediate);
+		const { results } = await promise;
+		assert.equal(calls.length, 2);
+		assert.equal(results[0]?.outcome, "parked");
+		assert.equal(results[1]?.outcome, "completed");
+		assert.deepEqual(snapshots[0], { provider: "claude", window: "five_hour" });
+		assert.equal(snapshots[1], undefined);
+		assert.equal(calls[0]?.opts.eventWriter, writer);
+		assert.equal(calls[1]?.opts.eventWriter, writer);
+	});
+
 	it("exceeds --max-wait: uses the parked exit code and does not re-invoke runPipeline", async (t) => {
 		t.mock.timers.enable({ apis: ["setTimeout", "setInterval", "Date"] });
 		const logs: string[] = [];
@@ -1079,6 +1125,24 @@ describe("runOrchestrator — park-and-resume", () => {
 			logs.some((l) => l.includes("Resume:") && l.includes("pnpm pelaggio --resume X-1")),
 			`expected the --resume hint in logs; got:\n${logs.join("\n")}`,
 		);
+	});
+
+	it("manual pause clears stale rateLimit identity", async (t) => {
+		t.mock.method(console, "log", () => {});
+		let observedSignal: ParkSignal | undefined;
+		const { runPipeline } = createMockRunPipeline({
+			byItem: {
+				"X-1": { completed: false, cost: 0.1, error: "parked", park: { rateLimit: { provider: "claude", window: "five_hour" } } },
+			},
+			onCall: (_opts, parkSignal) => {
+				observedSignal = parkSignal;
+				process.emit("SIGUSR2");
+			},
+		});
+		const { exitCode } = await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, detectResumeStep: fakeDetectResumeStep, resolveWorktree: fakeResolveWorktree });
+		assert.equal(exitCode, PARKED_EXIT_CODE);
+		assert.equal(observedSignal?.limitType, "paused");
+		assert.equal(observedSignal?.rateLimit, undefined);
 	});
 });
 
@@ -1700,6 +1764,25 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		assert.equal(calls[1].opts.itemId, undefined, "second call is the auto-pick cycle (no explicit id)");
 	});
 
+	it("creates a fallback writer for revise mode and retains provider usage", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const root = mkdtempSync(join(tmpdir(), "orch-revise-writer-"));
+		const writer = createEventWriter({ root });
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: { "76": { completed: true, cost: 0.5 } },
+			default: { completed: false, cost: 0, error: "pick:queue-empty" },
+			onCall: (opts) => {
+				if (opts.itemId !== "76") return;
+				opts.eventWriter?.append({ type: "pelaggio.provider-usage", itemId: "76", provider: "claude", poolId: "k:0123456789ab", windows: [{ name: "five_hour", channel: "reported", observedAt: 1, usedFraction: 0.5 }] });
+			},
+		});
+		await runOrchestrator({ ...baseFlags, target: "pull-request", cycles: "1" }, { runPipeline, createEventWriter: () => writer, resolveWorktree: resolveWt, revise: { local: true, ghRepo: "o/r", gh: makeGhStub(ONE_REVISABLE) } });
+		assert.equal(calls[0]?.opts.itemId, "76");
+		assert.equal(calls[0]?.opts.eventWriter, writer);
+		assert.equal(calls[1]?.opts.eventWriter, writer);
+		assert.ok(readEventLog({ root, cycleLogPath: null }).events.some((event) => event.type === "pelaggio.provider-usage" && event.itemId === "76"));
+	});
+
 	it("holds the per-item execution lease across the revision and releases it afterwards (#507)", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const events: string[] = [];
@@ -2040,6 +2123,15 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 		const types = read.events.map((event) => event.type);
 		assert.ok(types.includes("pelaggio.watch-idle"));
 		assert.ok(types.includes("pelaggio.watch-wake"));
+	});
+
+	it("threads the injected eventWriter into the ordinary item-cycle worker", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const writer = createEventWriter({ root: mkdtempSync(join(tmpdir(), "orch-usage-")) });
+		const { runPipeline, calls } = createMockRunPipeline({ byItem: { "X-1": { completed: true, cost: 0.1 } } });
+		await runOrchestrator({ ...baseFlags, item: "X-1" }, { runPipeline, eventWriter: writer });
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0]?.opts.eventWriter, writer);
 	});
 
 	it("watch: day-budget idles to local midnight then probes again", async (t) => {

@@ -48,6 +48,7 @@ interface RunCall {
 	prompt: string;
 	cwd: string;
 	parkSignal: ParkSignal;
+	itemId?: string;
 	workspaceAccess?: "read-only";
 	executionOverride?: { provider: ProviderName; model?: string; codexModel?: string };
 	foreignRootDenial?: { mainRepo: string; registeredWorktrees: readonly string[] };
@@ -194,7 +195,16 @@ async function runCli(
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
 	const runStep: RunStepFn = async (name, prompt, stepOpts, _emit: StepEmit) => {
-		calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, workspaceAccess: stepOpts.workspaceAccess, executionOverride: stepOpts.executionOverride, foreignRootDenial: stepOpts.foreignRootDenial });
+		calls.push({
+			name,
+			prompt,
+			cwd: stepOpts.cwd,
+			parkSignal: stepOpts.parkSignal,
+			itemId: stepOpts.itemId,
+			workspaceAccess: stepOpts.workspaceAccess,
+			executionOverride: stepOpts.executionOverride,
+			foreignRootDenial: stepOpts.foreignRootDenial,
+		});
 		const next = queued.shift();
 		assert.ok(next, "unexpected extra runStep call");
 		if (next instanceof Error) throw next;
@@ -655,6 +665,21 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.comments[0], /Original message/);
 		assert.match(out.comments[0], /isolated verification: \*\*refuted\*\*/);
 		assert.match(out.comments[0], /cost=6\.00 turns=8/);
+	});
+
+	it("attributes direct review and verification observations to the roadmap item rather than the PR", async () => {
+		const out = await runCli({
+			headRef: "feat/issue-581-retain-telemetry",
+			results: [result({ text: report("Candidate.", [{ severity: "must-fix", message: "Broken behavior." }]) }), verification([{ candidateId: "C1", decision: "refuted", rationale: "Not reachable." }])],
+		});
+
+		assert.deepEqual(
+			out.calls.map((call) => [call.name, call.itemId]),
+			[
+				["pr-review", "581"],
+				["pr-verify", "581"],
+			],
+		);
 	});
 
 	it("every review and verify seat carries the evidence-store write denial regardless of cwd (#495 store-trust)", async () => {

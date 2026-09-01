@@ -673,7 +673,7 @@ async function runReviewPass(
 	label: ReviewLabel,
 	prompt: string,
 	candidate: StepSettings,
-	pr: string,
+	itemId: string | undefined,
 	opts: { cwd: string; runStep: RunStepFn; profile: string; parkSignal: ParkSignal; foreignRootDenial: ForeignRootDenial },
 ): Promise<ReviewPass> {
 	const driver = driverIdentity(candidate);
@@ -681,7 +681,16 @@ async function runReviewPass(
 	const result = await opts.runStep(
 		"pr-review",
 		prompt,
-		{ cwd: opts.cwd, profile: opts.profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, workspaceAccess: "read-only", executionOverride: executionOverrideFor(candidate), foreignRootDenial: opts.foreignRootDenial },
+		{
+			cwd: opts.cwd,
+			profile: opts.profile,
+			trace: false,
+			parkSignal: opts.parkSignal,
+			...(itemId !== undefined ? { itemId } : {}),
+			workspaceAccess: "read-only",
+			executionOverride: executionOverrideFor(candidate),
+			foreignRootDenial: opts.foreignRootDenial,
+		},
 		emit,
 	);
 	if (!result.ok) {
@@ -750,7 +759,7 @@ async function runVerificationPass(
 	pass: ReviewPass,
 	carried: ReadonlyMap<string, ReviewFinding>,
 	profile: string,
-	pr: string,
+	itemId: string | undefined,
 	opts: { cwd: string; runStep: RunStepFn; localContext: string; parkSignal: ParkSignal; verifySettings: StepSettings; foreignRootDenial: ForeignRootDenial; autoRefutable?: ReadonlyMap<string, PrCarryRefutedEntry> },
 ): Promise<void> {
 	if (!pass.report) return;
@@ -795,7 +804,16 @@ async function runVerificationPass(
 		result = await opts.runStep(
 			"pr-verify",
 			verificationPrompt(candidates, opts.localContext),
-			{ cwd: opts.cwd, profile, trace: false, parkSignal: opts.parkSignal, itemId: pr, workspaceAccess: "read-only", executionOverride: executionOverrideFor(opts.verifySettings), foreignRootDenial: opts.foreignRootDenial },
+			{
+				cwd: opts.cwd,
+				profile,
+				trace: false,
+				parkSignal: opts.parkSignal,
+				...(itemId !== undefined ? { itemId } : {}),
+				workspaceAccess: "read-only",
+				executionOverride: executionOverrideFor(opts.verifySettings),
+				foreignRootDenial: opts.foreignRootDenial,
+			},
 			emit,
 		);
 	} catch (error) {
@@ -990,7 +1008,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			const prompt = `${expandPackagedSkill("pr-review", args)}${discoveryContext}`;
 			const children = reviewDrivers.map(() => childParkSignal());
 			const settled = await settleDiscoveryLaunches(reviewDrivers, (candidate, index) =>
-				runReviewPass(iteration, label, prompt, candidate, options.pr, {
+				runReviewPass(iteration, label, prompt, candidate, options.itemId, {
 					cwd,
 					runStep: runStepImpl,
 					profile,
@@ -1048,7 +1066,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).
 		for (const pass of iterationPasses) {
-			await runVerificationPass(pass, carried, profile, options.pr, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings, foreignRootDenial: seatDenial, autoRefutable: carry?.autoRefutable });
+			await runVerificationPass(pass, carried, profile, options.itemId, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings, foreignRootDenial: seatDenial, autoRefutable: carry?.autoRefutable });
 			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
 			if (parked) return parked;
 		}

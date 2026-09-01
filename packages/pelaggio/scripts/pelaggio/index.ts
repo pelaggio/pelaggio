@@ -17,8 +17,9 @@ export {
 	rebuildDecisionIndex,
 	resolveDecision,
 } from "./decisions.js";
-export type { CreateEventWriterOptions, EventStreamSlice, EventStreamTail, ReadEventLogOptions, ReadEventStreamSlice } from "./flow-events.js";
+export type { AppendProviderObservationInput, CreateEventWriterOptions, EventStreamSlice, EventStreamTail, ReadEventLogOptions, ReadEventStreamSlice } from "./flow-events.js";
 export {
+	appendProviderObservation,
 	createEventWriter,
 	decodeFlowEvent,
 	decodeFlowEventLine,
@@ -67,6 +68,13 @@ export type {
 	PelaggioEventType,
 	PipelineOpts,
 	PreUnionCycleLogEntry,
+	ProviderLimitEvent,
+	ProviderLimitObservation,
+	ProviderObservation,
+	ProviderUsageEvent,
+	ProviderUsageObservation,
+	QuotaChannel,
+	QuotaWindowObservation,
 	RawCycleLogRecord,
 	ReadEventLogResult,
 	RunFinishedEvent,

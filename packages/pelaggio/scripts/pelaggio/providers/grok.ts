@@ -269,7 +269,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 		subtype = "error_rate_limit";
 		text = driveMsg || "Grok rate limit";
 		const resolved = resolveParkReset(0, true, "", driveMsg, exitInfo.now ?? Date.now(), exitInfo.unknownResetWaitMs ?? parseWaitFlag(CONFIG.park.unknownResetWait));
-		parkUpdate = { parked: true, resetsAt: resolved.resetsAt, limitType: resolved.limitType };
+		parkUpdate = { parked: true, resetsAt: resolved.resetsAt, limitType: resolved.limitType, rateLimit: { provider: "grok", window: null } };
 		emitted.push({ type: "rate_limit", limitType: resolved.limitType, resetsAt: resolved.resetsAt });
 	} else if (!completedCleanly) {
 		ok = false;
@@ -450,6 +450,7 @@ export const runStep: StepProvider["runStep"] = async (name, prompt, opts, emit)
 		opts.parkSignal.resetsAt = built.parkUpdate.resetsAt ?? opts.parkSignal.resetsAt;
 		opts.parkSignal.limitType = built.parkUpdate.limitType ?? opts.parkSignal.limitType;
 		opts.parkSignal.triggerWorker = opts.itemId ?? "";
+		opts.parkSignal.rateLimit = built.parkUpdate.rateLimit ?? opts.parkSignal.rateLimit;
 	}
 	for (const event of built.events) emit(event);
 	emit({ type: "done", ok: built.result.ok, subtype: built.result.subtype, cost: built.result.cost, turns: built.result.turns, elapsed: Date.now() - t0 });
