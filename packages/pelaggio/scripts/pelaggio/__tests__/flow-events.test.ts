@@ -75,6 +75,8 @@ describe("flow event writer", () => {
 			{ ...base, outcome: "failed", error: "missing class" },
 			{ ...base, outcome: "failed", failureClass: "provider", error: "boom", parkClass: "rate-limit", parkReason: null },
 			{ ...base, outcome: "failed", failureClass: "provider", error: "boom", completed: false },
+			{ ...base, outcome: "completed", parked: true },
+			{ ...base, outcome: "failed", failureClass: "provider", error: "x", parked: true },
 		];
 		for (const input of invalid) assert.throws(() => writer.append(input as unknown as FlowEventInput), /Invalid flow event/);
 

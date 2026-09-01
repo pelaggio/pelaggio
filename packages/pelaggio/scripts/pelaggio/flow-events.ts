@@ -59,7 +59,9 @@ function isCanonicalInstant(value: unknown): value is string {
 }
 
 function isCurrentCycleOutcome(value: UnknownRecord): boolean {
-	if (value.completed !== undefined) return false;
+	// Reject BOTH legacy markers (`completed`, `parked`): a record carrying a current
+	// `outcome` plus either legacy discriminant is overlapping, not current (fail closed).
+	if (value.completed !== undefined || value.parked !== undefined) return false;
 	switch (value.outcome) {
 		case "completed":
 			return value.parkClass === undefined && value.parkReason === undefined && value.blockedKind === undefined && value.reason === undefined && value.failureClass === undefined && value.error === undefined;
