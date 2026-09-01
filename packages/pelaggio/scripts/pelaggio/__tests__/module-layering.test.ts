@@ -271,7 +271,7 @@ describe("module layering", () => {
 	it("no edge points upward and no non-entry module imports an entry module", () => {
 		const current = violations(modules, edges);
 		const cycles = intraLayerCycles(edges);
-		if (cycles.length) console.log(`[module-layering] ${cycles.length} intra-layer cycle path(s) (diagnostic, not gated):\n  ${cycles.join("\n  ")}`);
+		if (cycles.length) console.error(`[module-layering] ${cycles.length} intra-layer cycle path(s) (diagnostic, not gated):\n  ${cycles.join("\n  ")}`);
 		assert.deepEqual(current, [], `layering violations (move the module down, or reclassify it in LAYERS with the admission question answered):\n  ${current.join("\n  ")}`);
 	});
 
