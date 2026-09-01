@@ -7,11 +7,11 @@ import { after, describe, it } from "node:test";
 import { DEFAULTS, type ReviewConfig, type StepSettings } from "../config.js";
 import { main as adjudicateMain, type PrAdjudicateDeps } from "../pr-adjudicate-cli.js";
 import { main } from "../pr-review-cli.js";
-import { buildFailClosedComment, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-gate.js";
+import { buildFailClosedComment, renderFindingClosureGuidance, runPrReviewGate, setPrReviewDepsForTests } from "../pr-review-gate.js";
 import { listPrReviewGateRecords, type PrReviewGateRecord, type PrReviewRecurrenceFinding, readPrReviewGateRecord, writePrReviewGateRecord } from "../pr-review-gate-record.js";
 import { fleetRecordDigestOf, isEligibleFleetGateRecord, readAdjudicationSourceRecord } from "../review/adjudication.js";
 import { type PrCarryRefutedEntry, type PrCarrySurvivorEntry, type PrFindingDispositionRecordV1, readPrFindingDispositionRecord, writePrFindingDispositionRecord } from "../review/carry.js";
-import { type ReviewFinding, reviewFindingFingerprint } from "../review/findings.js";
+import { REVIEW_FINDING_CLOSURES, type ReviewFinding, type ReviewFindingClosure, reviewFindingFingerprint } from "../review/findings.js";
 import type { RunStepFn } from "../step-runner.js";
 import type { ParkSignal, ProviderName, StepEmit, StepResult } from "../types.js";
 
@@ -2609,5 +2609,130 @@ describe("guarantee-authority recurrence (#745)", () => {
 			[PRIOR_HEAD],
 			"CI persists neither the current roll nor an advisory",
 		);
+	});
+});
+
+describe("finding closure mode (#756)", () => {
+	const findingA = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
+
+	function survivesAll(findings: ReviewFinding[]) {
+		return verification(findings.map((_, i) => ({ candidateId: `C${i + 1}`, decision: "survives" as const, rationale: "Still present." })));
+	}
+
+	async function runBlocked(opts: { findings: ReviewFinding[]; verify?: StepResult }) {
+		const queued: Array<StepResult | Error> = [result({ text: report("Block.", opts.findings) }), opts.verify ?? survivesAll(opts.findings)];
+		return runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "src/a.ts\n" : "+x\n")) as typeof import("node:child_process").execFileSync,
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next, "unexpected extra runStep call");
+				if (next instanceof Error) throw next;
+				return next;
+			},
+		});
+	}
+
+	it("suffixes verified surviving must-fixes for construction, authority, and policy", async () => {
+		for (const closure of ["construction", "authority", "policy"] as const) {
+			const guidance = renderFindingClosureGuidance(closure);
+			assert.ok(guidance);
+			const review = await runBlocked({ findings: [{ ...findingA, closure }] });
+			assert.match(review.body, /isolated verification: \*\*survives\*\*/);
+			assert.ok(review.body.includes(guidance), `expected ${closure} guidance in the gate comment`);
+			assert.doesNotMatch(review.body, /### Recurrence advisory/);
+			assert.equal(review.recurrenceFindings?.[0]?.closure, closure);
+		}
+	});
+
+	it("renders no closure suffix for patch, absent mode, refuted, nice/note, or fail-closed retention", async () => {
+		const patch = await runBlocked({ findings: [{ ...findingA, closure: "patch" }] });
+		assert.doesNotMatch(patch.body, /instance patch predicts recurrence/);
+		assert.doesNotMatch(patch.body, /routed decision required/);
+		assert.doesNotMatch(patch.body, /consider re-chartering/);
+		assert.equal(patch.recurrenceFindings?.[0]?.closure, "patch");
+
+		const absent = await runBlocked({ findings: [findingA] });
+		assert.doesNotMatch(absent.body, /instance patch predicts recurrence/);
+		assert.equal(Object.hasOwn(absent.recurrenceFindings?.[0] ?? {}, "closure"), false);
+
+		const refuted = await runBlocked({
+			findings: [{ ...findingA, closure: "construction" }],
+			verify: verification([{ candidateId: "C1", decision: "refuted", rationale: "No longer present." }]),
+		});
+		assert.doesNotMatch(refuted.body, /instance patch predicts recurrence/);
+		assert.deepEqual(refuted.recurrenceFindings, []);
+
+		const notes = await runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "src/a.ts\n" : "+x\n")) as typeof import("node:child_process").execFileSync,
+			runStep: async () =>
+				result({
+					text: report("Observations.", [
+						{ severity: "nice", message: "Improve this.", closure: "construction" },
+						{ severity: "note", message: "Context.", closure: "policy" },
+					]),
+				}),
+		});
+		assert.equal(notes.gate, "pass");
+		assert.doesNotMatch(notes.body, /instance patch predicts recurrence/);
+		assert.doesNotMatch(notes.body, /routed decision required/);
+		assert.deepEqual(notes.recurrenceFindings, []);
+
+		const retained = await runBlocked({
+			findings: [{ ...findingA, closure: "construction" }],
+			verify: result({ text: "not a verification report", ok: false, subtype: "error_invalid_output" }),
+		});
+		assert.match(retained.body, /isolated verification failed; blocker retained/);
+		assert.doesNotMatch(retained.body, /instance patch predicts recurrence/);
+		assert.deepEqual(retained.recurrenceFindings, []);
+	});
+
+	it("does not change verdict-bearing fields when only closure is present", async () => {
+		const without = await runBlocked({ findings: [findingA] });
+		const withMode = await runBlocked({ findings: [{ ...findingA, closure: "construction" }] });
+		assert.equal(without.gate, withMode.gate);
+		assert.equal(without.ok, withMode.ok);
+		assert.equal(without.agreement, withMode.agreement);
+		assert.equal(without.subtype, withMode.subtype);
+		assert.equal(without.breakerReason, withMode.breakerReason);
+		assert.equal(without.iterations, withMode.iterations);
+		assert.equal(without.survivorCount, withMode.survivorCount);
+		assert.notEqual(without.body, withMode.body);
+		assert.ok(withMode.body.includes("instance patch predicts recurrence — close by construction or record a residual"));
+		assert.equal(without.recurrenceFindings?.[0]?.closure, undefined);
+		assert.equal(withMode.recurrenceFindings?.[0]?.closure, "construction");
+		assert.match(withMode.body, /<!-- pr-review-metrics /);
+		assert.doesNotMatch(withMode.body, /### Recurrence advisory/);
+	});
+
+	it("only confirmed current-roll survivors enter recurrenceFindings with closure", async () => {
+		for (const closure of REVIEW_FINDING_CLOSURES) {
+			const review = await runBlocked({ findings: [{ ...findingA, closure }] });
+			assert.equal(review.recurrenceFindings?.length, 1);
+			assert.equal(review.recurrenceFindings?.[0]?.closure, closure);
+		}
+		const mixed = await runBlocked({
+			findings: [
+				{ ...findingA, closure: "construction" as ReviewFindingClosure },
+				{ severity: "must-fix" as const, message: "Null deref.", path: "src/a.ts", line: 20, closure: "policy" as ReviewFindingClosure },
+			],
+			verify: verification([
+				{ candidateId: "C1", decision: "survives", rationale: "Still present." },
+				{ candidateId: "C2", decision: "refuted", rationale: "No longer present." },
+			]),
+		});
+		assert.equal(mixed.recurrenceFindings?.length, 1);
+		assert.equal(mixed.recurrenceFindings?.[0]?.closure, "construction");
 	});
 });

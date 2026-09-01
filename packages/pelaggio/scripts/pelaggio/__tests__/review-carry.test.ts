@@ -550,4 +550,23 @@ describe("buildCarryDispositionDraft", () => {
 		assert.equal(draft.refuted[0]?.fingerprint, memory.fingerprint);
 		assert.equal(draft.gate, "pass");
 	});
+
+	it("bareFinding strips closure so sidecar FINDING_KEYS stay closed (#756)", () => {
+		const survived: ReviewFinding = { ...finding("Unfixed bug.", "src/a.ts", 7), closure: "construction" };
+		const gone: ReviewFinding = { ...finding("Stale worry.", "src/other.ts", 5), closure: "policy" };
+		const survivedFp = reviewFindingFingerprint(survived);
+		const goneFp = reviewFindingFingerprint(gone);
+		const draft = buildCarryDispositionDraft({
+			...base,
+			...empty,
+			survivors: new Map([[survivedFp, survived]]),
+			verifications: new Map([[survivedFp, { id: "C1", decision: "survives", rationale: "Confirmed." }]]),
+			refutedThisRun: new Map([[goneFp, { id: "C2", finding: gone }]]),
+		});
+		assert.ok(draft);
+		assert.equal("closure" in draft.survived[0]!.finding, false);
+		assert.deepEqual(Object.keys(draft.survived[0]!.finding).sort(), ["line", "message", "path", "severity"]);
+		assert.equal("closure" in draft.refuted[0]!.finding, false);
+		assert.deepEqual(Object.keys(draft.refuted[0]!.finding).sort(), ["line", "message", "path", "severity"]);
+	});
 });

@@ -260,6 +260,38 @@ describe("PR review gate record store", () => {
 		for (const value of invalid) assert.throws(() => validatePrReviewGateRecord(value));
 	});
 
+	it("round-trips optional closure on recurrence observations and refuses invalid values", () => {
+		const dir = root();
+		const absent = { fingerprintDigest: DIGEST, path: "src/a.ts", findingClass: "correctness-regression" };
+		const absentPath = writePrReviewGateRecord(dir, fleetRecord({ prNumber: 401, recurrenceFindings: [absent] }));
+		const absentStored = readPrReviewGateRecord(dir, 401, HEAD);
+		assertFleet(absentStored);
+		assert.deepEqual(absentStored.recurrenceFindings, [absent]);
+		assert.equal(Object.hasOwn(absentStored.recurrenceFindings?.[0] ?? {}, "closure"), false);
+		assert.equal("closure" in (JSON.parse(readFileSync(absentPath, "utf8")).recurrenceFindings[0] as object), false);
+
+		for (const [i, closure] of (["patch", "construction", "authority", "policy"] as const).entries()) {
+			const observation = { fingerprintDigest: DIGEST, path: "src/a.ts", findingClass: "correctness-regression", closure };
+			const path = writePrReviewGateRecord(dir, fleetRecord({ prNumber: 410 + i, recurrenceFindings: [observation] }));
+			const stored = readPrReviewGateRecord(dir, 410 + i, HEAD);
+			assertFleet(stored);
+			assert.deepEqual(stored.recurrenceFindings, [observation]);
+			assert.equal(stored.recurrenceFindings?.[0]?.closure, closure);
+			assert.equal(JSON.parse(readFileSync(path, "utf8")).recurrenceFindings[0].closure, closure);
+		}
+
+		const valid = { schemaVersion: 2 as const, ...fleetRecord(), recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", closure: "patch" }] };
+		for (const closure of [null, 1, "", "Patch", "legacy"]) {
+			assert.throws(() => validatePrReviewGateRecord({ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", closure }] }));
+		}
+		assert.throws(() =>
+			validatePrReviewGateRecord({
+				...valid,
+				recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", closure: "patch", extra: true }],
+			}),
+		);
+	});
+
 	it("returns stored fleet agreement and never treats operator gate pass as consensus", () => {
 		const v1 = validatePrReviewGateRecord(v1Fixture({ agreement: "disagreement" }));
 		const fleet = validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord({ agreement: "consensus-block" }) });
