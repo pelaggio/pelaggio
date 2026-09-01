@@ -37,13 +37,13 @@ async function pollUntil(predicate: () => boolean, timeoutMs: number): Promise<b
  * an unforwarded wrapper dies signaled itself and orphans the child, failing
  * both assertions.
  */
-async function assertSignalReachesPipeline(signal: "SIGUSR2" | "SIGTERM", mirroredCode: number): Promise<void> {
+async function assertSignalReachesPipeline(signal: "SIGUSR2" | "SIGTERM", mirroredCode: number, subcommand: string[] = ["run", "--help"]): Promise<void> {
 	const root = mkdtempSync(join(tmpdir(), "pelaggio-bin-signal-"));
 	const log = join(root, "signal.log");
 	let wrapper: ChildProcess | undefined;
 	try {
 		writeFileSync(log, "");
-		wrapper = spawn(process.execPath, [BIN, "run", "--help"], {
+		wrapper = spawn(process.execPath, [BIN, ...subcommand], {
 			cwd: root,
 			stdio: "ignore",
 			env: {
@@ -89,5 +89,12 @@ describe("bin/pelaggio.js signal forwarding (#647)", () => {
 
 	it("forwards SIGTERM (supervisor stop) to the pipeline child and mirrors its exit", async () => {
 		await assertSignalReachesPipeline("SIGTERM", 43);
+	});
+
+	it("a non-run subcommand passes the hoisted cold-start restore and still routes and forwards", async () => {
+		// `stats` routes through the same wrapper tail: the (now unconditional)
+		// restore ran healthy before spawn, the routed child booted, and control
+		// signals still reach it.
+		await assertSignalReachesPipeline("SIGTERM", 43, ["stats"]);
 	});
 });

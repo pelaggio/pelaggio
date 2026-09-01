@@ -66,6 +66,10 @@ describe("authoring-review cold-start restoration (#647)", () => {
 		assert.equal(manifest.scripts?.pelaggio, "node bin/pelaggio.js run");
 		const binSource = readFileSync(resolve(packageRoot, "bin", "pelaggio.js"), "utf8");
 		assert.ok(binSource.indexOf("verifyOrRepairAuthoringReviewHostDependencies(mainRepo)") < binSource.indexOf('import.meta.resolve("tsx")'));
+		// The restore guards EVERY routed subcommand (pr-review/land/roadmap/… resolve
+		// tsx through the same links): the repair call must precede any `sub === "run"`
+		// use, i.e. it is not gated on the run subcommand.
+		assert.ok(binSource.indexOf("verifyOrRepairAuthoringReviewHostDependencies(mainRepo)") < binSource.indexOf('sub === "run"'));
 	});
 
 	it("parses the real pnpm importer without loading the yaml package", () => {

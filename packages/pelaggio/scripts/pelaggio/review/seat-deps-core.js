@@ -87,7 +87,12 @@ function pelaggioImporterFromText(text) {
 			const candidate = mappingKey(line, "packages/pelaggio section");
 			section = candidate === "dependencies" || candidate === "devDependencies" || candidate === "optionalDependencies" ? candidate : undefined;
 			dependency = undefined;
-			if (section) importer[section] = {};
+			if (section) {
+				// A repeated section would silently overwrite the one already parsed —
+				// duplicate mapping keys are invalid YAML and fail closed here.
+				if (Object.hasOwn(importer, section)) throw new HostDependencyRepairError("invalid-lockfile", `packages/pelaggio repeats the ${section} section`);
+				importer[section] = {};
+			}
 			continue;
 		}
 		if (!section) continue;
@@ -226,6 +231,16 @@ export function resolveAuthoringReviewMainRepo(repo) {
 	}
 }
 
+/** Repository identity: the pelaggio workspace carries packages/pelaggio/package.json with the published package name. */
+/** @param {string} mainRepo */
+function isPelaggioWorkspace(mainRepo) {
+	try {
+		return /** @type {{ name?: unknown }} */ (JSON.parse(readFileSync(resolve(mainRepo, "packages", "pelaggio", "package.json"), "utf8"))).name === "pelaggio";
+	} catch {
+		return false;
+	}
+}
+
 /** @param {string} mainRepo @returns {RepairEntry[]} */
 function deriveRepairEntries(mainRepo) {
 	const packageNodeModules = resolve(mainRepo, "packages", "pelaggio", "node_modules");
@@ -241,7 +256,11 @@ function deriveRepairEntries(mainRepo) {
 	try {
 		dependencies = importerDependencies(readFileSync(resolve(mainRepo, "pnpm-lock.yaml"), "utf8"));
 	} catch (error) {
-		if (!packageNodeModulesStat) return [];
+		// A genuine consumer repository (no packages/pelaggio identity) may have any
+		// lockfile shape — none of this module's business. A checkout that identifies
+		// as the pelaggio workspace must never report healthy on a missing or
+		// unparseable lockfile, even with packages/pelaggio/node_modules pruned.
+		if (!packageNodeModulesStat && !isPelaggioWorkspace(mainRepo)) return [];
 		throw error;
 	}
 

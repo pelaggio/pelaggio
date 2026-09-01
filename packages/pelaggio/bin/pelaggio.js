@@ -57,13 +57,17 @@ if (!sub || sub === "--help" || sub === "-h" || !routes[sub]) {
 
 const [script, ...prefix] = routes[sub];
 
-if (sub === "run") {
+// Cold-start restoration guards EVERY routed subcommand: each one resolves tsx and
+// the package dependencies through packages/pelaggio/node_modules, so a dangling
+// link would otherwise fail pr-review/land/roadmap/… with a raw
+// ERR_MODULE_NOT_FOUND instead of this typed park guidance.
+{
 	const mainRepo = resolveAuthoringReviewMainRepo(resolve(pkgRoot, "../.."));
 	const repair = await verifyOrRepairAuthoringReviewHostDependencies(mainRepo);
 	if (repair.status === "park") {
 		console.error(`authoring-review host dependency restoration parked before CLI startup (${repair.reason}): ${repair.detail}`);
 		console.error("preserved state: the claim worktree and MAIN links remain at the last repair state");
-		console.error(`resume: pnpm pelaggio ${rest.join(" ")}`.trimEnd());
+		console.error(`resume: ${sub === "run" ? `pnpm pelaggio ${rest.join(" ")}` : `npx pelaggio ${[sub, ...rest].join(" ")}`}`.trimEnd());
 		process.exit(1);
 	}
 }

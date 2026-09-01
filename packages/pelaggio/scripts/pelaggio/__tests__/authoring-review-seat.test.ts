@@ -382,6 +382,58 @@ describe("authoring-review host dependency restoration (#647)", () => {
 		}
 	});
 
+	it("a lockfile that repeats an importer section parks invalid-lockfile, never silently overwrites", async () => {
+		const fx = makeFixture();
+		const lockfilePath = resolve(fx.host, "pnpm-lock.yaml");
+		try {
+			// A duplicate `dependencies:` section after the others would overwrite the
+			// first one's parsed entries; duplicate mapping keys are invalid YAML.
+			writeFileSync(lockfilePath, `${readFileSync(lockfilePath, "utf8")}    dependencies:\n      "left-pad":\n        specifier: ^1.0.0\n        version: 1.0.0\n`);
+
+			const result = await verifyOrRepairAuthoringReviewHostDependencies(fx.host, immediateLock([]));
+
+			assert.equal(result.status, "park");
+			if (result.status === "park") {
+				assert.equal(result.reason, "invalid-lockfile");
+				assert.match(result.detail, /repeats the dependencies section/);
+			}
+		} finally {
+			rmSync(fx.root, { recursive: true, force: true });
+		}
+	});
+
+	it("a pelaggio checkout with pruned node_modules and a broken lockfile parks, never healthy", async () => {
+		const fx = makeFixture();
+		try {
+			// packages/pelaggio/package.json (name: pelaggio) identifies the workspace;
+			// with node_modules pruned AND the importer gone, healthy would be a lie.
+			rmSync(resolve(fx.host, "packages", "pelaggio", "node_modules"), { recursive: true });
+			writeFileSync(resolve(fx.host, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nimporters:\n  .: {}\n");
+
+			const result = await verifyOrRepairAuthoringReviewHostDependencies(fx.host, immediateLock([]));
+
+			assert.equal(result.status, "park");
+			if (result.status === "park") assert.equal(result.reason, "invalid-lockfile");
+		} finally {
+			rmSync(fx.root, { recursive: true, force: true });
+		}
+	});
+
+	it("a consumer repo with an unrelated or unparseable lockfile stays a healthy no-op", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-consumer-broken-"));
+		try {
+			// No packages/pelaggio identity: whatever the lockfile looks like is none of
+			// this module's business.
+			writeFileSync(resolve(root, "pnpm-lock.yaml"), "not: [valid, pnpm, lock");
+
+			const result = await verifyOrRepairAuthoringReviewHostDependencies(root, immediateLock([]));
+
+			assert.deepEqual(result, { status: "healthy", repaired: [] });
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("a repair whose lock token is taken mid-section is discarded, not trusted (exit fence)", async () => {
 		const fx = makeFixture();
 		const lockPath = resolve(fx.host, ".dev", "node-modules-repair.lock");
