@@ -146,6 +146,21 @@ describe("buildGrokStepResult — failure modes", () => {
 		const built = buildGrokStepResult("implement", [msg("truncated"), turnCompleted("max_tokens", USAGE)], { stopReason: "max_tokens" });
 		assert.equal(built.result.ok, false);
 	});
+
+	it("maps a legacy BLOCKED sentinel to blocked/unclassified", () => {
+		const built = buildGrokStepResult("implement", [msg("I cannot finish.\n\nBLOCKED: missing credentials"), turnCompleted("end_turn", USAGE)], { stopReason: "end_turn" });
+		assert.equal(built.result.ok, false);
+		assert.equal(built.result.subtype, "blocked");
+		assert.equal(built.result.blockedKind, "unclassified");
+		assert.equal(built.result.text, "missing credentials");
+	});
+
+	it("carries a named blocked kind from the structured sentinel", () => {
+		const built = buildGrokStepResult("implement", [msg("Cannot continue.\n\nBLOCKED: environment | no sandbox"), turnCompleted("end_turn", USAGE)], { stopReason: "end_turn" });
+		assert.equal(built.result.subtype, "blocked");
+		assert.equal(built.result.blockedKind, "environment");
+		assert.equal(built.result.text, "no sandbox");
+	});
 });
 
 describe("grok helpers", () => {

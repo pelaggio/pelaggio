@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { mock } from "node:test";
 import { REVIEW_CONFIG } from "../config.js";
+import { classifyFailure } from "../cycle-outcome.js";
 import { __setProviderAvailableForTests, type PipelineDeps, type RunStepFn, type runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult } from "../pr-review-gate.js";
 import type { RoadmapSource } from "../roadmap/index.js";
 import { LiveStatus, StatusBar } from "../tui.js";
-import type { CycleResult, Flags, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
+import type { BlockedKind, CycleResult, CycleResultBase, FailureClass, Flags, ParkClass, ParkSignal, PipelineOpts, Step, StepResult } from "../types.js";
 
 // Shared hermetic setup for test files that drive the real runPipeline (pipeline.test.ts,
 // ship.test.ts). These flow tests exercise pick/plan/implement/ship control flow, not the
@@ -107,6 +108,7 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 			turns: outcome.turns ?? 1,
 			...(outcome.tokens ? { tokens: outcome.tokens } : {}),
 			...(outcome.outputTail ? { outputTail: outcome.outputTail } : {}),
+			...(outcome.blockedKind ? { blockedKind: outcome.blockedKind } : {}),
 		};
 		emit({ type: "done", ok: result.ok, subtype: result.subtype, cost: result.cost, turns: result.turns, elapsed: 0 });
 		return result;
@@ -114,9 +116,61 @@ export function createMockRunStep(behavior: MockBehavior, parkSignal: ParkSignal
 	return { runStep, calls };
 }
 
-export interface PipelineOutcome extends Partial<CycleResult> {
-	/** If set, merged into parkSignal before the mock returns. */
+export function completedResult(overrides: Partial<CycleResultBase> = {}): CycleResult {
+	return { itemId: overrides.itemId ?? null, cost: overrides.cost ?? 0, ...overrides, outcome: "completed" };
+}
+
+export function parkedResult(overrides: Partial<CycleResultBase> & { parkClass?: ParkClass; parkReason?: string | null } = {}): CycleResult {
+	const { parkClass, parkReason, ...base } = overrides;
+	return { itemId: base.itemId ?? null, cost: base.cost ?? 0, ...base, outcome: "parked", parkClass: parkClass ?? "rate-limit", parkReason: parkReason ?? null };
+}
+
+export function blockedResult(overrides: Partial<CycleResultBase> & { blockedKind?: BlockedKind; blockedStep?: Step; reason: string }): CycleResult {
+	const { blockedKind, blockedStep, reason, ...base } = overrides;
+	return { itemId: base.itemId ?? null, cost: base.cost ?? 0, ...base, outcome: "blocked", blockedKind: blockedKind ?? "unclassified", reason, ...(blockedStep ? { blockedStep } : {}) };
+}
+
+export function failedResult(overrides: Partial<CycleResultBase> & { failureClass?: FailureClass; error: string }): CycleResult {
+	const { failureClass, error, ...base } = overrides;
+	return { itemId: base.itemId ?? null, cost: base.cost ?? 0, ...base, outcome: "failed", failureClass: failureClass ?? classifyFailure({ error }), error };
+}
+
+/** Mock input for `createMockRunPipeline`. Coerced to a valid `CycleResult` so mixed flag states cannot leak into the returned value. */
+export type PipelineOutcome = Partial<CycleResultBase> & {
 	park?: Partial<ParkSignal>;
+	completed?: boolean;
+	error?: string;
+	outcome?: CycleResult["outcome"];
+	failureClass?: FailureClass;
+	blockedKind?: BlockedKind;
+	reason?: string;
+	parkClass?: ParkClass;
+	parkReason?: string | null;
+};
+
+function coerceCycleResult(outcome: PipelineOutcome, itemId: string | null): CycleResult {
+	const base: CycleResultBase = {
+		itemId: outcome.itemId ?? itemId,
+		cost: outcome.cost ?? 0,
+		...(outcome.costEstimated ? { costEstimated: true } : {}),
+		...(outcome.verdict ? { verdict: outcome.verdict } : {}),
+		...(outcome.disposition ? { disposition: outcome.disposition } : {}),
+		...(outcome.detail ? { detail: outcome.detail } : {}),
+		...(outcome.awaitingMerge ? { awaitingMerge: true } : {}),
+		...(outcome.prUrl ? { prUrl: outcome.prUrl } : {}),
+		...(outcome.shipwrecked ? { shipwrecked: true } : {}),
+		...(outcome.bookkeepingWarnings?.length ? { bookkeepingWarnings: outcome.bookkeepingWarnings } : {}),
+	};
+	if (outcome.outcome === "completed" || outcome.completed === true) return { ...base, outcome: "completed" };
+	if (outcome.outcome === "parked" || outcome.error === "parked") {
+		return { ...base, outcome: "parked", parkClass: outcome.parkClass ?? "rate-limit", parkReason: outcome.parkReason ?? null };
+	}
+	if (outcome.outcome === "blocked" || (typeof outcome.error === "string" && / blocked: /.test(outcome.error))) {
+		const reason = outcome.reason ?? (typeof outcome.error === "string" ? outcome.error.replace(/^.*? blocked: /, "") : "");
+		return { ...base, outcome: "blocked", blockedKind: outcome.blockedKind ?? "unclassified", reason };
+	}
+	const error = outcome.error ?? "nothing to pick";
+	return { ...base, outcome: "failed", failureClass: outcome.failureClass ?? classifyFailure({ error }), error };
 }
 
 export type PipelineBehavior = {
@@ -148,22 +202,11 @@ export function createMockRunPipeline(behavior: PipelineBehavior): MockRunPipeli
 		} else if (spec) {
 			outcome = spec;
 		} else {
-			outcome = behavior.default ?? { completed: false, cost: 0, error: "nothing to pick" };
+			outcome = behavior.default ?? { cost: 0, error: "nothing to pick" };
 		}
 		if (outcome.park) Object.assign(parkSignal, outcome.park);
 		behavior.onCall?.(opts, parkSignal);
-		return {
-			itemId: outcome.itemId ?? opts.itemId ?? null,
-			completed: outcome.completed ?? false,
-			cost: outcome.cost ?? 0,
-			...(outcome.verdict ? { verdict: outcome.verdict } : {}),
-			...(outcome.error ? { error: outcome.error } : {}),
-			...(outcome.disposition ? { disposition: outcome.disposition } : {}),
-			...(outcome.awaitingMerge ? { awaitingMerge: outcome.awaitingMerge } : {}),
-			...(outcome.prUrl ? { prUrl: outcome.prUrl } : {}),
-			...(outcome.shipwrecked ? { shipwrecked: outcome.shipwrecked } : {}),
-			...(outcome.bookkeepingWarnings?.length ? { bookkeepingWarnings: outcome.bookkeepingWarnings } : {}),
-		};
+		return coerceCycleResult(outcome, opts.itemId ?? null);
 	};
 	return { runPipeline: fn, calls };
 }

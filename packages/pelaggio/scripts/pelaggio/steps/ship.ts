@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CONFIG, REVIEW_CONFIG, resolveDriverCandidates, resolveStepSettings } from "../config.js";
-import { classifyOutcome } from "../cycle-outcome.js";
+import { classifyFailure, classifyOutcome } from "../cycle-outcome.js";
 import type { DriverAssignmentState } from "../driver-assignment.js";
 import { getArtifactHeadSha, getHeadSha, hasDeliverableCommits } from "../git.js";
 import type { PrReviewGateResult } from "../pr-review-gate.js";
@@ -37,7 +37,8 @@ export interface ShipInput {
 type ShipDepNames =
 	| "roadmap"
 	| "log"
-	| "finish"
+	| "finishFailed"
+	| "finishCompleted"
 	| "parkExit"
 	| "quarantineExit"
 	| "runStepWithRetry"
@@ -67,7 +68,8 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		opts,
 		roadmap,
 		log,
-		finish,
+		finishFailed,
+		finishCompleted,
 		parkExit,
 		quarantineExit,
 		runStepWithRetry,
@@ -138,7 +140,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 	async function runImplementationAuthorRepair(cfg: { commitLabel: string; logMessage: string; prompt: string; preCheckpointGate?: () => { ok: true } | { ok: false; detail: string } }): Promise<StepAttempt> {
 		const author = assignment.authors.implementation;
 		if (!author) {
-			return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost: cost(), error: "implementation author attribution is unavailable" }) };
+			return { kind: "terminal", cycleResult: finishFailed("implementation author attribution is unavailable", "selection", { itemId, cost: cost() }) };
 		}
 		return runStepWithRetry({
 			name: "shakedown-code",
@@ -156,7 +158,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 	async function runColdPrReviewPreflight(pass: number): Promise<{ kind: "review"; review: PrReviewGateResult } | { kind: "terminal"; cycleResult: CycleResult }> {
 		const sha = getArtifactHeadSha(worktree!);
 		if (!sha) {
-			return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost: cost(), error: "could not bind artifact SHA for pre-flight" }) };
+			return { kind: "terminal", cycleResult: finishFailed("could not bind artifact SHA for pre-flight", "verification", { itemId, cost: cost() }) };
 		}
 		// #424 gate fix: snapshot the live claim worktree HEAD before any seat runs. Reviewer
 		// seats are confined to detached data-only checkouts, but the porcelain-only
@@ -166,7 +168,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		// spot deterministically: any HEAD movement fails the cycle before ship.
 		const preflightHeadBefore = getHeadSha(worktree!);
 		if (!preflightHeadBefore) {
-			return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost: cost(), error: "could not snapshot claim worktree HEAD before pre-flight" }) };
+			return { kind: "terminal", cycleResult: finishFailed("could not snapshot claim worktree HEAD before pre-flight", "verification", { itemId, cost: cost() }) };
 		}
 		const preparedShas = new Set<string>([sha]);
 		let seatIndex = 0;
@@ -233,7 +235,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		if (preflightHeadAfter !== preflightHeadBefore) {
 			const detail = `claim worktree HEAD moved during pre-flight (${preflightHeadBefore.slice(0, 12)} → ${preflightHeadAfter?.slice(0, 12) ?? "unreadable"})`;
 			log(`⚠ ${detail} — refusing to ship`);
-			return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost: cost(), error: detail }) };
+			return { kind: "terminal", cycleResult: finishFailed(detail, "verification", { itemId, cost: cost() }) };
 		}
 		return outcome;
 	}
@@ -246,13 +248,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 	}
 	if (!opts.dryRun && !hasDeliverableCommits(worktree!)) {
 		log("⚠ no deliverable commits on branch — skipping ship");
-		return finish({
-			itemId,
-			completed: false,
-			cost: cost(),
-			verdict,
-			error: "nothing to ship: branch only touches docs/plans/ (plan-only / no implementation)",
-		});
+		return finishFailed("nothing to ship: branch only touches docs/plans/ (plan-only / no implementation)", "verification", { itemId, cost: cost(), verdict });
 	}
 	const target = opts.shipTarget;
 	const targetSuffix = target.name === "direct-push" ? "" : ` (${target.name})`;
@@ -275,7 +271,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 			if (!typecheck.ok) {
 				const detail = typecheck.detail ? `: ${typecheck.detail}` : "";
 				log(`⚠ typecheck:ratchet failed ${context}${detail}`);
-				return finish({ itemId, completed: false, cost: cost(), verdict, error: `typecheck:ratchet failed ${context}${detail}` });
+				return finishFailed(`typecheck:ratchet failed ${context}${detail}`, "verification", { itemId, cost: cost(), verdict });
 			}
 			if (typecheck.skipped) {
 				log(`typecheck:ratchet not present in target repo — gate skipped (${typecheck.detail ?? "no script"})`);
@@ -283,7 +279,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 			const verified = verifyPrShipFreshness(worktree!, fetchedOriginMainOid);
 			if (!verified.ok) {
 				log(`⚠ PR freshness verification failed: ${verified.detail}`);
-				return finish({ itemId, completed: false, cost: cost(), verdict, error: `PR freshness verification failed: ${verified.detail}` });
+				return finishFailed(`PR freshness verification failed: ${verified.detail}`, "verification", { itemId, cost: cost(), verdict });
 			}
 			const gatedSha = getHeadSha(worktree!);
 			if (gatedSha) {
@@ -302,7 +298,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		const freshness = preparePrShipFreshness(worktree!);
 		if (freshness.kind === "failed") {
 			log(`⚠ PR freshness failed: ${freshness.detail}`);
-			return finish({ itemId, completed: false, cost: cost(), verdict, error: `PR freshness failed: ${freshness.detail}` });
+			return finishFailed(`PR freshness failed: ${freshness.detail}`, "verification", { itemId, cost: cost(), verdict });
 		}
 		// ADR-0025: every later freshness check and the ship effect bind to this OID —
 		// resolved when the harness fetched — never to the mutable `origin/main` ref,
@@ -312,7 +308,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		const fetchedOriginMainOid = freshness.originMainOid;
 		if (!fetchedOriginMainOid) {
 			log("⚠ PR freshness could not retain an origin/main OID — refusing to verify against the mutable ref");
-			return finish({ itemId, completed: false, cost: cost(), verdict, error: "PR freshness failed: origin/main OID could not be retained (ref does not resolve) — cannot bind verification to a fetched OID" });
+			return finishFailed("PR freshness failed: origin/main OID could not be retained (ref does not resolve) — cannot bind verification to a fetched OID", "verification", { itemId, cost: cost(), verdict });
 		}
 		if (freshness.kind === "merged" || freshness.kind === "conflicted") {
 			log(freshness.kind === "conflicted" ? "PR freshness conflicted — routing to implementation author" : "PR freshness merged — routing to implementation author");
@@ -329,7 +325,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 			const repaired = verifyConflictRepairComplete(worktree!, conflictedFiles);
 			if (!repaired.ok) {
 				log(`⚠ conflict repair incomplete: ${repaired.detail}`);
-				return finish({ itemId, completed: false, cost: cost(), verdict, error: `conflict repair incomplete: ${repaired.detail}` });
+				return finishFailed(`conflict repair incomplete: ${repaired.detail}`, "verification", { itemId, cost: cost(), verdict });
 			}
 			const gateFailure = await runFreshnessGates("after freshness repair", fetchedOriginMainOid);
 			if (gateFailure) return gateFailure;
@@ -356,7 +352,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		if (first.kind === "terminal") return first.cycleResult;
 		let review = first.review;
 		if (review.gate === "park") {
-			return parkExit() ?? finish({ itemId, completed: false, cost: cost(), error: "parked" });
+			return parkExit() ?? finishFailed("ship failed", "unclassified", { itemId, cost: cost() });
 		}
 		if (isAuthorActionablePreflight(review)) {
 			log("PR pre-flight BLOCK with survivors — one author revision");
@@ -374,13 +370,13 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 			if (!revisionTypecheck.ok) {
 				const detail = revisionTypecheck.detail ? `: ${revisionTypecheck.detail}` : "";
 				log(`⚠ typecheck:ratchet failed after pre-flight revision${detail}`);
-				return finish({ itemId, completed: false, cost: cost(), verdict, error: `typecheck:ratchet failed after pre-flight revision${detail}` });
+				return finishFailed(`typecheck:ratchet failed after pre-flight revision${detail}`, "verification", { itemId, cost: cost(), verdict });
 			}
 			const recheck = await runColdPrReviewPreflight(2);
 			if (recheck.kind === "terminal") return recheck.cycleResult;
 			review = recheck.review;
 			if (review.gate === "park") {
-				return parkExit() ?? finish({ itemId, completed: false, cost: cost(), error: "parked" });
+				return parkExit() ?? finishFailed("ship failed", "unclassified", { itemId, cost: cost() });
 			}
 			if (review.gate !== "pass") {
 				log(`PR pre-flight advisory exhaustion: gate=${review.gate} ok=${String(review.ok)} agreement=${review.agreement ?? "n/a"} survivors=${String(review.survivorCount ?? 0)} subtype=${review.subtype} — opening PR for the required gate`);
@@ -397,7 +393,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		// no auto-regate.
 		const gatedHeadOid = getHeadSha(worktree!);
 		if (!gatedHeadOid) {
-			return finish({ itemId, completed: false, cost: cost(), verdict, error: "could not snapshot gated HEAD OID before ship — refusing to ship unbound" });
+			return finishFailed("could not snapshot gated HEAD OID before ship — refusing to ship unbound", "verification", { itemId, cost: cost(), verdict });
 		}
 		prShipGate = { gatedHeadOid, originMainOid: fetchedOriginMainOid };
 	}
@@ -425,13 +421,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 	// not shippable — refuse before invoking the ship step rather than let the agent merge
 	// ungoverned.
 	if (target.name === "direct-push" && !opts.dryRun && !preShipState) {
-		return finish({
-			itemId,
-			completed: false,
-			cost: cost(),
-			verdict,
-			error: "cannot capture pre-ship git state — refusing to ship blind",
-		});
+		return finishFailed("cannot capture pre-ship git state — refusing to ship blind", "delivery", { itemId, cost: cost(), verdict });
 	}
 
 	// PR modes resolve a dynamic ship decision from the step output; direct-push has no
@@ -516,7 +506,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 	}
 
 	if (classifyOutcome(ship) === "error_confinement") {
-		return finish({ itemId, completed: false, cost: cost(), verdict, error: "ship failed: confinement violation" });
+		return finishFailed("ship failed: confinement violation", "confinement", { itemId, cost: cost(), verdict });
 	}
 
 	// Confinement outranks park: a foreign write must not be hidden by checkpoint/
@@ -527,7 +517,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 		const parked = parkExit();
 		if (parked) return parked;
 	}
-	if (classifyOutcome(ship) === "blocked") return quarantineExit(`ship blocked: ${ship.text}`, { verdict });
+	if (classifyOutcome(ship) === "blocked") return quarantineExit({ blockedKind: ship.blockedKind ?? "unclassified", reason: ship.text, step: "ship", verdict });
 
 	// Direct-push: the agent's job ended at the merge. Detect whether it landed
 	// on local `main`, then either run the deterministic bookkeeping tail (the
@@ -566,9 +556,9 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 				// (recoverable) and the feature branch was left intact. Surface as an
 				// incomplete cycle so origin-never-got-it is visible, not reported shipped.
 				log(`⚠ bookkeeping incomplete: ${bk.error}`);
-				return finish({ itemId, completed: false, cost: cost(), verdict, error: bk.error ?? "ship bookkeeping failed", ...(bk.warnings.length ? { bookkeepingWarnings: bk.warnings } : {}) });
+				return finishFailed(bk.error ?? "ship bookkeeping failed", "delivery", { itemId, cost: cost(), verdict, ...(bk.warnings.length ? { bookkeepingWarnings: bk.warnings } : {}) });
 			}
-			return finish({ itemId, completed: true, cost: cost(), verdict, ...(bk.warnings.length ? { bookkeepingWarnings: bk.warnings } : {}) });
+			return finishCompleted({ itemId, cost: cost(), verdict, ...(bk.warnings.length ? { bookkeepingWarnings: bk.warnings } : {}) });
 		};
 
 		const canTail = merged && ship.ok && reportedShipMerged(ship);
@@ -594,12 +584,10 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 			// destructive push/branch-delete steps.
 			const recoveredMerge = wreck.ok && reportedShipMerged(wreck) && verifyShipLanded(mainRepo, preShipState.mainSha, preShipState.featSha);
 			if (!recoveredMerge) {
-				return finish({
+				return finishFailed(merged ? "ship merged but post-merge verification/recovery failed" : ship.ok ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)", "delivery", {
 					itemId,
-					completed: false,
 					cost: cost(),
 					verdict,
-					error: merged ? "ship merged but post-merge verification/recovery failed" : ship.ok ? "ship claimed success but main did not advance (recovery also failed)" : "ship failed (recovery also failed)",
 				});
 			}
 
@@ -612,13 +600,7 @@ export async function runShip(ctx: ShipInput, helpers: ShipDeps): Promise<CycleR
 
 	// PR modes, dry-run, and direct-push rate-limit fall-through.
 	const shipResult = target.interpretResult(ship);
-	return finish({
-		itemId,
-		completed: shipResult.completed,
-		cost: cost(),
-		verdict,
-		error: shipResult.error,
-		...(shipResult.awaitingMerge ? { awaitingMerge: true } : {}),
-		...(shipResult.prUrl ? { prUrl: shipResult.prUrl } : {}),
-	});
+	const extra = { itemId, cost: cost(), verdict, ...(shipResult.awaitingMerge ? { awaitingMerge: true } : {}), ...(shipResult.prUrl ? { prUrl: shipResult.prUrl } : {}) };
+	const error = shipResult.error ?? "ship failed";
+	return shipResult.completed ? finishCompleted(extra) : finishFailed(error, classifyFailure({ error, subtype: ship.subtype }), extra);
 }

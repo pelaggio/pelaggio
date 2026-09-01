@@ -14,11 +14,11 @@ import { type AcpIncomingRequest, AcpRpcError, spawnAcpAgent } from "../acp-clie
 import { CONFIG, REPO, resolveProviderBin, resolveStepSettings, type StepSettings } from "../config.js";
 import { emitDecisionsFromText } from "../decisions.js";
 import { buildGrokArgs, detectLandlock, installGrokSandboxProfile } from "../grok-sandbox.js";
-import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedReason, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
+import { classifyStepError, isRefusal, looksLikeStalledAsk, parseBlockedSignal, parseWaitFlag, resolveParkReset } from "../outcome-classify.js";
 import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "../secret-hygiene.js";
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
-import type { ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
+import type { BlockedKind, ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
 import type { StepProvider } from "./types.js";
 
@@ -290,13 +290,15 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 		emitted.push({ type: "sdk_error", message: "model refused / declined the task" });
 	}
 
+	let blockedKind: BlockedKind | undefined;
 	if (ok) {
-		const blockedReason = parseBlockedReason(text);
-		if (blockedReason) {
+		const blocked = parseBlockedSignal(text);
+		if (blocked) {
 			ok = false;
 			subtype = "blocked";
-			text = blockedReason;
-			emitted.push({ type: "blocked", reason: blockedReason });
+			text = blocked.reason;
+			blockedKind = blocked.kind;
+			emitted.push({ type: "blocked", reason: blocked.reason });
 		} else if (looksLikeStalledAsk(text)) {
 			emitted.push({ type: "stalled_ask", tail: text.replace(/\s+$/, "").slice(-160) });
 		}
@@ -323,6 +325,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 			...(outputTail ? { outputTail } : {}),
 			...(stalledAsk ? { stalledAsk: true } : {}),
 			...(decisions.length ? { decisions } : {}),
+			...(blockedKind ? { blockedKind } : {}),
 		},
 		...(parkUpdate ? { parkUpdate } : {}),
 		events: emitted,

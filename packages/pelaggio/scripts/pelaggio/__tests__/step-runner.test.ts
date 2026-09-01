@@ -12,6 +12,7 @@ import {
 	blockForeignRootWrite,
 	blockPlanPolish,
 	blockWorktreeInstall,
+	classifyClaudeTerminalText,
 	claudeProvider,
 	composeSystemAppend,
 	createStepTextProjection,
@@ -75,6 +76,31 @@ describe("projectClaudeAssistantBlocks", () => {
 		assert.match(fullText, /say hi/);
 		assert.equal(fullText.includes("secret-output"), false);
 		assert.equal(fullText.includes("FILE_BODY"), false);
+	});
+});
+
+describe("classifyClaudeTerminalText", () => {
+	it("carries a named blocked kind from the structured sentinel", () => {
+		assert.deepEqual(classifyClaudeTerminalText({ ok: true, subtype: "success", text: "Cannot continue.\n\nBLOCKED: capability | missing credentials" }), {
+			ok: false,
+			subtype: "blocked",
+			text: "missing credentials",
+			blockedKind: "capability",
+		});
+	});
+
+	it("maps a legacy blocked sentinel to unclassified", () => {
+		assert.deepEqual(classifyClaudeTerminalText({ ok: true, subtype: "success", text: "Cannot continue.\n\nBLOCKED: missing credentials" }), {
+			ok: false,
+			subtype: "blocked",
+			text: "missing credentials",
+			blockedKind: "unclassified",
+		});
+	});
+
+	it("does not override a prior failure", () => {
+		const failed = { ok: false, subtype: "error_sdk", text: "BLOCKED: capability | ignored" };
+		assert.deepEqual(classifyClaudeTerminalText(failed), failed);
 	});
 });
 
@@ -522,7 +548,13 @@ describe("composeSystemAppend", () => {
 		for (const isWorktree of [true, false])
 			for (const planBlockActive of [true, false]) {
 				const out = composeSystemAppend({ ...base, isWorktree, planBlockActive });
-				assert.match(out, /BLOCKED:/, "autonomy append must document the BLOCKED sentinel");
+				assert.match(out, /BLOCKED: <kind> \| <reason>/, "autonomy append must document the structured BLOCKED sentinel");
+				assert.match(out, /spec-defect/, "prompt lists spec-defect");
+				assert.match(out, /prerequisite/, "prompt lists prerequisite");
+				assert.match(out, /capability/, "prompt lists capability");
+				assert.match(out, /environment/, "prompt lists environment");
+				assert.match(out, /charter-defect/, "prompt lists charter-defect");
+				assert.doesNotMatch(out, /BLOCKED: <kind> \| <reason>[\s\S]*unclassified/, "prompt does not list parser-owned unclassified");
 				assert.match(out, /final line/, "contract must specify the sentinel is the final line");
 			}
 	});

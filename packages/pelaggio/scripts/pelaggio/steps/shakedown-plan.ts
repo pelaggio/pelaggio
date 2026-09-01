@@ -16,15 +16,15 @@ export interface ShakedownPlanInput {
 	readonly profile: string;
 }
 /** Exactly the cycle helpers `runShakedownPlan` calls. */
-export type ShakedownPlanDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "cost">;
+export type ShakedownPlanDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finishFailed" | "runStepWithRetry" | "driverCandidates" | "cost">;
 
 export async function runShakedownPlan(ctx: ShakedownPlanInput, helpers: ShakedownPlanDeps): Promise<StepOutcome<{ verdict: "APPROVE" | "REVISE" | "RETHINK"; shakedownPlanText: string }>> {
 	const { assignment, steps, itemId, profile } = ctx;
-	const { roadmap, available, log, finish, runStepWithRetry, driverCandidates } = helpers;
+	const { roadmap, available, log, finishFailed, runStepWithRetry, driverCandidates } = helpers;
 	const planAuthor = assignment.authors.plan;
-	if (!planAuthor) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "shakedown-plan assignment failed: plan author attribution is unavailable" }) };
+	if (!planAuthor) return { kind: "terminal", result: finishFailed("shakedown-plan assignment failed: plan author attribution is unavailable", "selection", { itemId, cost: helpers.cost() }) };
 	const selected = selectReviewers(assignment, driverCandidates("shakedown-plan"), planAuthor, 1, available);
-	if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `shakedown-plan assignment failed: ${selected.reason}` }) };
+	if (!selected.ok) return { kind: "terminal", result: finishFailed(`shakedown-plan assignment failed: ${selected.reason}`, "selection", { itemId, cost: helpers.cost() }) };
 	const shakedownPlanArgs = await buildStepArgs(roadmap, itemId!, "plan-review");
 	const outcome = await runStepWithRetry({
 		name: "shakedown-plan",
@@ -42,6 +42,6 @@ export async function runShakedownPlan(ctx: ShakedownPlanInput, helpers: Shakedo
 	const lastStep = steps[steps.length - 1];
 	if (lastStep && lastStep.name === "shakedown-plan") lastStep.verdict = verdict;
 	log(`verdict: ${verdict}`);
-	if (verdict === "RETHINK") return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), verdict, error: "plan needs rethink" }) };
+	if (verdict === "RETHINK") return { kind: "terminal", result: finishFailed("plan needs rethink", "verification", { itemId, cost: helpers.cost(), verdict }) };
 	return { kind: "continue", verdict, shakedownPlanText };
 }

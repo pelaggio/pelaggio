@@ -16,7 +16,7 @@ import { appliedReviewFindingsArchivePath, reviewFindingsDigest } from "../revie
 import { shipBodyFile } from "../ship/decision.js";
 import type { ShipBookkeepingResult } from "../ship/index.js";
 import { getShipTarget } from "../ship/index.js";
-import type { Flags, ParkSignal, PipelineOpts, ReviewEscalation } from "../types.js";
+import type { CycleResult, Flags, ParkSignal, PipelineOpts, ReviewEscalation } from "../types.js";
 import {
 	allCommitMessages,
 	createMockRunPipeline,
@@ -31,6 +31,14 @@ import {
 	setupHermeticPipelineEnv,
 	teardownHermeticPipelineEnv,
 } from "./mocks.js";
+
+function failedError(r: CycleResult): string | undefined {
+	return r.outcome === "failed" ? r.error : undefined;
+}
+
+function failedClass(r: CycleResult): string | undefined {
+	return r.outcome === "failed" ? r.failureClass : undefined;
+}
 
 /** PR-mode ship fixture using the fixed body-file transport (inline prBody removed in #303). */
 function prShipDecision(body = "Body"): { ok: true; writes: Record<string, string>; text: string } {
@@ -168,8 +176,8 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
 		});
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "pick:diverted");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "pick:diverted");
 		assert.equal(calls.filter((c) => c.step === "plan").length, 0, "must not plan the diverted item");
 		assert.equal(calls.filter((c) => c.step === "implement").length, 0, "must not implement the diverted item");
 	});
@@ -189,8 +197,8 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
 		});
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "pick:unparsed-marker");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "pick:unparsed-marker");
 		assert.equal(calls.filter((c) => c.step === "plan").length, 0, "must not proceed without an authoritative marker");
 	});
 
@@ -209,7 +217,7 @@ describe("runPipeline — pick divergence gate (#332)", () => {
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
 		});
-		assert.notEqual(result.error, "pick:diverted", "a matching pin must not trip the divergence gate");
+		assert.notEqual(failedError(result), "pick:diverted", "a matching pin must not trip the divergence gate");
 	});
 });
 
@@ -260,7 +268,7 @@ describe("runPipeline — plan-time decomposition (#294 follow-up)", () => {
 		);
 		// The parent-dep (JSON array form) must survive to the created item — decomposition's whole point
 		// is that follow-up slices are blocked on the parent, not immediately pickable. (#353 review)
-		assert.equal(created[0].deps, "TOOL-99", "deps array is preserved (not silently dropped)");
+		assert.equal(created[0]!.deps, "TOOL-99", "deps array is preserved (not silently dropped)");
 	});
 
 	it("creates deferred-items from assistantText only, ignoring a conflicting fullText marker", async () => {
@@ -342,16 +350,16 @@ describe("runPipeline — happy path", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
-		assert.equal(result.error, undefined);
+		assert.equal(result.outcome, "completed");
+		assert.equal(failedError(result), undefined);
 		assert.equal(result.verdict, "APPROVE");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
 		);
 		assert.equal(logs.length, 1);
-		const entry = logs[0];
-		assert.equal(entry.completed, true);
+		const entry = logs[0]!;
+		assert.equal(entry.outcome, "completed");
 		const steps = entry.steps as Array<{ name: string }>;
 		assert.equal(steps.length, 5);
 		assert.ok(Math.abs(result.cost - 0.05) < 1e-9, `expected cost ≈ 0.05, got ${result.cost}`);
@@ -388,7 +396,7 @@ describe("runPipeline — review findings revision prompt", () => {
 			roadmap: makeMockRoadmap(),
 		});
 
-		assert.equal(result.completed, false, "the later blocked shakedown still ends the cycle");
+		assert.notEqual(result.outcome, "completed", "the later blocked shakedown still ends the cycle");
 		const appliedOnSha = execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim();
 		const archivePath = appliedReviewFindingsArchivePath(worktree, "TOOL-99", findingsSha256, appliedOnSha);
 		assert.equal(existsSync(findingsPath), false, "successful implement must move the auto-discovered local findings file");
@@ -440,8 +448,8 @@ describe("runPipeline — review findings revision prompt", () => {
 			dispatchStepEffects: async () => ({}),
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /checkpoint did not commit cleanly/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /checkpoint did not commit cleanly/);
 		assert.equal(existsSync(findingsPath), true);
 		assert.equal(flags["review-findings"], findingsPath);
 	});
@@ -459,9 +467,9 @@ describe("runPipeline — review findings revision prompt", () => {
 			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
 		);
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /could not read review findings/);
-		assert.match(result.error ?? "", /missing-findings\.md/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /could not read review findings/);
+		assert.match(failedError(result) ?? "", /missing-findings\.md/);
 		assert.equal(
 			calls.some((call) => call.step === "implement"),
 			false,
@@ -480,8 +488,8 @@ describe("runPipeline — review findings revision prompt", () => {
 			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
 		);
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /empty --review-findings path/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /empty --review-findings path/);
 		assert.equal(
 			calls.some((call) => call.step === "implement"),
 			false,
@@ -502,8 +510,8 @@ describe("runPipeline — review findings revision prompt", () => {
 			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
 		);
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /is empty — refusing a findings-driven resume/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /is empty — refusing a findings-driven resume/);
 		assert.equal(
 			calls.some((call) => call.step === "implement"),
 			false,
@@ -530,7 +538,7 @@ describe("runPipeline — review findings revision prompt", () => {
 			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
 		);
 
-		assert.equal(result.completed, false);
+		assert.notEqual(result.outcome, "completed");
 		assert.equal(existsSync(findingsPath), true, "an unsuccessful implement must preserve findings for retry");
 		const implementPrompt = calls.find((c) => c.step === "implement")?.prompt ?? "";
 		assert.match(implementPrompt, /Revision pass/);
@@ -565,7 +573,7 @@ describe("runPipeline — review findings revision prompt", () => {
 			{ runStep, mainRepo: worktree, listWorktrees: () => [], appendLog: () => {}, roadmap: makeMockRoadmap() },
 		);
 
-		assert.equal(result.completed, false);
+		assert.notEqual(result.outcome, "completed");
 		const implementCalls = calls.filter((c) => c.step === "implement");
 		assert.equal(implementCalls.length, 2);
 		const continuePrompt = implementCalls[1]?.prompt ?? "";
@@ -598,15 +606,15 @@ describe("runPipeline — RETHINK verdict", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "plan needs rethink");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "plan needs rethink");
 		assert.equal(result.verdict, "RETHINK");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["plan", "shakedown-plan"],
 		);
 		assert.equal(logs.length, 1);
-		assert.equal(logs[0].verdict, "RETHINK");
+		assert.equal(logs[0]!.verdict, "RETHINK");
 		assert.equal(parkSignal.parked, false);
 	});
 });
@@ -648,7 +656,7 @@ describe("runPipeline — implement turn-limit retry", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		const implementCalls = calls.filter((c) => c.step === "implement");
 		assert.equal(implementCalls.length, 2);
 		assert.deepEqual(
@@ -666,7 +674,7 @@ describe("runPipeline — implement turn-limit retry", () => {
 			`expected implementation continued commit; got:\n${msgs.join("\n")}`,
 		);
 
-		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const steps = logs[0]!.steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
 		const implEntries = steps.filter((s) => s.name === "implement");
 		assert.ok(
 			implEntries.some((s) => s.attempt === 2),
@@ -679,6 +687,38 @@ describe("runPipeline — implement turn-limit retry", () => {
 
 		const continuePrompt = implementCalls[1]?.prompt ?? "";
 		assert.ok(continuePrompt.includes("project-relative") && continuePrompt.includes("use that absolute form"), `expected continuePrompt to carry worktree hint; got: ${continuePrompt.slice(0, 400)}`);
+	});
+});
+
+describe("runPipeline — edit-loop exhaustion", () => {
+	it("persists unclassified rather than mislabeling the retry ceiling as a turn limit", async () => {
+		const worktree = makeTempGitRepo();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep(
+			{
+				plan: { ok: true },
+				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
+				implement: [
+					{ ok: false, subtype: "edit_loop", text: "Edit loop detected: src/a.ts edited 22 times", writes: { "impl-a.txt": "attempt 1" } },
+					{ ok: false, subtype: "edit_loop", text: "Edit loop detected: src/a.ts edited 22 times", writes: { "impl-b.txt": "attempt 2" } },
+				],
+			},
+			parkSignal,
+		);
+
+		const result = await runPipeline(baseOpts(worktree), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: worktree,
+			listWorktrees: () => [],
+			appendLog: (entry) => logs.push(entry),
+		});
+
+		assert.equal(result.outcome, "failed");
+		assert.equal(failedClass(result), "unclassified");
+		assert.equal(failedError(result), "implement failed (max retries)");
+		assert.equal(calls.filter((call) => call.step === "implement").length, 2);
+		assert.equal(logs[0]?.failureClass, "unclassified");
 	});
 });
 
@@ -716,7 +756,7 @@ describe("runPipeline — plan turn-limit retry", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		const planCalls = calls.filter((c) => c.step === "plan");
 		assert.equal(planCalls.length, 2, `expected two plan attempts; got ${planCalls.length}`);
 		assert.deepEqual(
@@ -724,7 +764,7 @@ describe("runPipeline — plan turn-limit retry", () => {
 			[1, 2],
 		);
 
-		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const steps = logs[0]!.steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
 		const planEntries = steps.filter((s) => s.name === "plan");
 		const attempt2 = planEntries.find((s) => s.attempt === 2);
 		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 plan entry to carry retriedMaxTurns; got ${JSON.stringify(planEntries)}`);
@@ -768,7 +808,7 @@ describe("runPipeline — shakedown-plan turn-limit retry", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.verdict, "APPROVE");
 		const sdpCalls = calls.filter((c) => c.step === "shakedown-plan");
 		assert.equal(sdpCalls.length, 2, `expected two shakedown-plan attempts; got ${sdpCalls.length}`);
@@ -776,7 +816,7 @@ describe("runPipeline — shakedown-plan turn-limit retry", () => {
 			sdpCalls.map((c) => c.attempt),
 			[1, 2],
 		);
-		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const steps = logs[0]!.steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
 		const attempt2 = steps.filter((s) => s.name === "shakedown-plan").find((s) => s.attempt === 2);
 		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 shakedown-plan entry to mark retriedMaxTurns; got ${JSON.stringify(attempt2)}`);
 	});
@@ -821,7 +861,7 @@ describe("runPipeline — transient SDK retry", () => {
 			sleep: async () => {},
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.verdict, "APPROVE");
 		assert.equal(calls.filter((c) => c.step === "shakedown-plan").length, 2);
 		assert.equal(
@@ -854,8 +894,9 @@ describe("runPipeline — transient SDK retry", () => {
 		});
 
 		assert.equal(calls.filter((c) => c.step === "shakedown-plan").length, 3);
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "transient sdk error");
+		assert.equal(result.outcome, "failed");
+		assert.equal(failedClass(result), "provider");
+		assert.equal(failedError(result), "transient sdk error");
 		assert.equal(parkSignal.parked, false);
 	});
 
@@ -879,8 +920,8 @@ describe("runPipeline — transient SDK retry", () => {
 		});
 
 		assert.equal(calls.filter((c) => c.step === "shakedown-plan").length, 1);
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "shakedown-plan failed");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "shakedown-plan failed");
 	});
 });
 
@@ -918,14 +959,14 @@ describe("runPipeline — shakedown-code turn-limit retry", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		const sdcCalls = calls.filter((c) => c.step === "shakedown-code");
 		assert.equal(sdcCalls.length, 2, `expected two shakedown-code attempts; got ${sdcCalls.length}`);
 		assert.deepEqual(
 			sdcCalls.map((c) => c.attempt),
 			[1, 2],
 		);
-		const steps = logs[0].steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
+		const steps = logs[0]!.steps as Array<{ name: string; attempt?: number; retriedMaxTurns?: boolean }>;
 		const attempt2 = steps.filter((s) => s.name === "shakedown-code").find((s) => s.attempt === 2);
 		assert.equal(attempt2?.retriedMaxTurns, true, `expected attempt-2 shakedown-code entry to mark retriedMaxTurns; got ${JSON.stringify(attempt2)}`);
 		// The attempt-2 continue prompt is the bespoke "ran out of turns" text, not the code-review skill.
@@ -956,8 +997,8 @@ describe("runPipeline — budget guard skips turn-limit retry", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /insufficient budget to retry/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /insufficient budget to retry/);
 		const planCalls = calls.filter((c) => c.step === "plan");
 		assert.equal(planCalls.length, 1, `expected exactly one plan attempt (retry skipped); got ${planCalls.length}`);
 		const stepsRun = calls.map((c) => c.step);
@@ -988,16 +1029,18 @@ describe("runPipeline — refusal terminates without retry or park", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /refused/);
+		assert.equal(result.outcome, "failed");
+		assert.equal(failedClass(result), "refusal");
+		assert.match(failedError(result) ?? "", /refused/);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["plan", "shakedown-plan"],
 		);
 		assert.equal(parkSignal.parked, false);
 		assert.equal(logs.length, 1);
-		assert.equal(logs[0].completed, false);
-		assert.equal(logs[0].parked, false);
+		assert.equal(logs[0]!.outcome, "failed");
+		assert.equal(logs[0]!.failureClass, "refusal");
+		assert.match((logs[0]!.error as string) ?? "", /refused/);
 	});
 
 	it("implement refusal → cycle terminal, error /refused/, no second implement attempt", async () => {
@@ -1022,8 +1065,9 @@ describe("runPipeline — refusal terminates without retry or park", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /refused/);
+		assert.equal(result.outcome, "failed");
+		assert.equal(failedClass(result), "refusal");
+		assert.match(failedError(result) ?? "", /refused/);
 		const implementCalls = calls.filter((c) => c.step === "implement");
 		assert.equal(implementCalls.length, 1, `expected no implement retry; got ${implementCalls.length} calls`);
 		const stepsRun = calls.map((c) => c.step);
@@ -1056,8 +1100,9 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement blocked: the schema field does not exist");
+		assert.equal(result.outcome, "blocked");
+		assert.equal(result.outcome === "blocked" ? result.reason : undefined, "the schema field does not exist");
+		assert.equal(result.outcome === "blocked" ? result.blockedKind : undefined, "unclassified");
 		assert.equal(result.disposition, "quarantine-and-continue");
 		assert.equal(execSync("git status --porcelain", { cwd: worktree, encoding: "utf-8" }).trim(), "");
 		// Work is preserved by EITHER path: implement's checkpoint effect commits WIP
@@ -1072,6 +1117,11 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 		assert.ok(!stepsRun.includes("ship"), `expected no ship; got ${stepsRun.join(",")}`);
 		assert.equal(parkSignal.parked, false);
 		assert.equal(logs.length, 1);
+		assert.equal(logs[0].outcome, "blocked");
+		assert.equal(logs[0].blockedKind, "unclassified");
+		assert.equal(logs[0].reason, "the schema field does not exist");
+		assert.equal(logs[0].completed, undefined);
+		assert.equal(logs[0].error, undefined);
 		const steps = logs[0].steps as Array<{ name: string; subtype?: string }>;
 		const implEntry = steps.find((s) => s.name === "implement");
 		assert.equal(implEntry?.subtype, "blocked", `expected implement entry subtype "blocked"; got ${JSON.stringify(implEntry)}`);
@@ -1098,18 +1148,22 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "shakedown-plan blocked: rubric file is missing");
+		assert.equal(result.outcome, "blocked");
+		assert.equal(result.outcome === "blocked" ? result.reason : undefined, "rubric file is missing");
+		assert.equal(result.disposition, "quarantine-and-continue");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["plan", "shakedown-plan"],
 		);
 		assert.equal(parkSignal.parked, false);
+		assert.equal(logs[0].outcome, "blocked");
+		assert.equal(logs[0].reason, "rubric file is missing");
 	});
 
 	it("ship blocked → quarantines while preserving the review verdict", async () => {
 		const worktree = makeTempGitRepo();
 		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
 		const { runStep } = createMockRunStep(
 			{
 				plan: { ok: true },
@@ -1125,14 +1179,19 @@ describe("runPipeline — blocked terminates without retry or park", () => {
 			runStep,
 			mainRepo: worktree,
 			listWorktrees: () => [],
-			appendLog: () => {},
+			appendLog: (e) => {
+				logs.push(e);
+			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "ship blocked: merge queue unavailable");
+		assert.equal(result.outcome, "blocked");
+		assert.equal(result.outcome === "blocked" ? result.reason : undefined, "merge queue unavailable");
 		assert.equal(result.disposition, "quarantine-and-continue");
 		assert.equal(result.verdict, "APPROVE");
 		assert.equal(parkSignal.parked, false);
+		assert.equal(logs[0].outcome, "blocked");
+		assert.equal(logs[0].reason, "merge queue unavailable");
+		assert.equal(logs[0].verdict, "APPROVE");
 	});
 });
 
@@ -1161,12 +1220,14 @@ describe("runPipeline — no deliverable commits", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /nothing to ship/);
+		assert.equal(result.outcome, "failed");
+		assert.equal(failedClass(result), "verification");
+		assert.match(failedError(result) ?? "", /nothing to ship/);
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(!stepsRun.includes("ship"), `ship should not have been called; got ${stepsRun.join(",")}`);
 		assert.equal(logs.length, 1);
-		assert.equal(logs[0].completed, false);
+		assert.equal(logs[0].outcome, "failed");
+		assert.equal(logs[0].failureClass, "verification");
 		assert.match((logs[0].error as string) ?? "", /nothing to ship/);
 	});
 });
@@ -1198,15 +1259,15 @@ describe("runPipeline — ghost-ship detection", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /ship claimed success but main did not advance/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /ship claimed success but main did not advance/);
 		// The finish() spread surfaces the local shipwreck flag on the returned CycleResult so
 		// the orchestrator can classify a `shipwrecked` notification.
 		assert.equal(result.shipwrecked, true);
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(stepsRun.includes("shipwreck"), `expected shipwreck to run; got ${stepsRun.join(",")}`);
 		assert.equal(logs.length, 1);
-		assert.equal(logs[0].completed, false);
+		assert.notEqual(logs[0].outcome, "completed");
 		assert.equal(logs[0].shipwrecked, true);
 	});
 });
@@ -1239,12 +1300,12 @@ describe("runPipeline — pre-ship state capture failure", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /cannot capture pre-ship git state/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /cannot capture pre-ship git state/);
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(!stepsRun.includes("ship"), `ship should not have been invoked; got ${stepsRun.join(",")}`);
 		assert.equal(logs.length, 1);
-		assert.equal(logs[0].completed, false);
+		assert.notEqual(logs[0].outcome, "completed");
 	});
 });
 
@@ -1278,8 +1339,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			allowDirtyMain: false,
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 		assert.equal(result.disposition, undefined);
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -1313,8 +1374,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 	});
 
 	it("tolerates unchanged operator dirtiness outside mutating-tool windows", async () => {
@@ -1331,7 +1392,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
 		});
-		assert.equal(result.error, "implement refused (model declined the task)");
+		assert.equal(failedError(result), "implement refused (model declined the task)");
 	});
 
 	it("still fails on sibling writes when main auditing is disabled", async () => {
@@ -1349,7 +1410,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			appendLog: () => {},
 			roadmap: makeMockRoadmap(),
 		});
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 	});
 
 	it("fails closed when sibling worktrees cannot be enumerated under the opt-out", async () => {
@@ -1373,7 +1434,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			[],
 			"#388: a before-phase enumeration failure fails closed before any provider spend",
 		);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 		const steps = logs[0].steps as Array<{ subtype?: string; text?: string; cost?: number }>;
 		assert.equal(steps.at(-1)?.subtype, "error_confinement");
 		assert.equal(steps.at(-1)?.cost, 0);
@@ -1425,8 +1486,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			roadmap: makeMockRoadmap(),
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 		assert.equal(parkSignal.parked, true);
 	});
 
@@ -1468,8 +1529,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
-		assert.equal(result.completed, true);
-		assert.equal(result.error, undefined);
+		assert.equal(result.outcome, "completed");
+		assert.equal(failedError(result), undefined);
 		assert.equal(logs.length, 1);
 		const status = execSync("git status --porcelain=v1 --untracked-files=all", { cwd: mainRepo, encoding: "utf-8" }).trim();
 		assert.equal(status, "");
@@ -1500,8 +1561,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
-		assert.equal(result.completed, true);
-		assert.equal(result.error, undefined);
+		assert.equal(result.outcome, "completed");
+		assert.equal(failedError(result), undefined);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["implement", "shakedown-code", "ship"],
@@ -1536,8 +1597,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			roadmap: makeMockRoadmap(),
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 	});
 
 	it("overlapping audited steps writing only their own worktree do not false-positive, and genuinely run in parallel", async () => {
@@ -1585,11 +1646,11 @@ describe("runPipeline — worktree confinement audit", () => {
 
 		const [rA, rB] = await Promise.all([pA, pB]);
 		assert.equal(maxActive, 2, "audited provider windows must overlap — no serialization");
-		assert.notEqual(rA.error, "implement failed: confinement violation");
-		assert.notEqual(rB.error, "implement failed: confinement violation");
+		assert.notEqual(failedError(rA), "implement failed: confinement violation");
+		assert.notEqual(failedError(rB), "implement failed: confinement violation");
 		// Both should surface the intentional refusal, not a race false-positive.
-		assert.match(rA.error ?? "", /refused/);
-		assert.match(rB.error ?? "", /refused/);
+		assert.match(failedError(rA) ?? "", /refused/);
+		assert.match(failedError(rB) ?? "", /refused/);
 		// Registry drains on finish.
 		assert.equal(activeWorktrees.size, 0, "worktrees deregister on finish");
 	});
@@ -1620,8 +1681,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			roadmap: makeMockRoadmap(),
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 	});
 
 	it("a write to an INACTIVE sibling worktree (not in the registry) still fails closed", async () => {
@@ -1653,8 +1714,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			roadmap: makeMockRoadmap(),
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 	});
 
 	it("does not fail on pre-existing forbidden-root dirtiness when the snapshot is unchanged", async () => {
@@ -1680,8 +1741,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			dispatchStepEffects: async () => ({ appendText: "https://github.com/cdhorne/pelaggio/pull/99" }),
 		});
 
-		assert.equal(result.completed, true);
-		assert.equal(result.error, undefined);
+		assert.equal(result.outcome, "completed");
+		assert.equal(failedError(result), undefined);
 	});
 
 	it("reports pre-snapshot audit failure as error_confinement with phase diagnostics", async () => {
@@ -1720,8 +1781,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			[],
@@ -1772,8 +1833,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 		const step = (logs[0].steps as Array<{ subtype?: string; outputTail?: string; errorDetail?: string }>).at(-1);
 		assert.equal(step?.subtype, "error_confinement");
 		assert.match(step?.errorDetail ?? "", /after implement/);
@@ -1807,8 +1868,8 @@ describe("runPipeline — worktree confinement audit", () => {
 		const elapsed = Date.now() - t0;
 		clearTimeout(tamperAt);
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 		assert.ok(elapsed < 2000, `expected the mid-step probe to trip well under 2s; got ${elapsed}ms`);
 		assert.equal(calls[0]?.step, "implement");
 		const step = (logs[0].steps as Array<{ subtype?: string; errorDetail?: string; cost?: number }>).at(-1);
@@ -1854,8 +1915,8 @@ describe("runPipeline — worktree confinement audit", () => {
 		});
 		clearTimeout(peerWriteAt);
 
-		assert.equal(result.completed, true);
-		assert.equal(result.error, undefined);
+		assert.equal(result.outcome, "completed");
+		assert.equal(failedError(result), undefined);
 	});
 
 	it("logs sorted changed roots (not audit-failed wording) with confinement diagnostics", async () => {
@@ -1889,8 +1950,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			allowDirtyMain: false,
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 		const step = (logs[0].steps as Array<{ subtype?: string; outputTail?: string; errorDetail?: string }>).at(-1);
 		assert.equal(step?.subtype, "error_confinement");
 		assert.match(step?.errorDetail ?? "", /forbidden root changed during implement:/);
@@ -1930,8 +1991,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			roadmap: makeMockRoadmap(),
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "pick failed");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "pick failed");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick"],
@@ -1970,7 +2031,7 @@ describe("runPipeline — worktree confinement audit", () => {
 			roadmap: makeMockRoadmap(),
 		});
 
-		assert.equal(result.completed, false);
+		assert.notEqual(result.outcome, "completed");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["implement", "shakedown-code", "ship", "shipwreck"],
@@ -2023,7 +2084,7 @@ describe("runPipeline — worktree confinement audit", () => {
 		const steps = logs[0].steps as Array<{ name: string; subtype?: string }>;
 		const wreckStep = steps.find((s) => s.name === "shipwreck");
 		assert.notEqual(wreckStep?.subtype, "error_confinement", `shipwreck's own-worktree squash/commit must not trip confinement; got subtype=${wreckStep?.subtype}`);
-		assert.notEqual(result.error, "shipwreck failed: confinement violation");
+		assert.notEqual(failedError(result), "shipwreck failed: confinement violation");
 	});
 
 	it("routes ship-step confinement terminal instead of invoking shipwreck or target interpretation", async () => {
@@ -2063,8 +2124,8 @@ describe("runPipeline — worktree confinement audit", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "ship failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "ship failed: confinement violation");
 		assert.equal(interpreted, false);
 		assert.ok(!calls.map((c) => c.step).includes("shipwreck"));
 	});
@@ -2112,7 +2173,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 			],
 		});
 
-		assert.equal(result.completed, true, `expected success; error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected success; error=${failedError(result)}`);
 	});
 
 	it("revalidates a changed sibling at diff time: still-eligible warns instead of parking", async () => {
@@ -2162,7 +2223,7 @@ describe("runPipeline — cross-process session records (#369)", () => {
 				revalidateChangedRoot: (_ctx, root) => (root === peer || root.endsWith("peer-rv") ? accepted : undefined),
 			});
 
-			assert.equal(result.completed, true, `expected revalidation suppress; error=${result.error}`);
+			assert.equal(result.outcome, "completed", `expected revalidation suppress; error=${failedError(result)}`);
 			assert.ok(
 				warnings.some((w) => /excluded live session/.test(w)),
 				`expected revalidation warning; got: ${warnings.join(" | ")}`,
@@ -2200,8 +2261,8 @@ describe("runPipeline — cross-process session records (#369)", () => {
 			revalidateChangedRoot: () => undefined,
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "implement failed: confinement violation");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "implement failed: confinement violation");
 	});
 
 	it("registers and disposes a session controller around the cycle lifecycle", async () => {
@@ -2386,7 +2447,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.ok(
 			calls.some((c) => c.step === "plan"),
 			`expected plan step to run; got ${calls.map((c) => c.step).join(",")}`,
@@ -2432,7 +2493,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["shakedown-plan", "implement", "shakedown-code", "ship"],
@@ -2477,7 +2538,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.ok(getItemPlanCalls.length >= 1, "expected roadmap.getItemPlan to be called at least once");
 		assert.ok(
 			getItemPlanCalls.every((c) => c.worktree === worktree),
@@ -2532,7 +2593,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(publishCalls.length, 1, "harness publishes the plan exactly once (not the model)");
 		assert.ok(publishCalls[0].body.includes("# Plan"), `expected the written plan body; got ${JSON.stringify(publishCalls[0])}`);
 	});
@@ -2571,7 +2632,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.error, "parked");
+		assert.equal(result.outcome, "parked");
 		assert.equal(publishCalls.length, 0, "a parked plan step must not publish (dispatch fires only on success)");
 	});
 
@@ -2602,8 +2663,8 @@ describe("runPipeline — RoadmapSource injection", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "plan failed");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "plan failed");
 		const steps = logs[0].steps as Array<{
 			name: string;
 			ok: boolean;
@@ -2666,7 +2727,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		const planPrompt = calls.find((c) => c.step === "plan")?.prompt ?? "";
 		assert.match(planPrompt, /## Roadmap item context/);
 		assert.match(planPrompt, /the real spec goes here/, "the injected issue body must reach the plan prompt");
@@ -2723,7 +2784,7 @@ describe("runPipeline — RoadmapSource injection", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(created.length, 2, "harness creates both deferred items from the markers");
 		assert.equal(created[0].title, "Add retries");
 		assert.equal(created[0].scope, "S");
@@ -2761,8 +2822,8 @@ describe("runPipeline — rate-limit park preserves state", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "parked");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(result.outcome, "parked");
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(!stepsRun.includes("implement"));
 		assert.ok(!stepsRun.includes("shakedown-code"));
@@ -2774,7 +2835,7 @@ describe("runPipeline — rate-limit park preserves state", () => {
 			`expected rate-limit park commit; got:\n${msgs.join("\n")}`,
 		);
 
-		assert.equal(logs[0].parked, true);
+		assert.equal(logs[0].outcome, "parked");
 		assert.equal(logs[0].parkReason, "5h");
 		// Signal-driven park: the structured limitType classifies it, and no review-loop
 		// reason is present to override it.
@@ -2839,7 +2900,7 @@ describe("runPipeline — pick step", () => {
 			},
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.itemId, "TOOL-99");
 		// Auto-pick resolves the item inside the pick step; the #369 session record must still be
 		// item + attempt scoped (`cycle-N-TOOL-99-aN`), never the cycle's `cycle-N-unclaimed` id —
@@ -2855,7 +2916,7 @@ describe("runPipeline — pick step", () => {
 		);
 		assert.ok(existsSync(worktreePath), `expected worktree at ${worktreePath}`);
 		assert.equal(logs.length, 1);
-		assert.equal(logs[0].completed, true);
+		assert.equal(logs[0].outcome, "completed");
 		const msgs = allCommitMessages(worktreePath);
 		assert.ok(
 			msgs.some((m) => m === "wip: pelaggio implementation checkpoint"),
@@ -2932,7 +2993,7 @@ describe("runPipeline — pick step", () => {
 		});
 		assert.equal(quickScopeCalls, 1);
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
@@ -2962,14 +3023,14 @@ describe("runPipeline — pick step", () => {
 			readRuntimeVersions: () => ({ versions: { pelaggio: "0.1.0", node: "v22", drivers: { claude: "sdk 1" } }, unavailable: [] }),
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "pick failed");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "pick failed");
 		assert.equal(result.itemId, null);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick"],
 		);
-		assert.equal(logs[0].completed, false);
+		assert.notEqual(logs[0].outcome, "completed");
 		const provenance = logs[0].provenance as Record<string, unknown>;
 		assert.equal(provenance.runId, "cycle-1");
 		assert.equal(provenance.durationMs, 42);
@@ -2977,6 +3038,37 @@ describe("runPipeline — pick step", () => {
 		assert.deepEqual(provenance.versions, { pelaggio: "0.1.0", node: "v22", drivers: { claude: "sdk 1" } });
 		assert.equal((provenance.drivers as Array<{ provider: string }>)[0].provider, "claude");
 		assert.equal("entryDecision" in provenance, false, "early pick failure omits entryDecision (legacy-compatible)");
+	});
+
+	it("pick-step BLOCKED: emits blocked + halt-campaign (not quarantined)", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep, calls } = createMockRunStep({ pick: { ok: false, subtype: "blocked", text: "waiting on API key", blockedKind: "environment" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.outcome, "blocked");
+		assert.equal(result.outcome === "blocked" ? result.blockedKind : undefined, "environment");
+		assert.equal(result.outcome === "blocked" ? result.reason : undefined, "waiting on API key");
+		assert.equal(result.blockedStep, "pick");
+		assert.equal(result.disposition, undefined);
+		assert.notEqual(result.disposition, "quarantine-and-continue");
+		assert.deepEqual(
+			calls.map((c) => c.step),
+			["pick"],
+		);
+		assert.equal(logs[0].outcome, "blocked");
+		assert.equal(logs[0].blockedKind, "environment");
+		assert.equal(logs[0].reason, "waiting on API key");
 	});
 
 	it("queue empty — maps pick-result: queue-empty to error 'pick:queue-empty' (recoverable)", async () => {
@@ -2995,13 +3087,37 @@ describe("runPipeline — pick step", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "pick:queue-empty");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "pick:queue-empty");
 		assert.equal(result.itemId, null);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick"],
 		);
+	});
+
+	it("pick:blocked from parsePickResult is failed/selection, not a blocked cycle", async () => {
+		const { parent, repo } = makeTempRepoWithParent();
+		const parkSignal = makeParkSignal();
+		const logs: Array<Record<string, unknown>> = [];
+		const { runStep } = createMockRunStep({ pick: { ok: true, text: "item is blocked\npick-result: blocked" } }, parkSignal);
+
+		const result = await runPipeline(pickOpts(), parkSignal, baseFlags, {
+			runStep,
+			mainRepo: repo,
+			resolveWorktree: (id) => join(parent, `${WORKTREE_PREFIX}${id.toLowerCase()}`),
+			listWorktrees: () => [],
+			appendLog: (e) => {
+				logs.push(e);
+			},
+		});
+
+		assert.equal(result.outcome, "failed");
+		assert.equal(failedClass(result), "selection");
+		assert.equal(failedError(result), "pick:blocked");
+		assert.equal(logs[0].outcome, "failed");
+		assert.equal(logs[0].failureClass, "selection");
+		assert.equal(logs[0].error, "pick:blocked");
 	});
 
 	it("no item ID parsed — aborts when roadmap.parseItemId returns null for pick output", async () => {
@@ -3022,8 +3138,8 @@ describe("runPipeline — pick step", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "no item ID parsed");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "no item ID parsed");
 		assert.equal(result.itemId, null);
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -3068,9 +3184,9 @@ describe("runPipeline — pick step", () => {
 			appendLog: () => {},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.itemId, "TOOL-99");
-		assert.equal(result.error, undefined);
+		assert.equal(failedError(result), undefined);
 		assert.ok(calls.some((c) => c.step === "plan"));
 	});
 
@@ -3113,7 +3229,7 @@ describe("runPipeline — pick step", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 		assert.equal(result.itemId, "TOOL-99");
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 	});
 
 	it("does not pass a command-shaped fullText haystack to isQuickScope", async () => {
@@ -3183,10 +3299,10 @@ describe("runPipeline — pick step", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /TOOL-99/);
-		assert.match(result.error ?? "", new RegExp(`${WORKTREE_PREFIX}tool-99`));
-		assert.match(result.error ?? "", /git worktree list \(/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /TOOL-99/);
+		assert.match(failedError(result) ?? "", new RegExp(`${WORKTREE_PREFIX}tool-99`));
+		assert.match(failedError(result) ?? "", /git worktree list \(/);
 		assert.equal(result.itemId, "TOOL-99");
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -3242,7 +3358,7 @@ describe("runPipeline — pick step", () => {
 		});
 
 		assert.equal(result.itemId, "COMP-11C-II");
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
@@ -3299,7 +3415,7 @@ describe("runPipeline — pick step", () => {
 
 		assert.ok(listCalls >= 1);
 		assert.equal(result.itemId, "COMP-11C-II");
-		assert.equal(result.completed, true, `expected cross-ref adoption; got error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected cross-ref adoption; got error=${failedError(result)}`);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
@@ -3330,8 +3446,8 @@ describe("runPipeline — pick step", () => {
 		});
 
 		assert.equal(result.itemId, "COMP-11");
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /worktree ambiguous/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /worktree ambiguous/);
 	});
 
 	it("worktree-prefix fallback — redirects to a new listWorktrees entry containing WORKTREE_PREFIX", async () => {
@@ -3381,7 +3497,7 @@ describe("runPipeline — pick step", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true, `expected prefix fallback to let pipeline complete; got error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected prefix fallback to let pipeline complete; got error=${failedError(result)}`);
 		assert.equal(result.itemId, "TOOL-99");
 		assert.ok(!existsSync(resolvedPath), "resolved path should never have been created");
 		assert.ok(existsSync(fallbackPath), "fallback path should have been created by sideEffect");
@@ -3444,7 +3560,7 @@ describe("runPipeline — pick step", () => {
 			runShipBookkeeping: noopBookkeeping,
 		});
 
-		assert.equal(result.completed, true, `expected main-repo path to be ignored and pipeline to complete; got error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected main-repo path to be ignored and pipeline to complete; got error=${failedError(result)}`);
 		assert.equal(result.itemId, "TOOL-99");
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -3493,7 +3609,7 @@ describe("runPipeline — pick step", () => {
 		});
 
 		assert.equal(execSync("git branch --show-current", { cwd: repo, encoding: "utf-8" }).trim(), "main", "guard should reattach mainRepo to main before pick runs");
-		assert.equal(result.completed, true, `expected the guard to self-heal and the cycle to proceed; got error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected the guard to self-heal and the cycle to proceed; got error=${failedError(result)}`);
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"],
@@ -3512,8 +3628,8 @@ describe("runPipeline — pick step", () => {
 			appendLog: () => {},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "main checkout is not on main and could not be reattached");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "main checkout is not on main and could not be reattached");
 		assert.equal(result.itemId, null);
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -3598,7 +3714,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		const steps = calls.map((c) => c.step);
 		assert.equal(steps[0], "implement");
 		assert.ok(!steps.includes("plan"), `plan must not run; got ${steps.join(",")}`);
@@ -3635,7 +3751,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		const steps = calls.map((c) => c.step);
 		assert.equal(steps[0], "implement");
 		assert.ok(!steps.includes("shakedown-plan"));
@@ -3664,7 +3780,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["shakedown-code", "ship"],
@@ -3693,7 +3809,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["ship"],
@@ -3722,7 +3838,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		assert.equal(calls.map((c) => c.step)[0], "implement");
 		assert.ok(!calls.some((c) => c.step === "plan" || c.step === "shakedown-plan"));
 		assert.deepEqual(entryOf(logs), {
@@ -3756,7 +3872,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		assert.deepEqual(
 			calls.map((c) => c.step),
 			["shakedown-plan", "implement", "shakedown-code", "ship"],
@@ -3788,7 +3904,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(calls.map((c) => c.step)[0], "plan", `expected plan entry; steps=${calls.map((c) => c.step).join(",")}; error=${result.error}`);
+		assert.equal(calls.map((c) => c.step)[0], "plan", `expected plan entry; steps=${calls.map((c) => c.step).join(",")}; error=${failedError(result)}`);
 		assert.equal(entryOf(logs)?.automaticQuick, false);
 		assert.equal(entryOf(logs)?.effectiveStart, "plan");
 		assert.equal(entryOf(logs)?.reason, "profile-pin");
@@ -3818,7 +3934,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		assert.equal(logs[0]?.quick, false);
 		assert.deepEqual(
 			calls.map((c) => c.step),
@@ -3850,7 +3966,7 @@ describe("runPipeline — automatic-quick resume clamp (#706)", () => {
 			},
 			runShipBookkeeping: noopBookkeeping,
 		});
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		assert.equal(calls.map((c) => c.step)[0], "implement");
 		assert.ok(!calls.some((c) => c.step === "plan" || c.step === "shakedown-plan"));
 		assert.equal(entryOf(logs)?.requestedSource, "from-flag");
@@ -3880,8 +3996,9 @@ describe("runPipeline — SIGINT cancellation", () => {
 		const elapsed = Date.now() - t0;
 		clearTimeout(abortAt);
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "aborted");
+		assert.equal(result.outcome, "failed");
+		assert.equal(failedClass(result), "aborted");
+		assert.equal(failedError(result), "aborted");
 		assert.ok(elapsed < 2000, `expected abort to return well under the 2s grace window; got ${elapsed}ms`);
 		assert.equal(calls[0].step, "plan");
 	});
@@ -4082,7 +4199,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				},
 			});
 
-			assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
+			assert.equal(result.outcome, "completed", `expected completed cycle; error=${failedError(result)}`);
 			// Reviewer seats run as pr-review; judge as pr-verify; no ordinary shakedown-code step() for review.
 			assert.ok(
 				calls.some((c) => c.step === "pr-review"),
@@ -4137,8 +4254,8 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				runShipBookkeeping: noopBookkeeping,
 			});
 
-			assert.equal(result.completed, false);
-			assert.match(result.error ?? "", /shakedown-code assignment failed/);
+			assert.notEqual(result.outcome, "completed");
+			assert.match(failedError(result) ?? "", /shakedown-code assignment failed/);
 			assert.ok(!calls.some((c) => c.step === "pr-review"), "must not invoke review seats when seating fails");
 			assert.ok(!calls.some((c) => c.step === "pr-verify"), "must not invoke judge when seating fails");
 		} finally {
@@ -4165,8 +4282,8 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				runShipBookkeeping: noopBookkeeping,
 			});
 
-			assert.equal(result.completed, false);
-			assert.match(result.error ?? "", /execution context failed.*enabled=local.*CI\/single-shot/);
+			assert.notEqual(result.outcome, "completed");
+			assert.match(failedError(result) ?? "", /execution context failed.*enabled=local.*CI\/single-shot/);
 			assert.ok(!calls.some((call) => call.step === "pr-review" || call.step === "pr-verify"));
 		} finally {
 			REVIEW_CONFIG.authoring.enabled = saved;
@@ -4193,8 +4310,8 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				runShipBookkeeping: noopBookkeeping,
 			});
 
-			assert.equal(result.completed, false);
-			assert.match(result.error ?? "", /execution context failed.*enabled=local.*daemon-spawned.*multi-cycle/);
+			assert.notEqual(result.outcome, "completed");
+			assert.match(failedError(result) ?? "", /execution context failed.*enabled=local.*daemon-spawned.*multi-cycle/);
 			assert.ok(!calls.some((call) => call.step === "pr-review" || call.step === "pr-verify"));
 		} finally {
 			REVIEW_CONFIG.authoring.enabled = saved;
@@ -4250,7 +4367,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				runShipBookkeeping: noopBookkeeping,
 			});
 
-			assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
+			assert.equal(result.outcome, "completed", `expected completed cycle; error=${failedError(result)}`);
 			assert.ok(
 				calls.some((c) => c.step === "pr-review"),
 				"expected the review loop to run under the attested local gate",
@@ -4301,9 +4418,9 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 				},
 			);
 
-			assert.equal(result.completed, false);
-			assert.match(result.error ?? "", /execution context failed.*enabled=local.*multi-cycle/);
-			assert.match(result.error ?? "", /suppressed by PELAGGIO_OPERATOR_ATTENDED attestation/);
+			assert.notEqual(result.outcome, "completed");
+			assert.match(failedError(result) ?? "", /execution context failed.*enabled=local.*multi-cycle/);
+			assert.match(failedError(result) ?? "", /suppressed by PELAGGIO_OPERATOR_ATTENDED attestation/);
 			assert.ok(!calls.some((call) => call.step === "pr-review" || call.step === "pr-verify"));
 			// Failure exit paths persist the suppression too — reconstruction must not
 			// depend on the cycle succeeding (#276 must-fix).
@@ -4350,7 +4467,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 			},
 		});
 
-		assert.equal(result.completed, true, `expected completed cycle; error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected completed cycle; error=${failedError(result)}`);
 		assert.ok(!manifests.some((m) => m.step === "shakedown-code" && m.attempt === 0));
 	});
 });
@@ -4433,14 +4550,14 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 
 	it("parks a committed forged resolved-proceed without acknowledgement", async () => {
 		const { result, calls, evidenceFingerprint, parkReason } = await runResolvedEscalation("proceed");
-		assert.equal(result.error, "parked");
+		assert.equal(result.outcome, "parked");
 		assert.ok(!calls.some((call) => call.step === "ship"));
 		assert.match(String(parkReason), new RegExp(evidenceFingerprint));
 	});
 
 	it("parks resolved-proceed with the wrong fingerprint", async () => {
 		const { result, calls, evidenceFingerprint, parkReason } = await runResolvedEscalation("proceed", "f".repeat(64));
-		assert.equal(result.error, "parked");
+		assert.equal(result.outcome, "parked");
 		assert.ok(!calls.some((call) => call.step === "ship"));
 		assert.match(String(parkReason), new RegExp(evidenceFingerprint));
 	});
@@ -4448,13 +4565,13 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 	it("honors resolved-proceed with the matching fingerprint", async () => {
 		const fingerprint = "e".repeat(64);
 		const { result, calls } = await runResolvedEscalation("proceed", fingerprint);
-		assert.equal(result.completed, true, result.error);
+		assert.equal(result.outcome, "completed", failedError(result));
 		assert.ok(calls.some((call) => call.step === "ship"));
 	});
 
 	it("never honors resolved-block regardless of acknowledgement", async () => {
 		const { result, calls } = await runResolvedEscalation("block", "e".repeat(64));
-		assert.equal(result.error, "parked");
+		assert.equal(result.outcome, "parked");
 		assert.ok(!calls.some((call) => call.step === "ship"));
 	});
 });
@@ -4520,7 +4637,7 @@ describe("runPipeline — authoring review split packet (#580)", () => {
 
 	it("records spend, omits a default, and parks with the shared resume command on a judgment-only split", async () => {
 		const { result, captured, worktree, parkReason, parkClass } = await runSplit(judgmentBlock);
-		assert.equal(result.error, "parked");
+		assert.equal(result.outcome, "parked");
 		assert.equal(parkClass, "review-escalation");
 		assert.ok(captured, "expected appendReviewEscalation to run");
 		assert.equal(captured.adjudication.spend.amount, result.cost);
@@ -4538,7 +4655,7 @@ describe("runPipeline — authoring review split packet (#580)", () => {
 
 	it("attaches the deterministic block recommendation on a safety-class split", async () => {
 		const { result, captured, worktree, parkReason, parkClass } = await runSplit(safetyBlock);
-		assert.equal(result.error, "parked");
+		assert.equal(result.outcome, "parked");
 		assert.equal(parkClass, "review-escalation");
 		assert.ok(captured);
 		assert.equal(captured.adjudication.spend.amount, result.cost);
@@ -4664,8 +4781,8 @@ describe("execution receipts (#188)", () => {
 			},
 		});
 
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "plan failed");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(failedError(result), "plan failed");
 		const entry = logs[0];
 		assert.ok(entry, "expected a cycle log entry");
 		const steps = entry.steps as Array<{
@@ -4727,7 +4844,7 @@ describe("execution receipts (#188)", () => {
 			},
 		});
 
-		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected completed; error=${failedError(result)}`);
 		// At least the successful implement attempt dispatches; a failed max-turns attempt does not.
 		assert.ok(attempts.includes(2) || attempts.includes(1));
 		assert.ok(paths.every((p) => /implement-\d+\.json$/.test(p)));
@@ -4822,7 +4939,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(seen.length, 1);
 		assert.equal(seen[0]?.skillArguments, "--preflight");
 		assert.equal(seen[0]?.diffBaseRef, "origin/main");
@@ -4871,7 +4988,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.ok(Math.abs(result.cost - 0.91) < 1e-9, `review.cost once + ship; got ${result.cost}`);
 		const steps = (logs[0]?.steps as Array<{ name: string }> | undefined) ?? [];
 		assert.equal(steps.filter((s) => s.name === "pr-review").length, 2);
@@ -4907,7 +5024,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(gateCalls, 2);
 		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1);
 		const repairPrompt = calls.find((c) => c.step === "shakedown-code")?.prompt ?? "";
@@ -4942,7 +5059,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(gateCalls, 2);
 		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1, "one repair only");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
@@ -4969,7 +5086,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 0);
 		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
 	});
@@ -4991,8 +5108,8 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			listWorktrees: () => [],
 			appendLog: () => {},
 		});
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "parked");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(result.outcome, "parked");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
 	});
 
@@ -5021,7 +5138,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		});
 		// #424 fix: the diff-source checkout is prepared BEFORE the gate; its failure is an
 		// advisory infra BLOCK that never falls back to reviewing the live claim worktree.
-		assert.equal(result.completed, true, "advisory: the required PR gate still reviews the PR");
+		assert.equal(result.outcome, "completed", "advisory: the required PR gate still reviews the PR");
 		assert.equal(gateCalls, 0, "no gate run without a detached diff source");
 		assert.equal(calls.filter((c) => c.step === "pr-review").length, 0, "must not run review against the artifact checkout");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
@@ -5050,7 +5167,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected completed; error=${failedError(result)}`);
 		assert.equal(seats.length, 2);
 		for (const seat of seats) {
 			assert.equal(seat.workspaceAccess, "read-only", `${seat.name} pre-flight seat must preserve harness access intent`);
@@ -5079,8 +5196,8 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /HEAD moved during pre-flight/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /HEAD moved during pre-flight/);
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0, "a mutated tree must never ship");
 	});
 
@@ -5106,9 +5223,9 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			listWorktrees: () => [],
 			appendLog: () => {},
 		});
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /typecheck:ratchet failed after pre-flight revision/);
-		assert.match(result.error ?? "", /TS2551/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match(failedError(result) ?? "", /typecheck:ratchet failed after pre-flight revision/);
+		assert.match(failedError(result) ?? "", /TS2551/);
 		assert.equal(typecheckCalls, 2);
 		assert.equal(gateCalls, 1, "the recheck's review budget is never spent on a type-broken tree");
 		assert.equal(calls.filter((c) => c.step === "shakedown-code").length, 1);
@@ -5186,7 +5303,7 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: "https://example.test/pull/1" }),
 		});
-		assert.equal(result.completed, true, "thrown pre-flight is advisory");
+		assert.equal(result.outcome, "completed", "thrown pre-flight is advisory");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
 		assert.equal(cleaned.length, 1);
 	});

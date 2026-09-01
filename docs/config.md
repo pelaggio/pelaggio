@@ -735,8 +735,9 @@ primitive.
 
 When a run hits its rate-limit window the pipeline **parks**: it checkpoints
 each in-flight item's uncommitted work and stops that cycle with
-`error: "parked"`. In normal (`--cycles` / `--parallel`) mode the orchestrator
-then decides whether to wait out the window and pick the parked items back up.
+`outcome: "parked"` (and a `parkClass` / `parkReason`). In normal (`--cycles` /
+`--parallel`) mode the orchestrator then decides whether to wait out the window
+and pick the parked items back up.
 
 | Key                | Default | Meaning                                                                       |
 |--------------------|---------|-------------------------------------------------------------------------------|
@@ -776,6 +777,38 @@ Because the CLI flag has no built-in default anymore, an unset flag lets
 policy entirely from `.pelaggio.yml`. Accepts the same formats as the flag:
 `6h`, `90m`, `1h30m`, or a bare number (minutes). An unparseable value falls
 back to 6h.
+
+## Cycle log outcomes
+
+Each pipeline cycle in `.dev/pelaggio-log.jsonl` carries a required `outcome`
+discriminant — exactly one of `completed`, `parked`, `blocked`, or `failed`.
+Branch-specific fields live only on their branch (`parkClass`/`parkReason`,
+`blockedKind`/`reason`, `failureClass`/`error`). A parked cycle has no failure
+class; a blocked cycle is a distinct recorded identity and is still routed
+exactly as before (quarantine-and-continue when the checkpoint succeeds).
+
+**Blocked sentinel.** A step that cannot finish ends with
+`BLOCKED: <kind> | <reason>`, where `<kind>` is one of `spec-defect`,
+`prerequisite`, `capability`, `environment`, `charter-defect`. Legacy
+`BLOCKED: <reason>` lines store `blockedKind: "unclassified"`.
+
+**Pre-union records** (written before this discriminant existed) are decoded
+in this order: `completed === true`, then `parked === true` or `error === "parked"`,
+then a harness-authored `${step} blocked: …` display string (space + `blocked:`,
+which does **not** match `pick:blocked`), otherwise `failed`. `pick:blocked` is
+a fatal pick failure, not a blocked cycle.
+
+Classification display labels:
+
+| Label | Meaning |
+|-------|---------|
+| `unclassified` | Writer ran; the classifier/parser did not recognize the source. A real stored member. |
+| `unrecorded` | Field absent because the record predates classification. Display-only. |
+| `unknown` | Field present as a string not in the current runtime allowlist. Display-only; never folded into `unclassified`. |
+
+Webhook `completed`/`error` flags are a **derived** wire projection of this
+union (parked cycles still send `error: "parked"`). They are not stored on
+current cycle-log records.
 
 ## Continuous mode (issues #82 / #83)
 
@@ -1167,9 +1200,9 @@ The `json` format POSTs this shape (fields present when applicable):
   "event": "shipped",                 // parked|failed|shipped|pr-opened|shipwrecked
   "itemId": "34",
   "title": "Run-outcome notifications for unattended cycles", // best-effort
-  "completed": true,
+  "completed": true,                  // derived wire flag — not the cycle-log discriminant
   "cost": 1.23,
-  "error": "ship blocked: dirty tree", // present when the result carried one
+  "error": "ship blocked: dirty tree", // derived: parked → "parked"; blocked → "${step} blocked: ${reason}" (or the reason); failed → the error string
   "prUrl": "https://github.com/…/pull/5", // pr-opened / when known
   "shipwrecked": false,
   "logPath": "/repo/.dev/pelaggio-log.jsonl",

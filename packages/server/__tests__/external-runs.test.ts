@@ -49,6 +49,9 @@ function envelope(type: string, extra: Record<string, unknown> = {}): Record<str
 }
 
 function cycleRow(extra: Record<string, unknown> = {}): Record<string, unknown> {
+	// Current-union rows (an `outcome` key) must not carry the legacy `completed`/`error`
+	// fields — the reader rejects overlapping legacy/current records.
+	const legacyFields = "outcome" in extra ? {} : { completed: true, error: null };
 	return {
 		ts: "2026-07-13T12:00:00.000Z",
 		cycle: 1,
@@ -57,8 +60,7 @@ function cycleRow(extra: Record<string, unknown> = {}): Record<string, unknown> 
 		steps: [{ name: "ship", model: "x", cost: 1, turns: 1, ok: true }],
 		total_cost: 1.5,
 		verdict: null,
-		completed: true,
-		error: null,
+		...legacyFields,
 		...extra,
 	};
 }
@@ -231,6 +233,25 @@ describe("listExternalRuns", () => {
 		assert.equal(failed?.status, "failed");
 		assert.equal(parked?.status, "parked");
 		assert.ok(runs.every((run) => run.source === "external"));
+	});
+
+	it("projects current and pre-union blocked cycles to failed run status; pick:blocked stays failed", () => {
+		const root = tempRepo();
+		writeCycleLog(root, [
+			cycleRow({ ts: "2026-07-13T12:05:00.000Z", item: "50", outcome: "blocked", blockedKind: "capability", reason: "no key" }),
+			cycleRow({ ts: "2026-07-13T12:06:00.000Z", item: "51", completed: false, error: "implement blocked: missing API key" }),
+			cycleRow({ ts: "2026-07-13T12:07:00.000Z", item: "52", completed: false, error: "pick:blocked" }),
+			cycleRow({ ts: "2026-07-13T12:08:00.000Z", item: "53", outcome: "failed", failureClass: "future-class", error: "boom" }),
+		]);
+		const runs = listExternalRuns({
+			registry: registryFor({ main: root }),
+			supervised: [],
+			now: () => Date.parse("2026-07-13T13:00:00.000Z"),
+		});
+		assert.equal(runs.find((run) => run.item === "50")?.status, "failed");
+		assert.equal(runs.find((run) => run.item === "51")?.status, "failed");
+		assert.equal(runs.find((run) => run.item === "52")?.status, "failed");
+		assert.equal(runs.find((run) => run.item === "53")?.status, "failed", "unknown failureClass stays readable and projects to failed");
 	});
 
 	it("suppresses item-matched lifecycle and supervised cycles; retains overlapping unrelated cycles", () => {

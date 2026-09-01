@@ -55,6 +55,7 @@ export function StatsView() {
 	// Sorted by spend / count descending — the top row is the one worth acting on.
 	const providerKeys = Object.keys(stats.costByProvider).sort((a, b) => (stats.costByProvider[b] ?? 0) - (stats.costByProvider[a] ?? 0));
 	const parkKeys = Object.keys(stats.parksByClass).sort((a, b) => (stats.parksByClass[b] ?? 0) - (stats.parksByClass[a] ?? 0));
+	const blockKeys = Object.keys(stats.blocksByKind).sort((a, b) => (stats.blocksByKind[b] ?? 0) - (stats.blocksByKind[a] ?? 0));
 	const failKeys = Object.keys(stats.failuresByCause).sort((a, b) => (stats.failuresByCause[b] ?? 0) - (stats.failuresByCause[a] ?? 0));
 
 	return (
@@ -66,6 +67,7 @@ export function StatsView() {
 				<Card label="Completed" value={String(stats.completedCycles)} />
 				<Card label="Failed" value={String(stats.failedCycles)} />
 				<Card label="Parked" value={String(stats.parkedCycles)} />
+				<Card label="Blocked" value={String(stats.blockedCycles)} />
 				<Card label="Total cost" value={formatUsd(stats.totalCostUsd)} />
 				<Card label="Total tokens" value={formatTokens(totalTokens)} />
 				<Card label="Cache hit" value={`${(stats.cacheHitRatio * 100).toFixed(1)}%`} />
@@ -131,10 +133,10 @@ export function StatsView() {
 				</section>
 			)}
 
-			{(parkKeys.length > 0 || failKeys.length > 0) && (
+			{(parkKeys.length > 0 || blockKeys.length > 0 || failKeys.length > 0) && (
 				<section>
 					<h2 className="mb-2 text-lg font-semibold">Outcomes</h2>
-					<div className="grid gap-6 sm:grid-cols-2">
+					<div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
 						{parkKeys.length > 0 && (
 							<div>
 								<h3 className="mb-1 text-sm font-semibold text-slate-600">Parked by cause</h3>
@@ -142,7 +144,22 @@ export function StatsView() {
 									{parkKeys.map((k) => (
 										<li key={k}>
 											<code>{k}</code> · {stats.parksByClass[k]}
-											{k === "unrecorded" ? <span className="text-slate-500"> (logged before park classification)</span> : ""}
+											{k === "unrecorded" ? <span className="text-slate-500"> (logged before classification)</span> : ""}
+											{k === "unknown" ? <span className="text-slate-500"> (stored member not in runtime allowlist)</span> : ""}
+										</li>
+									))}
+								</ul>
+							</div>
+						)}
+						{blockKeys.length > 0 && (
+							<div>
+								<h3 className="mb-1 text-sm font-semibold text-slate-600">Blocked by kind</h3>
+								<ul className="space-y-1 text-sm">
+									{blockKeys.map((k) => (
+										<li key={k}>
+											<code>{k}</code> · {stats.blocksByKind[k]}
+											{k === "unrecorded" ? <span className="text-slate-500"> (logged before classification)</span> : ""}
+											{k === "unknown" ? <span className="text-slate-500"> (stored member not in runtime allowlist)</span> : ""}
 										</li>
 									))}
 								</ul>
@@ -155,6 +172,8 @@ export function StatsView() {
 									{failKeys.map((k) => (
 										<li key={k}>
 											<code>{k}</code> · {stats.failuresByCause[k]}
+											{k === "unrecorded" ? <span className="text-slate-500"> (logged before classification)</span> : ""}
+											{k === "unknown" ? <span className="text-slate-500"> (stored member not in runtime allowlist)</span> : ""}
 										</li>
 									))}
 								</ul>

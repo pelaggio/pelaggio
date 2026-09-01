@@ -50,16 +50,16 @@ export interface ImplementInput {
 	readonly shakedownPlanText: string;
 }
 /** Exactly the cycle helpers `runImplement` calls. */
-export type ImplementDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "parkExit" | "runStepWithRetry" | "driverCandidates" | "cost"> & {
+export type ImplementDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finishFailed" | "parkExit" | "runStepWithRetry" | "driverCandidates" | "cost"> & {
 	/** Notified after review findings were applied and archived. */
 	readonly onReviewFindingsConsumed?: (itemId: string) => void;
 };
 
 export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps): Promise<StepOutcome> {
 	const { flags, mainRepo, assignment, itemId, worktree, profile, verdict, shakedownPlanText } = ctx;
-	const { roadmap, available, log, finish, parkExit, runStepWithRetry, driverCandidates } = helpers;
+	const { roadmap, available, log, finishFailed, parkExit, runStepWithRetry, driverCandidates } = helpers;
 	const selected = selectAuthor(assignment, driverCandidates("implement"), available);
-	if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `implement assignment failed: ${selected.reason}` }) };
+	if (!selected.ok) return { kind: "terminal", result: finishFailed(`implement assignment failed: ${selected.reason}`, "selection", { itemId, cost: helpers.cost() }) };
 	const implementationAuthor = selected.drivers[0];
 	const parked = parkExit();
 	if (parked) return { kind: "terminal", result: parked };
@@ -90,7 +90,7 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 	// Any DEFINED value is a findings-driven resume — `--review-findings ""` must not
 	// slip past a truthiness check into the generic plan prompt.
 	if (findingsPath !== undefined && findingsPath.trim() === "") {
-		return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: "empty --review-findings path — refusing a findings-driven resume without findings" }) };
+		return { kind: "terminal", result: finishFailed("empty --review-findings path — refusing a findings-driven resume without findings", "verification", { itemId, cost: helpers.cost() }) };
 	}
 	if (findingsPath) {
 		try {
@@ -99,13 +99,13 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 			reviewNote = reviewFindingsPreamble(findingsBytes.toString("utf-8"));
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
-			return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `could not read review findings ${JSON.stringify(findingsPath)}: ${detail}` }) };
+			return { kind: "terminal", result: finishFailed(`could not read review findings ${JSON.stringify(findingsPath)}: ${detail}`, "verification", { itemId, cost: helpers.cost() }) };
 		}
 		// A readable but empty/whitespace-only findings file yields no preamble; the
 		// prompt selection below would silently fall back to the generic plan prompt
 		// and revise without its task. Same failure class as unreadable — fail closed.
 		if (!reviewNote) {
-			return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings` }) };
+			return { kind: "terminal", result: finishFailed(`review findings ${JSON.stringify(findingsPath)} is empty — refusing a findings-driven resume without findings`, "verification", { itemId, cost: helpers.cost() }) };
 		}
 	}
 
@@ -213,22 +213,15 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 			if (pending) {
 				return {
 					kind: "terminal",
-					result: finish({
-						itemId,
-						completed: false,
-						cost: helpers.cost(),
-						error: "review findings were applied but the implementation checkpoint did not commit cleanly; findings preserved for retry",
-					}),
+					result: finishFailed("review findings were applied but the implementation checkpoint did not commit cleanly; findings preserved for retry", "verification", { itemId, cost: helpers.cost() }),
 				};
 			}
 		} catch (err) {
 			return {
 				kind: "terminal",
-				result: finish({
+				result: finishFailed(`review findings were applied but the implementation checkpoint could not be verified: ${err instanceof Error ? err.message : String(err)}; findings preserved for retry`, "verification", {
 					itemId,
-					completed: false,
 					cost: helpers.cost(),
-					error: `review findings were applied but the implementation checkpoint could not be verified: ${err instanceof Error ? err.message : String(err)}; findings preserved for retry`,
 				}),
 			};
 		}
@@ -236,24 +229,14 @@ export async function runImplement(ctx: ImplementInput, helpers: ImplementDeps):
 		if (!appliedOnSha) {
 			return {
 				kind: "terminal",
-				result: finish({
-					itemId,
-					completed: false,
-					cost: helpers.cost(),
-					error: "review findings were applied but the revision HEAD could not be read; findings preserved for a fail-closed retry",
-				}),
+				result: finishFailed("review findings were applied but the revision HEAD could not be read; findings preserved for a fail-closed retry", "verification", { itemId, cost: helpers.cost() }),
 			};
 		}
 		const archived = archiveReviewFindingsAfterImplement(flags, mainRepo, itemId!, findingsSha256, appliedOnSha);
 		if (!archived.ok) {
 			return {
 				kind: "terminal",
-				result: finish({
-					itemId,
-					completed: false,
-					cost: helpers.cost(),
-					error: `review findings were applied but archival failed for ${JSON.stringify(archived.path)}: ${archived.detail}; implementation checkpoint and findings were preserved`,
-				}),
+				result: finishFailed(`review findings were applied but archival failed for ${JSON.stringify(archived.path)}: ${archived.detail}; implementation checkpoint and findings were preserved`, "verification", { itemId, cost: helpers.cost() }),
 			};
 		}
 		helpers.onReviewFindingsConsumed?.(itemId);

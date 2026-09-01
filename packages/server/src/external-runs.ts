@@ -4,7 +4,7 @@
  * repo rather than failing the list.
  */
 
-import { type FlowEvent, type LegacyCycleCompletedEvent, type RunFinishedEvent, type RunStartedEvent, readEventLog } from "pelaggio";
+import { decodeCycleOutcome, type FlowEvent, type LegacyCycleCompletedEvent, type RunFinishedEvent, type RunStartedEvent, readEventLog } from "pelaggio";
 import { projectRunActivity } from "./flow-event-tailer.js";
 import type { Registry } from "./registry.js";
 import type { ContinuousMode, PersistedRun, RunActivity, RunStatus, RunSummary } from "./types.js";
@@ -191,7 +191,8 @@ function projectCycle(slug: string, event: LegacyCycleCompletedEvent): RunSummar
 	const duration = event.provenance?.durationMs;
 	const endedMs = Date.parse(endedAt);
 	const startedAt = typeof duration === "number" && Number.isFinite(duration) && duration > 0 && Number.isFinite(endedMs) ? new Date(endedMs - duration).toISOString() : endedAt;
-	const status: RunStatus = event.parked === true ? "parked" : event.completed === true ? "completed" : "failed";
+	const decoded = decodeCycleOutcome(event);
+	const status: RunStatus = decoded?.outcome === "parked" ? "parked" : decoded?.outcome === "completed" ? "completed" : "failed";
 	const lastName = Array.isArray(event.steps) && event.steps.length > 0 ? event.steps.at(-1)?.name : undefined;
 	const lastCost = typeof event.total_cost === "number" && Number.isFinite(event.total_cost) ? event.total_cost : undefined;
 	return {

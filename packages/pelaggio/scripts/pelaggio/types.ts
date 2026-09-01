@@ -57,6 +57,10 @@ export interface ReviewResolution {
  */
 export type EffectsErrorCode = "missing_manifest" | "invalid_manifest" | "provenance_mismatch" | "unknown_effect_kind" | "effect_failed" | "receipt_failed";
 
+export type FailureClass = "selection" | "provider" | "budget" | "turn-limit" | "refusal" | "confinement" | "effects" | "verification" | "delivery" | "aborted" | "unclassified";
+
+export type BlockedKind = "spec-defect" | "prerequisite" | "capability" | "environment" | "charter-defect" | "unclassified";
+
 /**
  * Descriptor for a harness-issued execution receipt written under
  * `.dev/execution-receipts/`. Path is worktree-relative; sha256 digests the
@@ -114,6 +118,8 @@ export interface StepResult {
 	stalledAsk?: boolean;
 	/** Emitted decisions with lifecycle IDs retained for cycle-log audit. */
 	decisions?: EmittedDecision[];
+	/** Parsed kind when a nominally successful provider result ends in `BLOCKED:`. */
+	blockedKind?: BlockedKind;
 }
 
 export interface StepLog {
@@ -255,7 +261,13 @@ export interface PipelineEntryDecision {
  */
 export type ParkClass = "rate-limit" | "paused" | "sdk-outage" | "review-escalation" | "review-blocked" | "review-binding" | "effects-failed" | "unclassified";
 
-export interface CycleLogEntry {
+export type CycleOutcome =
+	| { outcome: "completed" }
+	| { outcome: "parked"; parkClass: ParkClass; parkReason: string | null }
+	| { outcome: "blocked"; blockedKind: BlockedKind; reason: string }
+	| { outcome: "failed"; failureClass: FailureClass; error: string };
+
+export interface CycleLogEnvelope {
 	ts: string;
 	cycle: number;
 	item: string | null;
@@ -266,14 +278,6 @@ export interface CycleLogEntry {
 	 *  not pure billed USD. Kept honest across jsonl, `/stats`, and notifications. */
 	costEstimated?: boolean;
 	verdict: string | null;
-	completed: boolean;
-	error: string | null;
-	parked?: boolean;
-	parkReason?: string | null;
-	/** Closed classification of `parkReason` (see `classifyParkReason`). Absent on records
-	 *  written before park classification existed — stats render those as `unrecorded`
-	 *  rather than silently folding them into a real class. */
-	parkClass?: ParkClass;
 	shipwrecked?: boolean;
 	bookkeepingWarnings?: string[];
 	/** True when this line is a day-budget spend receipt (local-review charge), NOT a pipeline
@@ -283,6 +287,24 @@ export interface CycleLogEntry {
 	/** Additive cycle provenance. Optional only for legacy log compatibility. */
 	provenance?: CycleProvenance;
 }
+
+export type CycleLogEntry = CycleLogEnvelope & CycleOutcome;
+
+export interface PreUnionCycleLogEntry extends CycleLogEnvelope {
+	completed: boolean;
+	error: string | null;
+	parked?: boolean;
+	parkReason?: string | null;
+	parkClass?: ParkClass;
+}
+
+export type RawCycleLogRecord = CycleLogEntry | PreUnionCycleLogEntry;
+export type ClassificationProvenance = "recorded" | "unrecorded" | "unknown";
+export type DecodedCycleOutcome =
+	| { outcome: "completed" }
+	| { outcome: "parked"; parkClass: ParkClass | "unrecorded" | "unknown"; parkReason: string | null; parkClassProvenance: ClassificationProvenance }
+	| { outcome: "blocked"; blockedKind: BlockedKind | "unrecorded" | "unknown"; reason: string; blockedKindProvenance: ClassificationProvenance }
+	| { outcome: "failed"; failureClass: FailureClass | "unrecorded" | "unknown"; error: string; failureClassProvenance: ClassificationProvenance };
 
 // ── Flow events ───────────────────────────────────────────────────────
 
@@ -328,7 +350,7 @@ export interface FlowEventEnvelope {
 }
 
 export type CycleCompletedEvent = FlowEventEnvelope & CycleLogEntry & { type: "pelaggio.cycle-completed"; legacy?: false };
-export type LegacyCycleCompletedEvent = FlowEventEnvelope & CycleLogEntry & { type: "pelaggio.cycle-completed"; legacy: true };
+export type LegacyCycleCompletedEvent = FlowEventEnvelope & RawCycleLogRecord & { type: "pelaggio.cycle-completed"; legacy: true };
 
 export type RunMode = "drain" | "watch";
 export type RunFinishOutcome = "completed" | "failed" | "parked";
@@ -372,9 +394,10 @@ export interface ReadEventLogResult {
 }
 
 type FlowEventCorrelations = Partial<Pick<FlowEventEnvelope, "itemId" | "claimId" | "readinessEpisodeId" | "causationId" | "attempt">>;
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type FlowEventInput = FlowEventCorrelations &
 	(
-		| ({ type: "pelaggio.cycle-completed"; ts?: string } & Omit<CycleLogEntry, "ts">)
+		| ({ type: "pelaggio.cycle-completed"; ts?: string } & DistributiveOmit<CycleLogEntry, "ts">)
 		| { type: "pelaggio.run-started"; ts?: string; heartbeatMs: number; mode?: RunMode; resumed?: true }
 		| { type: "pelaggio.run-heartbeat"; ts?: string }
 		| { type: "pelaggio.run-finished"; ts?: string; outcome: RunFinishOutcome; exitCode: number }
@@ -398,15 +421,13 @@ export interface FlowEventProjection {
 
 export type CycleDisposition = "continue" | "quarantine-and-continue" | "halt-campaign";
 
-export interface CycleResult {
+export interface CycleResultBase {
 	itemId: string | null;
-	completed: boolean;
 	cost: number;
 	/** True when `cost` includes provider-side estimates (mirrors `CycleLogEntry.costEstimated`),
 	 *  so live cost prints can flag the total with `~`. */
 	costEstimated?: boolean;
 	verdict?: string;
-	error?: string;
 	disposition?: CycleDisposition;
 	/** Display-only legible one-liner for a failure: the machine `error` plus the failing step's
 	 *  subtype + bounded output tail. `error` stays the classification string (RECOVERABLE_ERRORS,
@@ -421,6 +442,10 @@ export interface CycleResult {
 	/** Non-blocking roadmap mutations left after a successful feature push. */
 	bookkeepingWarnings?: string[];
 }
+
+type CycleResultOutcome = Exclude<CycleOutcome, { outcome: "blocked" }> | (Extract<CycleOutcome, { outcome: "blocked" }> & { blockedStep?: Step });
+
+export type CycleResult = CycleResultBase & CycleResultOutcome;
 
 // ── Step providers ─────────────────────────────────────────────────────
 

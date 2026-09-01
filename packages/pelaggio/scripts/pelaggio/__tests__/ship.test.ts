@@ -261,7 +261,7 @@ describe("runPipeline — ship target dispatch", () => {
 			appendLog: () => {},
 			runShipBookkeeping: bk.fn,
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.awaitingMerge, undefined);
 		assert.equal(result.prUrl, undefined);
 		// Tail invoked once with the resolved ctx.
@@ -301,7 +301,7 @@ describe("runPipeline — ship target dispatch", () => {
 			appendLog: () => {},
 			runShipBookkeeping: bk.fn,
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(bk.calls.length, 1);
 		assert.ok(!calls.map((c) => c.step).includes("shipwreck"));
 	});
@@ -336,7 +336,7 @@ describe("runPipeline — ship target dispatch", () => {
 		// Shipwreck re-verified the merge → pipeline runs the tail once with resolved ctx.
 		assert.equal(bk.calls.length, 1);
 		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 	});
 
 	it("direct-push: merge verified but bookkeeping fails (ok:false) → completed:false with error, no shipwreck (finding #3)", async () => {
@@ -363,8 +363,8 @@ describe("runPipeline — ship target dispatch", () => {
 			runShipBookkeeping: bk.fn,
 		});
 		assert.equal(bk.calls.length, 1);
-		assert.equal(result.completed, false, "a failed push must not report the cycle as shipped");
-		assert.match(result.error ?? "", /push failed/);
+		assert.notEqual(result.outcome, "completed", "a failed push must not report the cycle as shipped");
+		assert.match((result.outcome === "failed" ? result.error : "") ?? "", /push failed/);
 		assert.deepEqual(result.bookkeepingWarnings, [warning]);
 		assert.ok(!calls.map((c) => c.step).includes("shipwreck"), "a push failure is surfaced, not routed to shipwreck");
 	});
@@ -392,7 +392,7 @@ describe("runPipeline — ship target dispatch", () => {
 			runShipBookkeeping: bk.fn,
 		});
 
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.deepEqual(result.bookkeepingWarnings, [warning]);
 		assert.ok(!calls.map((c) => c.step).includes("shipwreck"));
 	});
@@ -426,7 +426,7 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.ok(stepsRun.includes("shipwreck"), `shipwreck should run; got ${stepsRun.join(",")}`);
 		assert.equal(bk.calls.length, 1);
 		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.deepEqual(result.bookkeepingWarnings, [warning]);
 	});
 
@@ -461,7 +461,7 @@ describe("runPipeline — ship target dispatch", () => {
 		assert.match(shipwreckCall.prompt, /--target=direct-push/);
 		assert.equal(bk.calls.length, 1);
 		assert.deepEqual(bk.calls[0], { mainRepo: repo, worktree, branch: "feat/tool-99", itemId: "TOOL-99" });
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 	});
 
 	it("direct-push: pre-ship dirty MAIN_REPO is recovered as a commit, not discarded (acceptance #4)", async () => {
@@ -487,7 +487,7 @@ describe("runPipeline — ship target dispatch", () => {
 			appendLog: () => {},
 			runShipBookkeeping: bk.fn,
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		// The stray file survived — content preserved and committed (never discarded).
 		assert.ok(existsSync(join(repo, "deferred.md")));
 		assert.equal(readFileSync(join(repo, "deferred.md"), "utf-8"), "deferred create-item that must survive");
@@ -526,7 +526,7 @@ describe("runPipeline — ship target dispatch", () => {
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(stepsRun.includes("shipwreck"), `marker-less merge must route to shipwreck; got ${stepsRun.join(",")}`);
 		assert.equal(bk.calls.length, 0, "the deterministic tail must not run without the ship-merged marker");
-		assert.equal(result.completed, false, "a marker-less merge must not be silently reported as shipped");
+		assert.notEqual(result.outcome, "completed", "a marker-less merge must not be silently reported as shipped");
 	});
 
 	it("direct-push: recovery ok + merge landed but NO ship-merged marker → recovery gate closed, completed:false, tail gated off (issue #37)", async () => {
@@ -557,7 +557,7 @@ describe("runPipeline — ship target dispatch", () => {
 		});
 		assert.ok(calls.map((c) => c.step).includes("shipwreck"), "shipwreck must assess the unverified merge");
 		assert.equal(bk.calls.length, 0, "the deterministic tail must not run without the recovery ship-merged marker");
-		assert.equal(result.completed, false, "a marker-less recovery must not be reported as shipped");
+		assert.notEqual(result.outcome, "completed", "a marker-less recovery must not be reported as shipped");
 	});
 
 	it("pull-request: decision effect appends PR URL, result marks awaitingMerge + prUrl", async () => {
@@ -592,7 +592,7 @@ describe("runPipeline — ship target dispatch", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.awaitingMerge, true);
 		assert.equal(result.prUrl, PR_URL);
 		assert.equal(interpreted.length, 1);
@@ -628,7 +628,7 @@ describe("runPipeline — ship target dispatch", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.awaitingMerge, true);
 		assert.equal(result.prUrl, PR_URL);
 		const shipCall = calls.find((c) => c.step === "ship");
@@ -662,7 +662,7 @@ describe("runPipeline — ship target dispatch", () => {
 			},
 			dispatchStepEffects: async (ctx) => (ctx.step === "ship" ? { appendText: PR_URL } : {}),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(capturedShip.length, 1);
 		const effect = capturedShip[0];
 		assert.equal(effect.kind, "ship.ShipDecision");
@@ -701,7 +701,7 @@ describe("runPipeline — ship target dispatch", () => {
 				return ctx.step === "ship" ? { appendText: PR_URL } : {};
 			},
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(result.prUrl, PR_URL);
 		const shipCalls = calls.filter((c) => c.step === "ship");
 		assert.equal(shipCalls.length, 2);
@@ -761,7 +761,7 @@ describe("runPipeline — ship target dispatch", () => {
 				return {};
 			},
 		});
-		assert.equal(result.completed, false);
+		assert.notEqual(result.outcome, "completed");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 2);
 		assert.equal(shipWriteCount, 0);
 		assert.equal(shipDispatchCount, 0);
@@ -807,7 +807,7 @@ describe("runPipeline — ship target dispatch", () => {
 				return {};
 			},
 		});
-		assert.equal(result.completed, false, "must not complete a ship that would reuse a stale body");
+		assert.notEqual(result.outcome, "completed", "must not complete a ship that would reuse a stale body");
 		assert.equal(shipDispatchCount, 0, "no PR dispatched from a stale body file");
 		assert.equal(existsSync(bodyPath), false, "stale body file was cleared before attempt 1 and never rewritten");
 	});
@@ -845,7 +845,7 @@ describe("runPipeline — ship target dispatch", () => {
 				return {};
 			},
 		});
-		assert.equal(result.completed, false, "must refuse to ship when the stale body cannot be cleared");
+		assert.notEqual(result.outcome, "completed", "must refuse to ship when the stale body cannot be cleared");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0, "ship step must not run — fail closed before attempt 1");
 		assert.equal(shipDispatchCount, 0, "no dispatch");
 	});
@@ -894,7 +894,7 @@ describe("runPipeline — ship target dispatch", () => {
 					return {};
 				},
 			});
-			assert.equal(result.completed, false);
+			assert.notEqual(result.outcome, "completed");
 			assert.equal(calls.filter((c) => c.step === "ship").length, 1, "single attempt only");
 			assert.equal(interpreted.length, 1);
 			assert.equal(interpreted[0]?.assistantText, shipOutcome.text);
@@ -929,7 +929,7 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 				"shakedown-plan": { ok: true, text: "VERDICT: APPROVE" },
 				implement: { ok: true, writes: { "impl.txt": "x" } },
 				"shakedown-code": { ok: true },
-				ship: { ok: false, subtype: "error", text: "push failed" },
+				ship: { ok: false, subtype: "error_budget", text: "budget exhausted" },
 			},
 			parkSignal,
 		);
@@ -939,8 +939,9 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 			listWorktrees: () => [],
 			appendLog: () => {},
 		});
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "ship failed");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(result.outcome === "failed" ? result.error : "", "ship failed");
+		assert.equal(result.outcome === "failed" ? result.failureClass : "", "budget");
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(!stepsRun.includes("shipwreck"), `shipwreck should not run; got ${stepsRun.join(",")}`);
 	});
@@ -973,7 +974,7 @@ describe("runPipeline — shipwreck skipped for PR modes", () => {
 		const stepsRun = calls.map((c) => c.step);
 		assert.ok(stepsRun.includes("shipwreck"), `shipwreck should run; got ${stepsRun.join(",")}`);
 		assert.equal(bk.calls.length, 0);
-		assert.equal(result.completed, false, "a claimed recovery that didn't advance main is not shipped");
+		assert.notEqual(result.outcome, "completed", "a claimed recovery that didn't advance main is not shipped");
 	});
 });
 
@@ -1106,7 +1107,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 			runShipBookkeeping: bk.fn,
 			...spies,
 		});
-		assert.equal(direct.completed, true);
+		assert.equal(direct.outcome, "completed");
 		assert.equal(freshness, 0);
 		assert.equal(gate, 0);
 		assert.equal(typecheck, 0);
@@ -1124,7 +1125,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 				...spies,
 			},
 		);
-		assert.equal(dry.completed, true);
+		assert.equal(dry.outcome, "completed");
 		assert.equal(freshness, 0);
 		assert.equal(gate, 0);
 		assert.equal(typecheck, 0);
@@ -1167,7 +1168,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 				return { appendText: PR_URL };
 			},
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		const author = calls.find((c) => c.step === "shakedown-code");
 		assert.ok(author);
 		assert.match(author.prompt, /src\/upstream\.ts/);
@@ -1200,8 +1201,8 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 				return {};
 			},
 		});
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /freshness verification failed/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match((result.outcome === "failed" ? result.error : "") ?? "", /freshness verification failed/);
 		assert.equal(gate, 0);
 		assert.equal(effects, 0);
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
@@ -1227,7 +1228,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 				listWorktrees: () => [],
 				appendLog: () => {},
 			});
-			assert.equal(result.completed, false);
+			assert.notEqual(result.outcome, "completed");
 			assert.equal(calls.filter((c) => c.step === "ship").length, 0);
 		}
 	});
@@ -1251,7 +1252,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(overrides.length, 1);
 		assert.ok(overrides[0]?.provider, "reconstructed implementation author must be the execution override");
 	});
@@ -1276,9 +1277,10 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 			listWorktrees: () => [],
 			appendLog: () => {},
 		});
-		assert.equal(result.completed, false);
+		assert.notEqual(result.outcome, "completed");
 		assert.deepEqual(receivedOids, [fetchedOid], "verification must bind to the OID retained at fetch time, not re-resolve the ref");
-		assert.ok(result.error?.includes(fetchedOid) && result.error?.includes(movedOid), `cycle error must name both OIDs: ${result.error}`);
+		const freshnessError = result.outcome === "failed" ? result.error : "";
+		assert.ok(freshnessError.includes(fetchedOid) && freshnessError.includes(movedOid), `cycle error must name both OIDs: ${freshnessError}`);
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
 	});
 
@@ -1297,7 +1299,7 @@ describe("runPipeline — PR freshness sequencing (#424)", () => {
 				return ctx.step === "ship" ? { appendText: PR_URL } : {};
 			},
 		});
-		assert.equal(result.completed, true);
+		assert.equal(result.outcome, "completed");
 		assert.equal(shipGates.length, 1);
 		const shipGate = shipGates[0];
 		assert.ok(shipGate, "ship dispatch context must carry the gated-OID binding");
@@ -1349,9 +1351,9 @@ describe("runPipeline — conflicted freshness repair gate (#424 review fixes)",
 				},
 			}),
 		});
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /conflict repair incomplete/);
-		assert.match(result.error ?? "", /unmerged paths remain/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match((result.outcome === "failed" ? result.error : "") ?? "", /conflict repair incomplete/);
+		assert.match((result.outcome === "failed" ? result.error : "") ?? "", /unmerged paths remain/);
 		// The tree stays exactly as the author left it: merge open, markers intact, no wip commit.
 		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true);
 		assert.match(readFileSync(join(worktree, "f.txt"), "utf-8"), /^<{7} /m);
@@ -1384,8 +1386,8 @@ describe("runPipeline — conflicted freshness repair gate (#424 review fixes)",
 			runStep,
 			...conflictedDeps(),
 		});
-		assert.equal(result.completed, false);
-		assert.equal(result.error, "parked");
+		assert.notEqual(result.outcome, "completed");
+		assert.equal(result.outcome, "parked");
 		// Parked dirty-with-MERGE_HEAD — the documented park contract; resume re-enters `conflicted`.
 		assert.equal(execSync("git rev-parse -q --verify MERGE_HEAD", { cwd: worktree, encoding: "utf-8" }).trim().length > 0, true, "merge stays open");
 		assert.ok(!allCommitMessages(worktree).some((m) => m.startsWith("wip: pelaggio")), "no park checkpoint may conclude the merge");
@@ -1410,8 +1412,8 @@ describe("runPipeline — conflicted freshness repair gate (#424 review fixes)",
 			runStep,
 			...conflictedDeps(),
 		});
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /conflict markers remain in: f\.txt/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match((result.outcome === "failed" ? result.error : "") ?? "", /conflict markers remain in: f\.txt/);
 		assert.ok(!allCommitMessages(worktree).some((m) => m.includes("freshness merge repair")), "markers must never be committed as resolved");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
 	});
@@ -1442,7 +1444,7 @@ describe("runPipeline — conflicted freshness repair gate (#424 review fixes)",
 				},
 			}),
 		});
-		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected completed; error=${result.outcome === "failed" ? result.error : ""}`);
 		assert.ok(
 			allCommitMessages(worktree).some((m) => m.includes("freshness merge repair")),
 			"checkpoint concludes the resolved merge",
@@ -1485,7 +1487,7 @@ describe("runPipeline — up-to-date freshness gates are recorded facts (#424 re
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),
 		});
-		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected completed; error=${result.outcome === "failed" ? result.error : ""}`);
 		assert.equal(typecheck, 1, "typecheck gate must run on the up-to-date path");
 		assert.equal(verify, 1, "freshness verification must run on the up-to-date path");
 		assert.deepEqual(recorded, [execSync("git rev-parse HEAD", { cwd: worktree, encoding: "utf-8" }).trim()]);
@@ -1519,7 +1521,7 @@ describe("runPipeline — up-to-date freshness gates are recorded facts (#424 re
 				appendLog: () => {},
 				dispatchStepEffects: async () => ({ appendText: PR_URL }),
 			});
-			assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+			assert.equal(result.outcome, "completed", `expected completed; error=${result.outcome === "failed" ? result.error : ""}`);
 			assert.equal(typecheck, expectedRuns, `record for ${recordItem}: typecheck runs ${expectedRuns}x`);
 			assert.equal(verify, expectedRuns, `record for ${recordItem}: verify runs ${expectedRuns}x`);
 			assert.equal(calls.filter((c) => c.step === "ship").length, 1);
@@ -1542,9 +1544,9 @@ describe("runPipeline — up-to-date freshness gates are recorded facts (#424 re
 			listWorktrees: () => [],
 			appendLog: () => {},
 		});
-		assert.equal(result.completed, false);
-		assert.match(result.error ?? "", /typecheck:ratchet failed/);
-		assert.match(result.error ?? "", /TS2345/);
+		assert.notEqual(result.outcome, "completed");
+		assert.match((result.outcome === "failed" ? result.error : "") ?? "", /typecheck:ratchet failed/);
+		assert.match((result.outcome === "failed" ? result.error : "") ?? "", /TS2345/);
 		assert.deepEqual(recorded, [], "a failed gate must never be recorded as passed");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 0);
 	});
@@ -1566,7 +1568,7 @@ describe("runPipeline — up-to-date freshness gates are recorded facts (#424 re
 			appendLog: () => {},
 			dispatchStepEffects: async () => ({ appendText: PR_URL }),
 		});
-		assert.equal(result.completed, true, `expected completed; error=${result.error}`);
+		assert.equal(result.outcome, "completed", `expected completed; error=${result.outcome === "failed" ? result.error : ""}`);
 		assert.deepEqual(
 			recorded.map((r) => r.typecheck),
 			["skipped"],

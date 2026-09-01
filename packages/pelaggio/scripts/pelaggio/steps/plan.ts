@@ -18,18 +18,18 @@ export interface PlanInput {
 	readonly profile: string;
 }
 /** Exactly the cycle helpers `runPlan` calls. */
-export type PlanDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finish" | "runStepWithRetry" | "driverCandidates" | "reconstructAuthor" | "cost">;
+export type PlanDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finishFailed" | "runStepWithRetry" | "driverCandidates" | "reconstructAuthor" | "cost">;
 
 export async function runPlan(ctx: PlanInput, helpers: PlanDeps): Promise<StepOutcome> {
 	const { dryRun, assignment, deferredItemTitles, itemId, worktree, profile } = ctx;
-	const { roadmap, available, log, finish, runStepWithRetry, driverCandidates, reconstructAuthor } = helpers;
+	const { roadmap, available, log, finishFailed, runStepWithRetry, driverCandidates, reconstructAuthor } = helpers;
 	const existingPlan = roadmap.resolvePlanPath({ id: itemId!, worktree: worktree! });
 	if (!dryRun && existsSync(existingPlan)) {
 		log(`plan exists at ${existingPlan} — skipping plan generation`);
 		reconstructAuthor("plan", "plan");
 	} else {
 		const selected = selectAuthor(assignment, driverCandidates("plan"), available);
-		if (!selected.ok) return { kind: "terminal", result: finish({ itemId, completed: false, cost: helpers.cost(), error: `plan assignment failed: ${selected.reason}` }) };
+		if (!selected.ok) return { kind: "terminal", result: finishFailed(`plan assignment failed: ${selected.reason}`, "selection", { itemId, cost: helpers.cost() }) };
 		const planAuthor = selected.drivers[0];
 		// Inject the item's requirements into the plan prompt in the harness (#103): a sandboxed
 		// model (Codex) can't run `roadmap get` / `gh issue view` (no network, and the roadmap CLI

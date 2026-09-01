@@ -173,7 +173,15 @@ describe("buildOpenCodeStepResult", () => {
 		assert.equal(out.result.ok, false);
 		assert.equal(out.result.subtype, "blocked");
 		assert.equal(out.result.text, "missing credentials");
+		assert.equal(out.result.blockedKind, "unclassified");
 		assert.ok(out.events.some((e) => e.type === "blocked" && e.reason === "missing credentials"));
+	});
+
+	it("carries a named blocked kind from the structured sentinel", () => {
+		const out = buildOpenCodeStepResult("implement", [{ type: "step-start" }, { type: "text", text: "Cannot continue.\n\nBLOCKED: prerequisite | missing SDK" }, { type: "finish", reason: "stop" }], { exitCode: 0 });
+		assert.equal(out.result.subtype, "blocked");
+		assert.equal(out.result.blockedKind, "prerequisite");
+		assert.equal(out.result.text, "missing SDK");
 	});
 
 	it("maps refusal-shaped final text to error_refusal", () => {
