@@ -2639,8 +2639,9 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			}>;
 		};
 		dispositionDraft?: PrCarryDispositionDraft;
+		recurrenceFindings?: Array<{ fingerprintDigest: string; path?: string; findingClass: string }>;
 	};
-	type GateFn = (opts: { parkSignal?: { parked: boolean; resetsAt: number; limitType: string }; reviewedSha?: string; itemId?: string }) => Promise<GateResult>;
+	type GateFn = (opts: { parkSignal?: { parked: boolean; resetsAt: number; limitType: string }; reviewedSha?: string; itemId?: string; priorGateRecords?: unknown }) => Promise<GateResult>;
 
 	function blockDraft() {
 		const finding = { severity: "must-fix" as const, message: "Broken parser.", path: "src/a.ts", line: 10 };
@@ -2763,6 +2764,62 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			runner: "local",
 			reviewedAt: "2026-08-03T12:05:03.456Z",
 		});
+	});
+
+	it("injects listed history, persists observations including empty, and does not change posted status", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		const priorHead = "dddddddddddddddddddddddddddddddddddddddd";
+		writePrReviewGateRecord(gateRecordsDir(main), {
+			producer: "fleet",
+			prNumber: 201,
+			headSha: priorHead,
+			itemId: "387",
+			gate: "block",
+			ok: true,
+			subtype: "success",
+			agreement: "consensus-block",
+			cost: 0.4,
+			costEstimated: false,
+			turns: 2,
+			elapsedMs: 100,
+			runner: "local",
+			reviewedAt: "2026-08-03T11:00:00.000Z",
+			recurrenceFindings: [],
+		});
+		const ghCalls: string[][] = [];
+		const gh: GhRunner = (args) => {
+			ghCalls.push(args);
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		let seenPriors: unknown;
+		enqueueReviewRequest(main, record());
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				resolveWorktree: () => "/fake/wt",
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async (opts) => {
+						seenPriors = opts.priorGateRecords;
+						return { ...(await passGate()), recurrenceFindings: [] };
+					},
+				}),
+			},
+		);
+		assert.ok(Array.isArray(seenPriors) && seenPriors.length >= 1, "drain injects listed gate records");
+		const statuses = ghCalls.filter((a) => a[0] === "api" && a[1] === `repos/o/r/statuses/${HEAD}`).map((a) => a.find((x) => x.startsWith("state=")));
+		assert.deepEqual(statuses, ["state=pending", "state=success"]);
+		const stored = readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "fleet");
+		assert.deepEqual(stored.recurrenceFindings, []);
 	});
 
 	it("persists block and crash outcomes fail-closed", async (t) => {

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import type { RoadmapSource } from "../roadmap/types.js";
-import { buildStepArgs, reviewFindingsPreamble } from "../skills.js";
+import { buildStepArgs, expandSkill, reviewFindingsPreamble } from "../skills.js";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../../");
 
 describe("buildStepArgs (#103, #115)", () => {
 	const mk = (getItem: RoadmapSource["getItem"]) => ({ getItem }) as unknown as RoadmapSource;
@@ -70,5 +75,26 @@ describe("reviewFindingsPreamble (issue #60)", () => {
 		assert.match(out, /\.\.\.\(truncated\)/);
 		// under-cap input is not truncated
 		assert.doesNotMatch(reviewFindingsPreamble("x".repeat(100)), /\(truncated\)/);
+	});
+
+	it("carries the AC-binding / re-charter rule for a mechanism-widening finding", () => {
+		const out = reviewFindingsPreamble("- bug: null deref at foo.ts:12");
+		assert.match(out, /introducing or widening a mechanism/);
+		assert.match(out, /acceptance\s+criterion it serves/i);
+		assert.match(out, /needs re-chartering/);
+	});
+});
+
+describe("shakedown skill contract", () => {
+	it("shakedown rubric names the guarantee-authority question", () => {
+		const rubric = readFileSync(resolve(repoRoot, ".claude/skills/_rubric.md"), "utf8");
+		assert.match(rubric, /Guarantee authority/);
+		assert.match(rubric, /enumerate the inputs each new or widened mechanism asserts a guarantee over/);
+		assert.match(rubric, /Do \*\*not\*\* flag a plan or diff whose every asserted input is owned/);
+		assert.match(rubric, /otherwise it is a re-charter, not a revision/);
+
+		const expanded = expandSkill("shakedown");
+		assert.doesNotMatch(expanded, /^---/);
+		assert.match(expanded, /!`cat \.claude\/skills\/_rubric\.md`/);
 	});
 });
