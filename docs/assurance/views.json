@@ -20,7 +20,7 @@
       "mode": "neighborhood",
       "parameter": "node",
       "depth": 2,
-      "relations": ["constrains", "implements", "assumes", "specializes", "derived-from", "projects"]
+      "relations": ["constrains", "implements", "assumes", "supersedes", "specializes", "derived-from", "projects"]
     },
     {
       "id": "affected",
@@ -28,7 +28,7 @@
       "audience": ["operator", "developer"],
       "mode": "upstream-intent",
       "parameter": "node-or-source",
-      "relations": ["implements", "specializes", "constrains", "derived-from"]
+      "relations": ["implements", "supersedes", "specializes", "constrains", "derived-from"]
     },
     {
       "id": "debt",
@@ -74,7 +74,7 @@
       "mode": "seeded-neighborhood",
       "seeds": ["CLM-0007"],
       "depth": 2,
-      "relations": ["constrains", "implements", "specializes", "derived-from"]
+      "relations": ["constrains", "implements", "supersedes", "specializes", "derived-from"]
     }
   ]
 }

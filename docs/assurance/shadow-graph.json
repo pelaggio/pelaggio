@@ -659,7 +659,7 @@
 			"sources": [
 				"ADR-0024"
 			],
-			"wrongIf": "A single strong reviewer at equal token budget reproduces the fleet's must-fix set on a sampled set of gated PRs (#270/#291), and cross-provider disagreement contributes no landed fixes over the same sample (#627's instrument)."
+			"revisitIf": "A controlled sample at equal review budget shows that one strong reviewer reproduces the provider-diverse fleet's material findings, or that cross-provider disagreement contributes no landed correction while adding material cost, latency, or failure surface."
 		},
 		{
 			"id": "ASM-0003",
@@ -749,7 +749,7 @@
 			"kind": "decision",
 			"slug": "in-toto-envelope",
 			"statement": "Represent machine-checkable custody attestations using an in-toto-compatible statement envelope rather than a bespoke format.",
-			"status": "current-construction-choice",
+			"status": "target-construction-choice",
 			"sources": [
 				"ADR-0018"
 			]
@@ -1445,7 +1445,7 @@
 			"id": "CTR-0013",
 			"kind": "realization",
 			"slug": "red-merge-guard-land",
-			"statement": "`land` reads the PR's required checks directly and refuses to merge unless every check completed green; the candidate-bound CAS fence (DEC-0015) is not built, so this realizes landing-fenced only as far as branch protection plus a fail-closed check reader.",
+			"statement": "`land` reads the PR's required checks directly and refuses to merge unless every check completed green. The admin path is not candidate-bound and bypasses branch protection; the target CAS fence in DEC-0015 is not built.",
 			"sources": [
 				"ADR-0005",
 				"ADR-0025"
@@ -1613,6 +1613,46 @@
 					"path": "packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
 				}
 			]
+		},
+		{
+			"id": "CTR-0025",
+			"kind": "realization",
+			"slug": "signed-tag-npm-provenance-workflow",
+			"statement": "The release workflow verifies an SSH-signed tag and invokes npm publishing with provenance enabled; downstream attestation verification remains outside this realization.",
+			"sources": [
+				"ADR-0007"
+			],
+			"codeEvidence": [
+				".github/workflows/publish.yml",
+				"ci/__tests__/publish-workflow.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "requires a verified signed tag and publishes with npm provenance",
+					"path": "ci/__tests__/publish-workflow.test.ts"
+				}
+			]
+		},
+		{
+			"id": "CTR-0026",
+			"kind": "realization",
+			"slug": "typed-effects-dispatch",
+			"statement": "The harness validates typed effect manifests and dispatches their deterministic operations through harness-owned handlers after a successful step; this does not establish cross-provider per-call tool mediation.",
+			"sources": [
+				"ADR-0021"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/effects.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/effects.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "dispatches checkpoint and plan.publish, then deletes the manifest",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/effects.test.ts"
+				}
+			]
 		}
 	],
 	"edges": [
@@ -1635,6 +1675,11 @@
 			"from": "CON-0004",
 			"relation": "constrains",
 			"to": "CLM-0007"
+		},
+		{
+			"from": "CON-0004",
+			"relation": "specializes",
+			"to": "CON-0003"
 		},
 		{
 			"from": "CON-0005",
@@ -2163,11 +2208,6 @@
 		},
 		{
 			"from": "CTR-0013",
-			"relation": "implements",
-			"to": "CLM-0007"
-		},
-		{
-			"from": "CTR-0013",
 			"relation": "derived-from",
 			"to": "DEC-0002"
 		},
@@ -2395,6 +2435,16 @@
 			"from": "CTR-0023",
 			"relation": "implements",
 			"to": "CLM-0012"
+		},
+		{
+			"from": "CTR-0025",
+			"relation": "derived-from",
+			"to": "DEC-0003"
+		},
+		{
+			"from": "CTR-0026",
+			"relation": "derived-from",
+			"to": "DEC-0011"
 		}
 	],
 	"adrMap": {
@@ -2438,6 +2488,7 @@
 		],
 		"ADR-0007": [
 			"CLM-0008",
+			"CTR-0025",
 			"DEC-0003",
 			"TC-005"
 		],
@@ -2533,6 +2584,7 @@
 			"CLM-0015",
 			"CLM-0017",
 			"CON-0015",
+			"CTR-0026",
 			"DEC-0011"
 		],
 		"ADR-0022": [
@@ -2625,6 +2677,282 @@
 		]
 	},
 	"sourceGrounding": [
+		{
+			"node": "CLM-0001",
+			"path": "docs/decisions/0002-untrusted-input-and-tool-scope.md",
+			"anchors": [
+				"**all repo/issue/PR content is untrusted**",
+				"safety must not depend on the agent \"deciding correctly.\""
+			]
+		},
+		{
+			"node": "CLM-0003",
+			"path": "docs/decisions/0010-agent-env-allowlist-and-log-scrub.md",
+			"anchors": [
+				"**Deny-by-default env allowlist.**",
+				"**Redact-before-write log scrubbing.**"
+			]
+		},
+		{
+			"node": "CLM-0004",
+			"path": "docs/decisions/0006-no-lifecycle-scripts-in-published-manifests.md",
+			"anchors": [
+				"Installing the package runs no **Pelaggio-authored** lifecycle code"
+			]
+		},
+		{
+			"node": "CLM-0005",
+			"path": "docs/decisions/0008-control-plane-fail-closed.md",
+			"anchors": [
+				"No unauthenticated run-spawning endpoint, ever."
+			]
+		},
+		{
+			"node": "CLM-0007",
+			"path": "docs/decisions/0025-landing-serialization-cas-fence-optional-ordering.md",
+			"anchors": [
+				"**Git ref compare-and-swap is the correctness fence**",
+				"verification bound to the exact candidate SHA"
+			]
+		},
+		{
+			"node": "CLM-0008",
+			"path": "docs/decisions/0007-signed-tag-provenance-publish.md",
+			"anchors": [
+				"Signature + provenance + a trusted builder are the chain a consumer verifies."
+			]
+		},
+		{
+			"node": "CLM-0009",
+			"path": "docs/decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md",
+			"anchors": [
+				"**Unavailable evidence cannot erase an unresolved blocker.**"
+			]
+		},
+		{
+			"node": "CLM-0010",
+			"path": "docs/decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md",
+			"anchors": [
+				"**Judgment, evidence completeness, and disposition are distinct.**"
+			]
+		},
+		{
+			"node": "CLM-0011",
+			"path": "docs/decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md",
+			"anchors": [
+				"**Blocking state is typed and recoverable.**",
+				"**A retryable/indeterminate outcome is bounded and actionable.**"
+			]
+		},
+		{
+			"node": "CLM-0012",
+			"path": "docs/decisions/0019-checkpoint-restart-not-replay.md",
+			"anchors": [
+				"**checkpoint-restart at step boundaries**",
+				"let ground truth win on resume"
+			]
+		},
+		{
+			"node": "CLM-0013",
+			"path": "docs/decisions/0015-autonomy-by-default-configurable-tolerance.md",
+			"anchors": [
+				"**safety class is never subject to the tolerance dial**"
+			]
+		},
+		{
+			"node": "CLM-0015",
+			"path": "docs/decisions/0020-multi-driver-provider-seam-and-capability-model.md",
+			"anchors": [
+				"fails closed when none qualifies",
+				"degradation is auditable, never silent"
+			]
+		},
+		{
+			"node": "CLM-0017",
+			"path": "docs/decisions/0014-mechanism-policy-separation-spine.md",
+			"anchors": [
+				"Policy is data, not code."
+			]
+		},
+		{
+			"node": "CLM-0018",
+			"path": "docs/decisions/0009-claims-are-git-branches.md",
+			"anchors": [
+				"the branch is the authoritative claim token",
+				"**no separate claims registry and no call-site locking**"
+			]
+		},
+		{
+			"node": "CLM-0021",
+			"path": "docs/trust/trust-claims.yml",
+			"anchors": [
+				"No telemetry. Nothing phones home",
+				"Egress is limited to the configured model provider"
+			]
+		},
+		{
+			"node": "ASM-0001",
+			"path": "docs/decisions/0013-reversibility-weighted-gate-sizing.md",
+			"anchors": [
+				"a bad plan is a cheap re-plan, a bad implement is a discarded worktree"
+			]
+		},
+		{
+			"node": "ASM-0003",
+			"path": "docs/decisions/0017-graceful-degradation-rigor-only.md",
+			"anchors": [
+				"falling back to the **last verified pin** is permitted",
+				"The fallback is **bounded, not indefinite**"
+			]
+		},
+		{
+			"node": "DEC-0001",
+			"path": "docs/decisions/0003-pr-gated-by-default.md",
+			"anchors": [
+				"Flip the shipped default to **`pull-request`**",
+				"`direct-push` becomes an explicit, warned opt-in"
+			]
+		},
+		{
+			"node": "DEC-0002",
+			"path": "docs/decisions/0005-auto-merge-safety-via-branch-protection.md",
+			"anchors": [
+				"Delegate auto-merge safety to **GitHub branch protection**"
+			]
+		},
+		{
+			"node": "DEC-0003",
+			"path": "docs/decisions/0007-signed-tag-provenance-publish.md",
+			"anchors": [
+				"Publish only from a **signed git tag** with build **provenance attestation**"
+			]
+		},
+		{
+			"node": "DEC-0004",
+			"path": "docs/decisions/0009-claims-are-git-branches.md",
+			"anchors": [
+				"A claim **is** the existence of the item's `feat/<id>` git branch"
+			]
+		},
+		{
+			"node": "DEC-0005",
+			"path": "docs/decisions/0011-andon-not-dor.md",
+			"anchors": [
+				"Enforce spec quality at **runtime by produce-or-escalate (Andon)**"
+			]
+		},
+		{
+			"node": "DEC-0006",
+			"path": "docs/decisions/0012-readiness-computed-not-groomed.md",
+			"anchors": [
+				"Definition-of-Ready is a **soft, machine-checkable readiness verdict**"
+			]
+		},
+		{
+			"node": "DEC-0007",
+			"path": "docs/decisions/0015-autonomy-by-default-configurable-tolerance.md",
+			"anchors": [
+				"Human involvement — **flag vs. move, park vs. note** — is a **configurable tolerance**"
+			]
+		},
+		{
+			"node": "DEC-0008",
+			"path": "docs/decisions/0018-in-toto-attestation-envelope.md",
+			"anchors": [
+				"targets the standard **in-toto / ITE-6 statement envelope**",
+				"remain target-state follow-ups"
+			]
+		},
+		{
+			"node": "DEC-0009",
+			"path": "docs/decisions/0019-checkpoint-restart-not-replay.md",
+			"anchors": [
+				"**checkpoint-restart at step boundaries**"
+			]
+		},
+		{
+			"node": "DEC-0010",
+			"path": "docs/decisions/0020-multi-driver-provider-seam-and-capability-model.md",
+			"anchors": [
+				"Add a **data-only `ProviderCapabilities` descriptor**"
+			]
+		},
+		{
+			"node": "DEC-0011",
+			"path": "docs/decisions/0021-capability-enforcement-and-placement.md",
+			"anchors": [
+				"**(1) Enforcement = object-capability (ocap) tool-mediation**",
+				"**(2) Placement = capability-constrained effect handlers**"
+			]
+		},
+		{
+			"node": "DEC-0012",
+			"path": "docs/decisions/0022-pipeline-shape-and-review-orchestrators.md",
+			"anchors": [
+				"**`STEPS` stays the fixed six**",
+				"**Review is policy-triggered, not a pipeline step**"
+			]
+		},
+		{
+			"node": "DEC-0013",
+			"path": "docs/decisions/0023-contained-execution-boundary.md",
+			"anchors": [
+				"Confine autonomous agent execution with **two composable boundaries**"
+			]
+		},
+		{
+			"node": "DEC-0014",
+			"path": "docs/decisions/0024-adversarial-authoring-review-loop.md",
+			"anchors": [
+				"fresh reviewers run **concurrently, one per available driver**",
+				"a **config-set Judge** verifies findings"
+			]
+		},
+		{
+			"node": "DEC-0015",
+			"path": "docs/decisions/0025-landing-serialization-cas-fence-optional-ordering.md",
+			"anchors": [
+				"**Git ref compare-and-swap is the correctness fence**",
+				"**`bd merge-slot` is optional cross-process ordering**"
+			]
+		},
+		{
+			"node": "DEC-0016",
+			"path": "docs/decisions/0026-stateful-guards-fence-reconcile-and-gate-disposition.md",
+			"anchors": [
+				"**Every load-bearing guarded action is fenced or reconciled.**"
+			]
+		},
+		{
+			"node": "DEC-0017",
+			"path": "docs/decisions/0013-reversibility-weighted-gate-sizing.md",
+			"anchors": [
+				"Gate strength is a function of **reversibility, not lifecycle stage**"
+			]
+		},
+		{
+			"node": "DEC-0018",
+			"path": "docs/decisions/0012-readiness-computed-not-groomed.md",
+			"anchors": [
+				"**Valuable / Negotiable** stay chartering-time human concerns"
+			]
+		},
+		{
+			"node": "DEC-0019",
+			"path": "docs/decisions/0027-machine-readable-architectural-intent-graph.md",
+			"anchors": [
+				"**The current shadow graph is not authoritative yet.**",
+				"Promotion requires demonstrated corpus coverage, source grounding, low-friction authoring"
+			]
+		},
+		{
+			"node": "DEC-0020",
+			"path": "docs/decisions/0028-delivery-packet-claim-scoped-provenance.md",
+			"anchors": [
+				"**The unit of delivery is the claim.**",
+				"**Compose, don't author.**"
+			]
+		},
 		{
 			"node": "CLM-0002",
 			"path": "docs/decisions/0001-worktree-write-confinement.md",
@@ -2935,7 +3263,9 @@
 			"2026-08-26 (#650): CTR-0024 was authored as trust-manifest drift rejection, then removed after review showed that manifest generation and byte-drift rejection do not enforce CON-0016's projection-strength rule. Its ID is a permanent gap, like CTR-0014, CTR-0019 and CTR-0020, and must never be reused.",
 			"2026-08-27 (#681): CON-0018 binds CTR-0022 on the strength of the no-false-fire fixture over the enumerated mutations (rationale append, nearby non-anchor rewording, realization `codeEvidence` path change) plus a true-fire control that removes a live unique anchor. Recorded because a bind of this shape reads like a proof that every intent-preserving edit is accepted and is not: anchored-sentence edits still require `sourceGrounding` reconciliation, which is out of scope as a verification artifact.",
 			"2026-08-28 (#682): CON-0025 binds CTR-0022 because Q13 now exercises the live schema, query engine, views, and diagnostics against an independently named second-owner fixture rather than this constraint's own statement. The second-owner source grounding resolves and validates from the consumer fixture root, while a paired run against Pelaggio's root diagnoses the same relative path. The bind is valid because that fixture is independently named material the live checks operate on; it does not settle ADR-0027 decision 7 (no versioned competency-question contract, no interoperability claim).",
-			"2026-08-28 (#653): `ci/assurance-reachability.ts` is deliberately parked and intentionally realizes no proposition. Current-tree triage found that wiring a default-deny unused-export gate would require a 23-name allowlist for deliberate test-only exports and should report 5 genuinely unreferenced production exports, while the scanner falsely reports 22 live symbols and has no production-export enumeration primitive. This entry records the determination without adding a node, realization, edge, observation, or #650/CTR-0022 conformance binding."
+			"2026-08-28 (#653): `ci/assurance-reachability.ts` is deliberately parked and intentionally realizes no proposition. Current-tree triage found that wiring a default-deny unused-export gate would require a 23-name allowlist for deliberate test-only exports and should report 5 genuinely unreferenced production exports, while the scanner falsely reports 22 live symbols and has no production-export enumeration primitive. This entry records the determination without adding a node, realization, edge, observation, or #650/CTR-0022 conformance binding.",
+			"2026-08-31 (#750): the corpus accountability pass grounds every developer-front-door decision, internal invariant, and assumption in exact source language and executes seven prospective-change fixtures without adding a node or relation kind. The fixtures remain shadow-only behavioral evidence, not a promoted question API.",
+			"2026-08-31 (#750): DEC-0008 moves from current to target construction because ADR-0018 explicitly leaves the in-toto envelope unbuilt. CTR-0025 narrowly realizes DEC-0003's signed-tag/npm-provenance workflow without implementing CLM-0008; CTR-0026 narrowly realizes DEC-0011's harness-owned typed-effect placement without claiming cross-provider per-call mediation. This clears decision-without-realization by correcting status and naming present machinery, not by weakening the six unrealized invariants."
 		],
 		"unenforcedConstraints": {
 			"note": "Constraints that name no enforcing realization today, each with the reason it stays unbound. Mirrors the Q17 frozen ceiling in ci/__tests__/shadow-assurance.test.ts; the two are checked against each other.",
