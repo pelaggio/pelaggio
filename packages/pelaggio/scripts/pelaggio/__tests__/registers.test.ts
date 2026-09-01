@@ -2,8 +2,9 @@
  * Conformance for the `.dev` register chokepoint (plan step 7a). Two halves make the guarantee
  * hold by construction: (1) every `.dev` token in a string/template/regex literal in either
  * package lives in `registers.ts` — recognize-by-invariant, so no path can be built around the
- * API; (2) the seat denials derive from the table — a harness register is denied without anyone
- * remembering to extend a list.
+ * API (a dependency-free bootstrap module is exempted only through a binding test that pins its
+ * composition to the table); (2) the seat denials derive from the table — a harness register is
+ * denied without anyone remembering to extend a list.
  */
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -29,6 +30,13 @@ const PELAGGIO_SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = join(PELAGGIO_SRC, "..", "..", "..", "..");
 const SCAN_ROOTS = [PELAGGIO_SRC, join(REPO, "packages", "server", "src")];
 const CHOKEPOINT = "registers.ts";
+/**
+ * Dependency-free bootstrap modules: they run under plain node before dependencies exist, so
+ * they cannot import the chokepoint. Each is still scanned, but its `.dev` composition is
+ * exempted from the literal ban and pinned to the register table by its own binding test below —
+ * a new bootstrap literal, or drift from the registered path, fails closed.
+ */
+const BOUND_BOOTSTRAP_SOURCES = new Set([join(PELAGGIO_SRC, "review", "seat-deps-core.js")]);
 
 function sources(dir: string): string[] {
 	const out: string[] = [];
@@ -36,14 +44,14 @@ function sources(dir: string): string[] {
 		const full = join(dir, name);
 		if (name === "__tests__" || name === "node_modules") continue;
 		if (statSync(full).isDirectory()) out.push(...sources(full));
-		else if (/\.(?:ts|mjs)$/.test(name) && !name.endsWith(".d.ts") && !name.endsWith(".test.ts")) out.push(full);
+		else if (/\.(?:ts|m?js)$/.test(name) && !name.endsWith(".d.ts") && !/\.test\.(?:ts|m?js)$/.test(name)) out.push(full);
 	}
 	return out;
 }
 
 /** Literal texts (string, template chunk, regex) that mention `.dev` — comments never count. */
 export function devLiterals(file: string, src: string): string[] {
-	const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, file.endsWith(".mjs") ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+	const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, /\.m?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
 	const hits: string[] = [];
 	const visit = (n: ts.Node): void => {
 		if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n) || ts.isRegularExpressionLiteral(n)) {
@@ -141,10 +149,22 @@ describe("registers", () => {
 		for (const root of SCAN_ROOTS) {
 			for (const file of sources(root)) {
 				if (file.endsWith(`/${CHOKEPOINT}`)) continue;
+				if (BOUND_BOOTSTRAP_SOURCES.has(file)) continue; // exempted, but pinned by the binding test below
 				for (const lit of devLiterals(file, readFileSync(file, "utf8"))) offenders.push(`${relative(REPO, file)}: ${JSON.stringify(lit)}`);
 			}
 		}
 		assert.deepEqual(offenders, [], `build these through registerPath()/registerRelativePath() instead:\n  ${offenders.join("\n  ")}`);
+	});
+
+	it("bound bootstrap .dev compositions match the register table (dependency-free modules cannot import it)", () => {
+		const seatDepsCore = join(PELAGGIO_SRC, "review", "seat-deps-core.js");
+		assert.deepEqual([...BOUND_BOOTSTRAP_SOURCES], [seatDepsCore], "every bound bootstrap module needs its own binding assertions here");
+		const src = readFileSync(seatDepsCore, "utf8");
+		// One literal, one composition, and the composed path is exactly the registered
+		// node-modules-repair.lock — a second `.dev` literal or a drifted path fails.
+		assert.deepEqual(devLiterals(seatDepsCore, src), [".dev"]);
+		assert.match(src, /resolve\(mainRepo, "\.dev", "node-modules-repair\.lock"\)/);
+		assert.equal(registerRelativePath("node-modules-repair.lock"), ".dev/node-modules-repair.lock");
 	});
 
 	it("devRootPathspec() is never composed into a path anywhere in either package", () => {

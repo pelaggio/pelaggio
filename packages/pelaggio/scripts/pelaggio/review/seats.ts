@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { type RegisterName, registerPath } from "../registers.js";
+import { type AuthoringReviewHostDependencyRepairResult, verifyOrRepairAuthoringReviewHostDependencies } from "./seat-deps.js";
 
 /**
  * Per-seat detached checkouts for concurrent authoring-loop reviewers (#269).
@@ -121,8 +122,13 @@ function forceRemoveWorktree(path: string, mainRepo: string, run: GitExec): void
 	}
 }
 
-/** Best-effort remove of one seat worktree. A leaked seat is inert (under gitignored `.dev/`). */
-export function cleanupAuthoringReviewSeat(mainRepo: string, key: AuthoringReviewSeatKey, exec?: GitExec): void {
+/** Best-effort seat reclamation followed by the fail-closed MAIN link verifier. */
+export async function cleanupAuthoringReviewSeat(
+	mainRepo: string,
+	key: AuthoringReviewSeatKey,
+	exec?: GitExec,
+	verifyOrRepair: typeof verifyOrRepairAuthoringReviewHostDependencies = verifyOrRepairAuthoringReviewHostDependencies,
+): Promise<AuthoringReviewHostDependencyRepairResult> {
 	const run = exec ?? defaultGitExec;
 	const path = authoringReviewSeatPath(mainRepo, key);
 	try {
@@ -130,29 +136,37 @@ export function cleanupAuthoringReviewSeat(mainRepo: string, key: AuthoringRevie
 	} catch {
 		// best-effort
 	}
+	return verifyOrRepair(mainRepo);
 }
 
 /** Remove every seat worktree under a reviewed SHA (all seats for one authoring-loop run). */
-export function cleanupAuthoringReviewSeatsForSha(mainRepo: string, sha: string, exec?: GitExec): void {
+export async function cleanupAuthoringReviewSeatsForSha(
+	mainRepo: string,
+	sha: string,
+	exec?: GitExec,
+	verifyOrRepair: typeof verifyOrRepairAuthoringReviewHostDependencies = verifyOrRepairAuthoringReviewHostDependencies,
+): Promise<AuthoringReviewHostDependencyRepairResult> {
 	const run = exec ?? defaultGitExec;
 	const dir = resolve(authoringReviewSeatsRoot(mainRepo), sha);
-	if (!existsSync(dir)) return;
 	try {
-		// List registered worktrees and drop any whose path sits under this sha dir.
-		const porcelain = run(["worktree", "list", "--porcelain"], mainRepo);
-		const paths = porcelain
-			.split("\n")
-			.filter((line) => line.startsWith("worktree "))
-			.map((line) => line.slice("worktree ".length).trim())
-			.filter((path) => resolve(path).startsWith(`${resolve(dir)}/`));
-		for (const path of paths) {
-			try {
-				run(["worktree", "remove", "--force", path], mainRepo);
-			} catch {
-				// continue remaining seats
+		if (existsSync(dir)) {
+			// List registered worktrees and drop any whose path sits under this sha dir.
+			const porcelain = run(["worktree", "list", "--porcelain"], mainRepo);
+			const paths = porcelain
+				.split("\n")
+				.filter((line) => line.startsWith("worktree "))
+				.map((line) => line.slice("worktree ".length).trim())
+				.filter((path) => resolve(path).startsWith(`${resolve(dir)}/`));
+			for (const path of paths) {
+				try {
+					run(["worktree", "remove", "--force", path], mainRepo);
+				} catch {
+					// continue remaining seats
+				}
 			}
 		}
 	} catch {
 		// best-effort
 	}
+	return verifyOrRepair(mainRepo);
 }

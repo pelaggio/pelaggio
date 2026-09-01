@@ -913,6 +913,18 @@ describe("runOrchestrator — cycle disposition", () => {
 		assert.equal(calls.length, 1);
 	});
 
+	it("an explicit halt-campaign park stops the queue tail", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const { runPipeline, calls } = createMockRunPipeline({
+			byItem: {
+				"A-1": { outcome: "parked", parkClass: "unclassified", parkReason: "repair failed", disposition: "halt-campaign" },
+				"A-2": { completed: true, cost: 0 },
+			},
+		});
+		await runOrchestrator({ ...baseFlags, item: "A-1,A-2" }, { runPipeline });
+		assert.equal(calls.length, 1);
+	});
+
 	it("halts on the fifth consecutive quarantine without relabeling its diagnosis", async (t) => {
 		t.mock.method(console, "log", () => {});
 		const byItem = Object.fromEntries([1, 2, 3, 4, 5].map((n) => [`A-${n}`, { ...quarantine }]));

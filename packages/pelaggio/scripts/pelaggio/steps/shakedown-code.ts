@@ -14,7 +14,7 @@ import { capabilityMapFrom, resolveAuthoringReviewConfig, resolveAuthoringReview
 import { registerRelativePath } from "../registers.js";
 import { runReviewLoop } from "../review/loop.js";
 import { type ReviewRecord, renderReviewRecord, writeReviewRecord } from "../review/record.js";
-import { cleanupAuthoringReviewSeatsForSha, prepareAuthoringReviewSeat } from "../review/seats.js";
+import type { AuthoringReviewHostDependencyRepairResult } from "../review/seat-deps.js";
 import { buildStepArgs, expandSkill } from "../skills.js";
 import { getProvider, REGISTERED_PROVIDERS } from "../step-runner.js";
 import type { ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, StepLog, StepResult } from "../types.js";
@@ -36,8 +36,23 @@ export interface ShakedownCodeInput {
 	readonly worktree: string;
 	readonly profile: string;
 }
+type ShakedownCodeDepNames =
+	| "roadmap"
+	| "available"
+	| "log"
+	| "finishFailed"
+	| "parkExit"
+	| "runStepWithRetry"
+	| "step"
+	| "driverCandidates"
+	| "itemRunId"
+	| "observeGitForReceipt"
+	| "cost"
+	| "addCost"
+	| "prepareAuthoringReviewSeat"
+	| "cleanupAuthoringReviewSeatsForSha";
 /** Exactly the cycle helpers `runShakedownCode` calls. */
-export type ShakedownCodeDeps = Pick<CycleHelpers, "roadmap" | "available" | "log" | "finishFailed" | "parkExit" | "runStepWithRetry" | "step" | "driverCandidates" | "itemRunId" | "observeGitForReceipt" | "cost" | "addCost"> & {
+export type ShakedownCodeDeps = Pick<CycleHelpers, ShakedownCodeDepNames> & {
 	/** Run options: carry `notifyDecision` and the ship target (callables), so they ride as a Dep. */
 	readonly opts: PipelineOpts;
 	/** Effects seam and escalation ledger, injected so tests can observe them. */
@@ -49,8 +64,37 @@ export type ShakedownCodeDeps = Pick<CycleHelpers, "roadmap" | "available" | "lo
 
 export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: ShakedownCodeDeps): Promise<StepOutcome<{ reviewRecordMarkdown: string | undefined }>> {
 	const { flags, parkSignal, mainRepo, assignment, steps, executionReceipts, deferredItemTitles, cycleChallenge, itemId, worktree, profile } = ctx;
-	const { opts, roadmap, available, log, finishFailed, parkExit, runStepWithRetry, step, driverCandidates, itemRunId, observeGitForReceipt, writeEffectsManifest, dispatchStepEffects, appendReviewEscalation, lookupReviewEscalation } =
-		helpers;
+	const {
+		opts,
+		roadmap,
+		available,
+		log,
+		finishFailed,
+		parkExit,
+		runStepWithRetry,
+		step,
+		driverCandidates,
+		itemRunId,
+		observeGitForReceipt,
+		writeEffectsManifest,
+		dispatchStepEffects,
+		appendReviewEscalation,
+		lookupReviewEscalation,
+		prepareAuthoringReviewSeat,
+		cleanupAuthoringReviewSeatsForSha,
+	} = helpers;
+	const hostDependencyParkReason = (result: Extract<AuthoringReviewHostDependencyRepairResult, { status: "park" }>, context: string): string =>
+		[
+			`authoring-review host dependency restoration parked ${context} (${result.reason}): ${result.detail}`,
+			`preserved state: claim worktree ${worktree} will be checkpointed; MAIN links remain at the last repair state`,
+			`resume: pnpm pelaggio --resume ${itemId}`,
+		].join("\n");
+	const hostDependencyVerificationFailure = (detail: string, context: string): string =>
+		[
+			`authoring-review host dependency restoration parked ${context} (verification-failed): ${detail}`,
+			`preserved state: claim worktree ${worktree} will be checkpointed; MAIN links remain at the last repair state`,
+			`resume: pnpm pelaggio --resume ${itemId}`,
+		].join("\n");
 	let reviewRecordMarkdown: string | undefined;
 	const implementationAuthor = assignment.authors.implementation;
 	if (!implementationAuthor) return { kind: "terminal", result: finishFailed("shakedown-code assignment failed: implementation author attribution is unavailable", "selection", { itemId, cost: helpers.cost() }) };
@@ -134,6 +178,8 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 		} else {
 			let seatPrepareChain: Promise<void> = Promise.resolve();
 			const preparedSeatShas = new Set<string>([reviewedSha]);
+			let cleanupParkReason: string | undefined;
+			let loopFailure: { error: unknown } | undefined;
 			try {
 				loop = await runReviewLoop({
 					policy,
@@ -195,9 +241,20 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 					if (loop.diversity.state === "met") loop.diversity = { state: "softened", explanation };
 					else if (!loop.diversity.explanation.includes(explanation)) loop.diversity = { state: "softened", explanation: `${loop.diversity.explanation}; ${explanation}` };
 				}
+			} catch (error) {
+				loopFailure = { error };
 			} finally {
-				for (const sha of preparedSeatShas) cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
+				for (const sha of preparedSeatShas) {
+					try {
+						const repair = await cleanupAuthoringReviewSeatsForSha(mainRepo, sha);
+						if (repair.status === "park") cleanupParkReason ??= hostDependencyParkReason(repair, `after seat teardown for ${sha.slice(0, 12)}`);
+					} catch (error) {
+						cleanupParkReason ??= hostDependencyVerificationFailure(error instanceof Error ? error.message : String(error), `after seat teardown for ${sha.slice(0, 12)}`);
+					}
+				}
 			}
+			if (cleanupParkReason) return { kind: "terminal", result: parkExit(cleanupParkReason, "halt-campaign")! };
+			if (loopFailure) throw loopFailure.error;
 		}
 		if (!loop) {
 			// loop is only skipped for resolved-proceed; narrow before reading audit fields.
