@@ -207,6 +207,59 @@ describe("PR review gate record store", () => {
 		assert.throws(() => writePrReviewGateRecord(root(), { ...fleetRecord(), elapsedMs: undefined } as unknown as NewPrReviewFleetGateRecord), /invalid elapsedMs/);
 	});
 
+	it("reads historical v2 fleet records without recurrenceFindings and round-trips when present", () => {
+		const historical = { schemaVersion: 2, ...fleetRecord() } as Record<string, unknown>;
+		delete historical.recurrenceFindings;
+		const validated = validatePrReviewGateRecord(historical);
+		assert.ok(validated.schemaVersion === 2 && validated.producer === "fleet");
+		assert.equal(validated.recurrenceFindings, undefined);
+
+		const dir = root();
+		const empty = writePrReviewGateRecord(dir, fleetRecord({ recurrenceFindings: [] }));
+		const emptyStored = JSON.parse(readFileSync(empty, "utf8"));
+		assert.deepEqual(emptyStored.recurrenceFindings, []);
+
+		const observation = { fingerprintDigest: DIGEST, path: "src/a.ts", findingClass: "correctness-regression" };
+		const path = writePrReviewGateRecord(dir, fleetRecord({ prNumber: 301, recurrenceFindings: [observation] }));
+		const stored = readPrReviewGateRecord(dir, 301, HEAD);
+		assertFleet(stored);
+		assert.deepEqual(stored.recurrenceFindings, [observation]);
+		assert.equal(JSON.parse(readFileSync(path, "utf8")).recurrenceFindings[0].fingerprintDigest, DIGEST);
+	});
+
+	it("fails closed on malformed recurrenceFindings telemetry", () => {
+		const valid = { schemaVersion: 2 as const, ...fleetRecord(), recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression" }] };
+		const overlong = "a".repeat(513);
+		const tooMany = Array.from({ length: 65 }, (_, i) => ({
+			fingerprintDigest: `${i.toString(16).padStart(64, "0")}`,
+			findingClass: "correctness-regression",
+		}));
+		const invalid: unknown[] = [
+			{ ...valid, recurrenceFindings: "nope" },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", extra: true }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST.toUpperCase(), findingClass: "correctness-regression" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST.slice(0, 63), findingClass: "correctness-regression" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "BadClass" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: "" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: "/abs/x.ts" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: "../escape.ts" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: "./src/a.ts" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: "src\\a.ts" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: "a//b.ts" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: "src/a.ts\n" }] },
+			{ ...valid, recurrenceFindings: [{ fingerprintDigest: DIGEST, findingClass: "correctness-regression", path: overlong }] },
+			{
+				...valid,
+				recurrenceFindings: [
+					{ fingerprintDigest: DIGEST, findingClass: "correctness-regression" },
+					{ fingerprintDigest: DIGEST, findingClass: "judgment" },
+				],
+			},
+			{ ...valid, recurrenceFindings: tooMany },
+		];
+		for (const value of invalid) assert.throws(() => validatePrReviewGateRecord(value));
+	});
+
 	it("returns stored fleet agreement and never treats operator gate pass as consensus", () => {
 		const v1 = validatePrReviewGateRecord(v1Fixture({ agreement: "disagreement" }));
 		const fleet = validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord({ agreement: "consensus-block" }) });

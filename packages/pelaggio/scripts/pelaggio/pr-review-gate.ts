@@ -12,17 +12,20 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
 import { classifySecurityReviewDiff, formatReviewMetrics, type SecurityDiffSignal } from "./cycle-support.js";
 import { listWorktreesIn, mainWorktree } from "./git.js";
 import { PR_REVIEW_MARKER, upsertMarkerComment } from "./github-posting.js";
+import { findGuaranteeRecurrenceAdvisory, type GuaranteeRecurrenceAdvisory, recurrenceRollsFromRecords, renderGuaranteeRecurrenceAdvisory } from "./guarantee-authority.js";
 import { parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
-import { type NewPrReviewFleetGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { type NewPrReviewFleetGateRecord, PR_REVIEW_RECURRENCE_PATH_MAX, type PrReviewGateRecord, type PrReviewRecurrenceFinding, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
 	buildCarryDispositionDraft,
+	canonicalRepoRelPath,
 	computeTouchedPaths,
 	listPrFindingDispositionRecords,
 	type PrCarryDispositionDraft,
@@ -34,6 +37,7 @@ import {
 } from "./review/carry.js";
 import {
 	evaluateReviewConvergence,
+	materializeAuthoringFinding,
 	modelAuthoredText,
 	parseReviewFindings,
 	parseReviewVerification,
@@ -47,6 +51,7 @@ import {
 	type VerificationCandidate,
 	type VerificationDisposition,
 } from "./review/findings.js";
+import { isWellFormedClassId } from "./review/taxonomy.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
 import { expandPackagedSkill } from "./skills.js";
@@ -147,6 +152,8 @@ export interface RunPrReviewGateOptions {
 	/** Cross-push carry input (#495), built by resolveCarryOptions from a validated prior
 	 *  disposition record. Absent → today's cold behavior, byte-identical. */
 	carry?: PrReviewCarryInput;
+	/** Validated prior local fleet records for recurrence advisory. The gate does not list the filesystem. */
+	priorGateRecords?: readonly PrReviewGateRecord[];
 	/** Override the seat write-denial (tests / callers with a richer worktree registry). When
 	 *  absent the gate resolves it itself — every seat gets the denial regardless of cwd. */
 	foreignRootDenial?: ForeignRootDenial;
@@ -191,6 +198,9 @@ export interface PrReviewGateResult {
 	/** Cross-push disposition draft (#495): survived + refuted memory for this reviewed head.
 	 *  Present on completed runs with identity (itemId + 40-hex reviewedSha); never on park. */
 	dispositionDraft?: PrCarryDispositionDraft;
+	/** Compact confirmed must-fix observations for this completed roll. Always set on a
+	 *  non-park return, including `[]`. Absent on park. */
+	recurrenceFindings?: readonly PrReviewRecurrenceFinding[];
 }
 
 let deps: PrReviewDeps = {
@@ -395,6 +405,7 @@ export function buildComment(
 	securitySignal: SecurityDiffSignal,
 	summary?: string,
 	convergence?: { iterations: number; survivors: number; breaker?: ReviewExhaustionReason; providers: string; agreement?: PrReviewAgreement; carry?: string },
+	advisory?: GuaranteeRecurrenceAdvisory | null,
 ): string {
 	const header = gate === "pass" ? "✅ **Automated review: PASS**" : "🚫 **Automated review: BLOCK**";
 	const ok = passes.every(passOk);
@@ -422,7 +433,20 @@ export function buildComment(
 					}),
 				]
 			: [];
-	return [PR_REVIEW_MARKER, header, ...(summary ? ["", summary] : []), ...verdictLines, "", ...passes.map(renderPass), "", redTeamLine, "", `<sub>pelaggio pr-review · ${subtype}</sub>`, metrics].join("\n");
+	return [
+		PR_REVIEW_MARKER,
+		header,
+		...(summary ? ["", summary] : []),
+		...verdictLines,
+		"",
+		...passes.map(renderPass),
+		...(advisory ? ["", "### Recurrence advisory", "", renderGuaranteeRecurrenceAdvisory(advisory)] : []),
+		"",
+		redTeamLine,
+		"",
+		`<sub>pelaggio pr-review · ${subtype}</sub>`,
+		metrics,
+	].join("\n");
 }
 
 export function buildFailClosedComment(subtype: string, message: string): string {
@@ -794,6 +818,46 @@ async function runVerificationPass(
 	}
 }
 
+const RECURRENCE_OBSERVATION_MAX = 64;
+const REVIEWED_SHA40_RE = /^[0-9a-f]{40}$/i;
+
+function fingerprintDigestOf(fingerprint: string): string {
+	return createHash("sha256").update(fingerprint, "utf8").digest("hex");
+}
+
+function extractRecurrenceFindings(opts: {
+	itemId: string | undefined;
+	reviewedSha: string | undefined;
+	agreement: PrReviewAgreement;
+	verifications: ReadonlyMap<string, { decision: "survives" | "refuted" }>;
+	winningFindings: ReadonlyMap<string, ReviewFinding>;
+	inspectionFiles: readonly string[];
+	taxonomy: TaxonomyConfig;
+}): PrReviewRecurrenceFinding[] {
+	if (!opts.itemId || opts.itemId.trim() === "" || !REVIEWED_SHA40_RE.test(opts.reviewedSha ?? "") || opts.agreement === "invalid") return [];
+	const observations: PrReviewRecurrenceFinding[] = [];
+	const seen = new Set<string>();
+	for (const [fingerprint, evidence] of opts.verifications) {
+		if (evidence.decision !== "survives") continue;
+		const finding = opts.winningFindings.get(fingerprint);
+		if (!finding) continue;
+		if (finding.severity !== "must-fix") continue;
+		if (seen.has(fingerprint)) continue;
+		seen.add(fingerprint);
+		const materialized = materializeAuthoringFinding(finding, { changedFiles: opts.inspectionFiles }, opts.taxonomy);
+		if (!isWellFormedClassId(materialized.class)) continue;
+		const path = canonicalRepoRelPath(finding.path);
+		// Fleet v2 rejects overlong paths; retain the observation in its class-only bucket.
+		observations.push({
+			fingerprintDigest: fingerprintDigestOf(fingerprint),
+			...(path && path.length <= PR_REVIEW_RECURRENCE_PATH_MAX ? { path } : {}),
+			findingClass: materialized.class,
+		});
+		if (observations.length >= RECURRENCE_OBSERVATION_MAX) break;
+	}
+	return observations;
+}
+
 export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<PrReviewGateResult> {
 	const profile = options.profile ?? "standard";
 	const cwd = options.cwd ?? REPO;
@@ -827,7 +891,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		const body = buildFailClosedComment("error_diff", `Could not inspect the PR diff for security-sensitive changes, so this gate blocks the merge.\n\n${msg}`);
 		process.stderr.write(`pr-review could not inspect diff — failing closed: ${msg}\n`);
 		options.upsertComment?.(options.pr, body);
-		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "standard:error_diff", agreement: "invalid" };
+		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "standard:error_diff", agreement: "invalid", recurrenceFindings: [] };
 	}
 
 	const labels: ReviewLabel[] = securitySignal.triggered ? ["standard", "red-team"] : ["standard"];
@@ -838,7 +902,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	if (policy.providerDiversity === "require" && reviewDrivers.every((driver) => driver.provider === verifySettings.provider)) {
 		const body = buildFailClosedComment("provider-diversity", `review.provider-diversity=require but every pr-review driver equals the pr-verify provider (${verifySettings.provider}; reviewers=${formatReviewerSet(reviewDrivers)}).`);
 		options.upsertComment?.(options.pr, body);
-		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "provider-diversity", agreement: "invalid", breakerReason: "provider-diversity" };
+		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "provider-diversity", agreement: "invalid", breakerReason: "provider-diversity", recurrenceFindings: [] };
 	}
 	if (reservation > policy.budgetCap) {
 		const body = buildFailClosedComment(
@@ -846,7 +910,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			`A complete required review iteration reserves $${reservation} (${labels.length} labels × ${reviewDrivers.length} drivers × (review+verify)), exceeding review.budget-cap $${policy.budgetCap}.`,
 		);
 		options.upsertComment?.(options.pr, body);
-		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget" };
+		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget", recurrenceFindings: [] };
 	}
 
 	const passes: ReviewPass[] = [];
@@ -1040,6 +1104,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// recorded as refuted with that refutation's evidence, never as a survivor riding stale
 	// earlier survives evidence with its hunk opened as an edit region.
 	const verifications = new Map<string, { id: string; decision: "survives" | "refuted"; rationale: string; iteration: number }>();
+	const winningFindings = new Map<string, ReviewFinding>();
 	for (const pass of passes) {
 		for (const disposition of pass.dispositions ?? []) {
 			const fingerprint = reviewFindingFingerprint(disposition.finding);
@@ -1047,6 +1112,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			if (existing && existing.iteration > pass.iteration) continue;
 			if (existing && existing.iteration === pass.iteration && existing.decision === "survives") continue;
 			verifications.set(fingerprint, { id: disposition.id, decision: disposition.decision, rationale: disposition.rationale, iteration: pass.iteration });
+			winningFindings.set(fingerprint, disposition.finding);
 		}
 	}
 	const prNumber = Number.parseInt(options.pr, 10);
@@ -1103,14 +1169,37 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			? "carry=refused-untrusted-pool"
 			: "carry=none";
 	const summary = `Convergence: ${gate === "pass" ? "converged" : `exhausted (${breakerReason ?? "invalid-pass"})`} · agreement=${agreement} · iterations=${lastIteration} · survivors=${carried.size} · providers=${pairing} · ${carryToken} · aggregate cost=$${cost.toFixed(2)}`;
-	const body = buildComment(gate, passes, securitySignal, summary, {
-		iterations: lastIteration,
-		survivors: carried.size,
-		breaker: breakerReason,
-		providers: pairing,
+	const recurrenceFindings = extractRecurrenceFindings({
+		itemId: options.itemId,
+		reviewedSha: options.reviewedSha,
 		agreement,
-		carry: carryToken,
+		verifications,
+		winningFindings,
+		inspectionFiles,
+		taxonomy: policy.taxonomy,
 	});
+	const currentRoll = {
+		prNumber,
+		itemId: options.itemId ?? "",
+		headSha: options.reviewedSha ?? "",
+		observations: recurrenceFindings,
+	};
+	const advisory = findGuaranteeRecurrenceAdvisory(recurrenceRollsFromRecords(options.priorGateRecords ?? []), currentRoll);
+	const body = buildComment(
+		gate,
+		passes,
+		securitySignal,
+		summary,
+		{
+			iterations: lastIteration,
+			survivors: carried.size,
+			breaker: breakerReason,
+			providers: pairing,
+			agreement,
+			carry: carryToken,
+		},
+		advisory,
+	);
 	options.upsertComment?.(options.pr, body);
 	return {
 		gate,
@@ -1126,6 +1215,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		survivorCount: carried.size,
 		...(adjudicationSource ? { adjudicationSource } : {}),
 		...(dispositionDraft ? { dispositionDraft } : {}),
+		recurrenceFindings,
 	};
 }
 
@@ -1172,6 +1262,7 @@ export function persistLocalGateEvidence(opts: {
 		elapsedMs: opts.elapsedMs,
 		runner: "local",
 		reviewedAt: new Date(opts.now()).toISOString(),
+		...(opts.review.recurrenceFindings !== undefined ? { recurrenceFindings: opts.review.recurrenceFindings } : {}),
 	};
 	let fleetPath: string;
 	try {

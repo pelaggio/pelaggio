@@ -20,7 +20,7 @@ import { type NotifyConfig, notifyCycle, notifyDecision as notifyDecisionEvent, 
 import { parseWaitFlag } from "./outcome-classify.js";
 import { type PipelineDeps, runPipeline } from "./pipeline.js";
 import { buildFailClosedComment, type PrReviewGateResult, resolveCarryOptions, runPrReviewGate } from "./pr-review-gate.js";
-import { gateRecordsDir, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { gateRecordsDir, listPrReviewGateRecords, type NewPrReviewGateRecord, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { detectUnattendedSignals, resolveAuthoringReviewExecution } from "./provider-routing.js";
 import { ensureDevRoot, registerFamilyPath, registerFamilyRelativePath } from "./registers.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
@@ -94,6 +94,7 @@ export interface OrchestratorDeps {
 		dispositionsRoot: string;
 		writeDispositionRecord: typeof writePrFindingDispositionRecord;
 		resolveCarry: typeof resolveCarryOptions;
+		listGateRecords: typeof listPrReviewGateRecords;
 	}>;
 	/**
 	 * Continuous-mode free queue probe (issue #82). Defaults to `listItems` + FlowPolicy
@@ -1012,6 +1013,8 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			// default above); with an empty store it returns before any git call.
 			writeDispositionRecord: writePrFindingDispositionRecord,
 			resolveCarry: resolveCarryOptions,
+			// Reads only the already-hermetic `gateRecordsRoot`; do not wrap in hermeticDefault.
+			listGateRecords: listPrReviewGateRecords,
 			...deps.review,
 		};
 		const shipIsPr = shipTargetName === "pull-request" || shipTargetName === "auto-merge-pr";
@@ -1174,6 +1177,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							})
 						: undefined;
 					gateStartedAt = review.now();
+					const priorGateRecords = review.listGateRecords(review.gateRecordsRoot);
 					const result = await review.runReviewGate({
 						pr: String(pr.prNumber),
 						itemId: pr.itemId,
@@ -1186,6 +1190,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 						policy: review.policy,
 						parkSignal, // shared: a rate-limit park sets this and flows into the wait+retry policy
 						...(carry ? { carry } : {}),
+						priorGateRecords,
 					});
 					elapsedMs = Math.max(0, Math.trunc(review.now() - gateStartedAt));
 					if (result.gate === "park") {
@@ -1237,6 +1242,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							elapsedMs,
 							runner: "local",
 							reviewedAt: new Date(review.now()).toISOString(),
+							...(gateResult.recurrenceFindings !== undefined ? { recurrenceFindings: gateResult.recurrenceFindings } : {}),
 						}
 					: {
 							producer: "fleet",

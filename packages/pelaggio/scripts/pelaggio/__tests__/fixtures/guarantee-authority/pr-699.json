@@ -1,0 +1,159 @@
+{
+  "prNumber": 699,
+  "itemId": "699",
+  "path": "src/a.ts",
+  "findingClass": "correctness-regression",
+  "digests": [
+    "6eebdf3d9370f55e0fb6e9a2c055d5f44d87677ed1f8299e79b09b18e2318a9d",
+    "9fd63b662f053c1ef6f96c748d942246e34dba712f05812bf73a0a601d824fc7",
+    "535254e01a3bc4480ca741c2a826a0b264499b73a04a6b987d9805d3d17eee5f",
+    "4f9d54926cde522b124494bf48f8a933b4289f223df6607bc71d33ef81536dfb",
+    "e2b18c104c9eb77b61c88dd43ab5a464c048b92a79a7d6989e3635061e85e405",
+    "2dc87cba00e85a12551906b52d88b7cf0cf6e58d42f39b33b86fb070c134622b",
+    "a2270cc17e28df877552826ff2eb66c01fbd1772e2d2581ce10c8bf38c6eb465",
+    "721b4d2c54aa3fba5bae792663c7b968f2c65fe4c8038280e6a475b9893c4cc3"
+  ],
+  "heads": [
+    "cc28aa002e735f4a8c8e7725f3ea37d781d2ec65f67a591064fbdcbd2b233a8b",
+    "a0b8cfbf77ce4a2d7088e0a4ac6d96e0f49aab1d06dd626004161749a2516a54",
+    "b0561a944b9eb351e0804eff456452462eeaacccb611f488c47f57f6349e4292",
+    "783e46075d1585680764a1f027b29f65a5842de730229d09732c1d511eb89349"
+  ],
+  "rolls": [
+    {
+      "headSha": "cc28aa002e735f4a8c8e7725f3ea37d781d2ec65f67a591064fbdcbd2b233a8b",
+      "observations": [
+        {
+          "fingerprintDigest": "6eebdf3d9370f55e0fb6e9a2c055d5f44d87677ed1f8299e79b09b18e2318a9d",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "9fd63b662f053c1ef6f96c748d942246e34dba712f05812bf73a0a601d824fc7",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        }
+      ]
+    },
+    {
+      "headSha": "a0b8cfbf77ce4a2d7088e0a4ac6d96e0f49aab1d06dd626004161749a2516a54",
+      "observations": [
+        {
+          "fingerprintDigest": "6eebdf3d9370f55e0fb6e9a2c055d5f44d87677ed1f8299e79b09b18e2318a9d",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "9fd63b662f053c1ef6f96c748d942246e34dba712f05812bf73a0a601d824fc7",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "535254e01a3bc4480ca741c2a826a0b264499b73a04a6b987d9805d3d17eee5f",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        }
+      ]
+    },
+    {
+      "headSha": "b0561a944b9eb351e0804eff456452462eeaacccb611f488c47f57f6349e4292",
+      "observations": [
+        {
+          "fingerprintDigest": "6eebdf3d9370f55e0fb6e9a2c055d5f44d87677ed1f8299e79b09b18e2318a9d",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "9fd63b662f053c1ef6f96c748d942246e34dba712f05812bf73a0a601d824fc7",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "535254e01a3bc4480ca741c2a826a0b264499b73a04a6b987d9805d3d17eee5f",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "4f9d54926cde522b124494bf48f8a933b4289f223df6607bc71d33ef81536dfb",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "e2b18c104c9eb77b61c88dd43ab5a464c048b92a79a7d6989e3635061e85e405",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        }
+      ]
+    },
+    {
+      "headSha": "783e46075d1585680764a1f027b29f65a5842de730229d09732c1d511eb89349",
+      "observations": [
+        {
+          "fingerprintDigest": "6eebdf3d9370f55e0fb6e9a2c055d5f44d87677ed1f8299e79b09b18e2318a9d",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "9fd63b662f053c1ef6f96c748d942246e34dba712f05812bf73a0a601d824fc7",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "535254e01a3bc4480ca741c2a826a0b264499b73a04a6b987d9805d3d17eee5f",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "4f9d54926cde522b124494bf48f8a933b4289f223df6607bc71d33ef81536dfb",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "e2b18c104c9eb77b61c88dd43ab5a464c048b92a79a7d6989e3635061e85e405",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "2dc87cba00e85a12551906b52d88b7cf0cf6e58d42f39b33b86fb070c134622b",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "a2270cc17e28df877552826ff2eb66c01fbd1772e2d2581ce10c8bf38c6eb465",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        },
+        {
+          "fingerprintDigest": "721b4d2c54aa3fba5bae792663c7b968f2c65fe4c8038280e6a475b9893c4cc3",
+          "path": "src/a.ts",
+          "findingClass": "correctness-regression"
+        }
+      ]
+    }
+  ],
+  "dispersed": {
+    "headSha": "a0b8cfbf77ce4a2d7088e0a4ac6d96e0f49aab1d06dd626004161749a2516a54",
+    "observations": [
+      {
+        "fingerprintDigest": "6eebdf3d9370f55e0fb6e9a2c055d5f44d87677ed1f8299e79b09b18e2318a9d",
+        "path": "src/a.ts",
+        "findingClass": "correctness-regression"
+      },
+      {
+        "fingerprintDigest": "9fd63b662f053c1ef6f96c748d942246e34dba712f05812bf73a0a601d824fc7",
+        "path": "src/b.ts",
+        "findingClass": "correctness-regression"
+      },
+      {
+        "fingerprintDigest": "535254e01a3bc4480ca741c2a826a0b264499b73a04a6b987d9805d3d17eee5f",
+        "path": "src/a.ts",
+        "findingClass": "judgment"
+      },
+      {
+        "fingerprintDigest": "4f9d54926cde522b124494bf48f8a933b4289f223df6607bc71d33ef81536dfb",
+        "path": "src/c.ts",
+        "findingClass": "correctness-regression"
+      }
+    ]
+  }
+}

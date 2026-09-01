@@ -31,3 +31,19 @@
 
 <!-- Recurring conflict shapes and how this team resolves them. Lockfiles,
      generated files, migration numbering, etc. -->
+
+## Ownership map
+
+<!-- Optional reviewer context. Shakedown consults this after an item's declared
+     write-set when judging whether a proposed guarantee's asserted inputs are
+     in-scope. Not a config surface and not parsed by the harness. Pelaggio's
+     experimental assurance graph is non-authoritative context only and cannot
+     override the item or this map. -->
+
+<!-- Path inputs — repo-relative prefix or file, then the owning item:
+     `packages/server/` — #NNN (control-plane auth)
+     `.pelaggio.yml` schema — #NNN (config grammar) -->
+
+<!-- Non-path inputs — env, records, git/HEAD shapes, generated grammar:
+     `CONTROL_PLANE_TOKEN` bind requirement — #NNN
+     fleet gate records under `.dev/pr-review-gate-records/` — #NNN -->
