@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { RECOVERABLE_ERRORS } from "../cycle-errors.js";
-import { buildRequest, type CycleNotifyPayload, classifyEvent, formatText, NOTIFY_EVENTS, type NotifyConfig, type NotifyFormat, type NotifyPayload, notifyCycle, notifyDecision, sendNotification } from "../notify.js";
-import type { CycleResult } from "../types.js";
-
-function result(overrides: Partial<CycleResult> = {}): CycleResult {
-	return { itemId: "34", completed: false, cost: 0, ...overrides };
-}
+import { buildRequest, type CycleNotifyPayload, classifyEvent, formatText, NOTIFY_EVENTS, type NotifyConfig, type NotifyFormat, type NotifyPayload, notifyCycle, notifyDecision, notifyWireError, sendNotification } from "../notify.js";
+import { blockedResult, completedResult, failedResult, parkedResult } from "./mocks.js";
 
 function payload(overrides: Partial<CycleNotifyPayload> = {}): CycleNotifyPayload {
 	const base: Omit<CycleNotifyPayload, "text"> = {
@@ -24,50 +20,44 @@ function payload(overrides: Partial<CycleNotifyPayload> = {}): CycleNotifyPayloa
 
 describe("classifyEvent", () => {
 	it("parked wins", () => {
-		assert.equal(classifyEvent(result({ error: "parked" })), "parked");
+		assert.equal(classifyEvent(parkedResult({ itemId: "34" })), "parked");
 	});
 
 	it("completed + awaitingMerge ⇒ pr-opened", () => {
-		assert.equal(classifyEvent(result({ completed: true, awaitingMerge: true })), "pr-opened");
+		assert.equal(classifyEvent(completedResult({ itemId: "34", awaitingMerge: true })), "pr-opened");
 	});
 
 	it("completed (else) ⇒ shipped", () => {
-		assert.equal(classifyEvent(result({ completed: true })), "shipped");
+		assert.equal(classifyEvent(completedResult({ itemId: "34" })), "shipped");
 	});
 
 	it("completed with bookkeeping warnings ⇒ shipped", () => {
-		assert.equal(classifyEvent(result({ completed: true, bookkeepingWarnings: ["mark-done failed"] })), "shipped");
+		assert.equal(classifyEvent(completedResult({ itemId: "34", bookkeepingWarnings: ["mark-done failed"] })), "shipped");
 	});
 
 	it("not completed + shipwrecked ⇒ shipwrecked", () => {
-		assert.equal(classifyEvent(result({ shipwrecked: true, error: "ship failed (recovery also failed)" })), "shipwrecked");
+		assert.equal(classifyEvent(failedResult({ itemId: "34", error: "ship failed (recovery also failed)", failureClass: "delivery", shipwrecked: true })), "shipwrecked");
 	});
 
 	it("completed + shipwrecked ⇒ shipped (it landed)", () => {
-		assert.equal(classifyEvent(result({ completed: true, shipwrecked: true })), "shipped");
+		assert.equal(classifyEvent(completedResult({ itemId: "34", shipwrecked: true })), "shipped");
 	});
 
 	it("completed + awaitingMerge + shipwrecked ⇒ pr-opened", () => {
-		assert.equal(classifyEvent(result({ completed: true, awaitingMerge: true, shipwrecked: true })), "pr-opened");
+		assert.equal(classifyEvent(completedResult({ itemId: "34", awaitingMerge: true, shipwrecked: true })), "pr-opened");
 	});
 
 	it("generic failure ⇒ failed", () => {
-		assert.equal(classifyEvent(result({ error: "plan failed" })), "failed");
+		assert.equal(classifyEvent(failedResult({ itemId: "34", error: "plan failed" })), "failed");
 	});
 
 	it("blocked Andons still page as failed", () => {
-		assert.equal(classifyEvent(result({ error: "implement blocked: x" })), "failed");
-	});
-
-	it("failure with no error string ⇒ failed", () => {
-		assert.equal(classifyEvent(result({})), "failed");
+		assert.equal(classifyEvent(blockedResult({ itemId: "34", blockedKind: "spec-defect", reason: "x" })), "failed");
 	});
 
 	it("null (skip) for every RECOVERABLE_ERRORS entry", () => {
 		for (const err of RECOVERABLE_ERRORS) {
-			// `parked` is classified before the skip-set; everything else skips.
-			const expected = err === "parked" ? "parked" : null;
-			assert.equal(classifyEvent(result({ error: err })), expected, `error=${err}`);
+			assert.equal(classifyEvent(failedResult({ itemId: "34", error: err })), null, `error=${err}`);
 		}
 	});
 
@@ -76,19 +66,45 @@ describe("classifyEvent", () => {
 	});
 
 	it("null (skip) for a user-abort", () => {
-		assert.equal(classifyEvent(result({ error: "aborted" })), null);
+		assert.equal(classifyEvent(failedResult({ itemId: "34", error: "aborted", failureClass: "aborted" })), null);
 	});
 
 	it("null (skip) for a user-abort even when the cycle routed through shipwreck", () => {
 		// Ctrl-C during the shipwreck step: error is relabelled "aborted" AND
 		// shipwrecked=true. The skip must outrank shipwrecked — an abort is always
 		// attended, and "aborted never pages" is the documented contract.
-		assert.equal(classifyEvent(result({ error: "aborted", shipwrecked: true })), null);
+		assert.equal(classifyEvent(failedResult({ itemId: "34", error: "aborted", failureClass: "aborted", shipwrecked: true })), null);
 	});
 
 	it("fatal pick errors still page (not in the skip-set)", () => {
-		assert.equal(classifyEvent(result({ error: "pick blocked: waiting on X" })), "failed");
-		assert.equal(classifyEvent(result({ error: "pick:unknown-id" })), "failed");
+		assert.equal(classifyEvent(blockedResult({ itemId: "34", reason: "waiting on X" })), "failed");
+		assert.equal(classifyEvent(failedResult({ itemId: "34", error: "pick:unknown-id", failureClass: "selection" })), "failed");
+	});
+});
+
+describe("notifyWireError", () => {
+	it("parked wire error stays parked", () => {
+		assert.equal(notifyWireError(parkedResult({ itemId: "34" })), "parked");
+	});
+
+	it("completed omits error", () => {
+		assert.equal(notifyWireError(completedResult({ itemId: "34" })), undefined);
+	});
+
+	it("failed carries the error string", () => {
+		assert.equal(notifyWireError(failedResult({ itemId: "34", error: "plan failed" })), "plan failed");
+	});
+
+	it("blocked uses the reason when the failing step is unknown", () => {
+		assert.equal(notifyWireError(blockedResult({ itemId: "34", reason: "missing API key" })), "missing API key");
+	});
+
+	it("blocked derives the wire error from the structured step and full reason", () => {
+		assert.equal(notifyWireError(blockedResult({ itemId: "34", reason: "x", blockedStep: "implement", detail: "bounded display only" })), "implement blocked: x");
+		const delimitedReason = "dependency failed — retry after repairing its generated client";
+		assert.equal(notifyWireError(blockedResult({ itemId: "34", reason: delimitedReason, blockedStep: "implement", detail: `implement blocked: ${delimitedReason} — implement: blocked` })), `implement blocked: ${delimitedReason}`);
+		const longReason = `missing capability: ${"x".repeat(240)}`;
+		assert.equal(notifyWireError(blockedResult({ itemId: "34", reason: longReason, blockedStep: "ship", detail: `ship blocked: ${longReason}`.slice(0, 200) })), `ship blocked: ${longReason}`);
 	});
 });
 
@@ -230,7 +246,7 @@ describe("notifyCycle", () => {
 
 	it("skips when url is empty", async () => {
 		const { send, sent } = spySend();
-		const ev = await notifyCycle({ ...baseCfg, url: "" }, result({ completed: true }), "/l", { send });
+		const ev = await notifyCycle({ ...baseCfg, url: "" }, completedResult({ itemId: "34" }), "/l", { send });
 		assert.equal(ev, null);
 		assert.equal(sent.length, 0);
 	});
@@ -238,7 +254,7 @@ describe("notifyCycle", () => {
 	it("threads shipped bookkeeping warnings into structured payload and text", async () => {
 		const { send, sent } = spySend();
 		const warning = "mark-done failed (EACCES); rerun mark-done";
-		const ev = await notifyCycle(baseCfg, result({ completed: true, bookkeepingWarnings: [warning] }), "/l", { send });
+		const ev = await notifyCycle(baseCfg, completedResult({ itemId: "34", bookkeepingWarnings: [warning] }), "/l", { send });
 
 		assert.equal(ev, "shipped");
 		const shipped = sent[0].payload;
@@ -251,7 +267,7 @@ describe("notifyCycle", () => {
 		const send = async () => {
 			throw new Error("transport exploded");
 		};
-		const ev = await notifyCycle(baseCfg, result({ completed: true }), "/l", { send });
+		const ev = await notifyCycle(baseCfg, completedResult({ itemId: "34" }), "/l", { send });
 		assert.equal(ev, "shipped");
 	});
 
@@ -259,7 +275,7 @@ describe("notifyCycle", () => {
 		const { send } = spySend();
 		let rejectLate: (e: Error) => void = () => {};
 		const resolveTitle = () => new Promise<string | undefined>((_, rej) => (rejectLate = rej));
-		const ev = await notifyCycle(baseCfg, result({ completed: true }), "/l", { send, resolveTitle, titleTimeoutMs: 5 });
+		const ev = await notifyCycle(baseCfg, completedResult({ itemId: "34" }), "/l", { send, resolveTitle, titleTimeoutMs: 5 });
 		assert.equal(ev, "shipped");
 		rejectLate(new Error("late tracker failure")); // must be observed, not an unhandled rejection
 		await new Promise((r) => setTimeout(r, 5));
@@ -267,21 +283,21 @@ describe("notifyCycle", () => {
 
 	it("skips when the classified event is not subscribed", async () => {
 		const { send, sent } = spySend();
-		const ev = await notifyCycle({ ...baseCfg, events: ["parked"] }, result({ completed: true }), "/l", { send });
+		const ev = await notifyCycle({ ...baseCfg, events: ["parked"] }, completedResult({ itemId: "34" }), "/l", { send });
 		assert.equal(ev, null);
 		assert.equal(sent.length, 0);
 	});
 
 	it("skips when the event is null (non-actionable error)", async () => {
 		const { send, sent } = spySend();
-		const ev = await notifyCycle(baseCfg, result({ error: "aborted" }), "/l", { send });
+		const ev = await notifyCycle(baseCfg, failedResult({ itemId: "34", error: "aborted", failureClass: "aborted" }), "/l", { send });
 		assert.equal(ev, null);
 		assert.equal(sent.length, 0);
 	});
 
 	it("sends once for a subscribed event with a well-formed payload", async () => {
 		const { send, sent } = spySend();
-		const ev = await notifyCycle(baseCfg, result({ completed: true, cost: 1.23 }), "/repo/.dev/log.jsonl", { send, resolveTitle: async () => "Some title" });
+		const ev = await notifyCycle(baseCfg, completedResult({ itemId: "34", cost: 1.23 }), "/repo/.dev/log.jsonl", { send, resolveTitle: async () => "Some title" });
 		assert.equal(ev, "shipped");
 		assert.equal(sent.length, 1);
 		assert.equal(sent[0].url, baseCfg.url);
@@ -296,14 +312,14 @@ describe("notifyCycle", () => {
 
 	it("carries shipwrecked:true in the payload even for a happy-path event", async () => {
 		const { send, sent } = spySend();
-		await notifyCycle(baseCfg, result({ completed: true, shipwrecked: true }), "/l", { send });
+		await notifyCycle(baseCfg, completedResult({ itemId: "34", shipwrecked: true }), "/l", { send });
 		assert.equal(sent[0].payload.event, "shipped");
 		assert.equal(sent[0].payload.shipwrecked, true);
 	});
 
 	it("tolerates resolveTitle throwing (sends without title)", async () => {
 		const { send, sent } = spySend();
-		const ev = await notifyCycle(baseCfg, result({ error: "plan failed" }), "/l", {
+		const ev = await notifyCycle(baseCfg, failedResult({ itemId: "34", error: "plan failed" }), "/l", {
 			send,
 			resolveTitle: async () => {
 				throw new Error("gh exploded");
@@ -316,7 +332,7 @@ describe("notifyCycle", () => {
 
 	it("empty events list sends nothing", async () => {
 		const { send, sent } = spySend();
-		await notifyCycle({ ...baseCfg, events: [] }, result({ completed: true }), "/l", { send });
+		await notifyCycle({ ...baseCfg, events: [] }, completedResult({ itemId: "34" }), "/l", { send });
 		assert.equal(sent.length, 0);
 	});
 });

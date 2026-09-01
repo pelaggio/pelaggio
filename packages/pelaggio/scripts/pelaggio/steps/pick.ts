@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { WORKTREE_PREFIX } from "../config.js";
 import type { SessionController } from "../confinement/sessions.js";
-import { classifyOutcome } from "../cycle-outcome.js";
+import { classifyFailure, classifyOutcome } from "../cycle-outcome.js";
 import { parsePickItem, parsePickResult, pickDivergedFromPin } from "../pick-parse.js";
 import { ensureMainCheckoutOnBranch } from "../ship/freshness.js";
 import { expandSkill } from "../skills.js";
@@ -31,7 +31,8 @@ export interface PickInput {
 	readonly profile: string;
 }
 /** Exactly the cycle helpers `runPick` calls. */
-export type PickDeps = Pick<CycleHelpers, "roadmap" | "log" | "finish" | "step" | "itemRunIdFor" | "cost" | "addCost" | "setLogLabel" | "listWorktrees" | "resolveWorktree" | "createSessionController" | "isQuickScope"> & {
+type PickDepNames = "roadmap" | "log" | "finishFailed" | "finishBlocked" | "finishParked" | "step" | "itemRunIdFor" | "cost" | "addCost" | "setLogLabel" | "listWorktrees" | "resolveWorktree" | "createSessionController" | "isQuickScope";
+export type PickDeps = Pick<CycleHelpers, PickDepNames> & {
 	/** Run options carry callbacks (`pickMutex`, `workerStatus`, `signal`), so they ride as a Dep. */
 	readonly opts: PipelineOpts;
 };
@@ -47,7 +48,7 @@ export interface PickOutcome {
 
 export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOutcome<PickOutcome>> {
 	const { flags, parkSignal, mainRepo } = ctx;
-	const { opts, roadmap, log, finish, step, itemRunIdFor, cost, addCost, setLogLabel, listWorktrees, resolveWorktree, createSessionController, isQuickScope } = helpers;
+	const { opts, roadmap, log, finishFailed, finishBlocked, finishParked, step, itemRunIdFor, cost, addCost, setLogLabel, listWorktrees, resolveWorktree, createSessionController, isQuickScope } = helpers;
 	let itemId: string | null = ctx.itemId ?? null;
 	let worktree: string | null = ctx.worktree ?? null;
 	let { profile } = ctx;
@@ -63,7 +64,7 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 		if (ws && mutex) ws.step = "waiting";
 		if (mutex) await mutex.acquire();
 		try {
-			if (parkSignal.parked) return { kind: "terminal", result: finish({ itemId: null, completed: false, cost: cost(), error: "parked" }) };
+			if (parkSignal.parked) return { kind: "terminal", result: finishParked({ itemId: null, cost: cost() }) };
 
 			// Worktree-isolated claims branch off the literal `main` ref (git-claim.ts), so a
 			// detached/off-branch mainRepo can't corrupt a *new* claim — but it does break an
@@ -71,12 +72,12 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 			// -1` there (issue #216). --no-worktree mode legitimately leaves mainRepo on the
 			// prior claim's feature branch (or a CI-provided checkout), so it's exempt.
 			if (!opts.dryRun && !opts.noWorktree && !ensureMainCheckoutOnBranch(mainRepo, "main", log)) {
-				return { kind: "terminal", result: finish({ itemId: null, completed: false, cost: cost(), error: "main checkout is not on main and could not be reattached" }) };
+				return { kind: "terminal", result: finishFailed("main checkout is not on main and could not be reattached", "selection", { itemId: null, cost: cost() }) };
 			}
 			const worktreesBefore = new Set(opts.dryRun ? [] : listWorktrees());
 
 			if (!opts.dryRun && itemId && roadmap.isCharterPickRace(itemId)) {
-				return { kind: "terminal", result: finish({ itemId, completed: false, cost: cost(), error: "pick:unknown-id" }) };
+				return { kind: "terminal", result: finishFailed("pick:unknown-id", "selection", { itemId, cost: cost() }) };
 			}
 			log(`/pick ${itemId ?? "next"}`);
 			const pickArgs = itemId ? (opts.noWorktree ? `${itemId} --no-worktree` : itemId) : "next";
@@ -85,14 +86,16 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 			pickAssistantText = pick.assistantText;
 
 			if (!pick.ok) {
-				const err = classifyOutcome(pick) === "blocked" ? `pick blocked: ${pick.text}` : "pick failed";
-				return { kind: "terminal", result: finish({ itemId: null, completed: false, cost: cost(), error: err }) };
+				if (classifyOutcome(pick) === "blocked") {
+					return { kind: "terminal", result: finishBlocked(pick.blockedKind ?? "unclassified", pick.text, { itemId: null, cost: cost(), blockedStep: "pick" }) };
+				}
+				return { kind: "terminal", result: finishFailed("pick failed", classifyFailure({ error: "pick failed", subtype: pick.subtype }), { itemId: null, cost: cost() }) };
 			}
 
 			if (!opts.dryRun) {
 				const reason = parsePickResult(pickAssistantText);
 				if (reason !== "claimed") {
-					return { kind: "terminal", result: finish({ itemId: null, completed: false, cost: cost(), error: `pick:${reason ?? "unknown"}` }) };
+					return { kind: "terminal", result: finishFailed(`pick:${reason ?? "unknown"}`, "selection", { itemId: null, cost: cost() }) };
 				}
 			}
 
@@ -107,14 +110,14 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 				itemId = itemId ?? "DRY";
 			} else if (opts.itemId) {
 				itemId = parsePickItem(pickAssistantText);
-				if (!itemId) return { kind: "terminal", result: finish({ itemId: null, completed: false, cost: cost(), error: "pick:unparsed-marker" }) };
+				if (!itemId) return { kind: "terminal", result: finishFailed("pick:unparsed-marker", "selection", { itemId: null, cost: cost() }) };
 				if (await pickDivergedFromPin(opts.itemId, itemId, (text) => roadmap.parseItemId(text))) {
 					log(`⚠ pick diverted: requested ${opts.itemId} but /pick claimed ${itemId} — refusing (a pinned --item must resolve exactly; the stray claim needs cleanup)`);
-					return { kind: "terminal", result: finish({ itemId, completed: false, cost: cost(), error: "pick:diverted" }) };
+					return { kind: "terminal", result: finishFailed("pick:diverted", "selection", { itemId, cost: cost() }) };
 				}
 			} else {
 				itemId = parsePickItem(pickAssistantText) ?? (await roadmap.parseItemId(pick.text)) ?? (await roadmap.parseItemId(pick.fullText));
-				if (!itemId) return { kind: "terminal", result: finish({ itemId: null, completed: false, cost: cost(), error: "no item ID parsed" }) };
+				if (!itemId) return { kind: "terminal", result: finishFailed("no item ID parsed", "selection", { itemId: null, cost: cost() }) };
 			}
 
 			if (opts.noWorktree) {
@@ -141,10 +144,10 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 							const extendedId = (base.startsWith(WORKTREE_PREFIX) ? base.slice(WORKTREE_PREFIX.length) : base).toUpperCase();
 							log(`expected ${worktree}, using ${nested[0]} for in-flight ${extendedId}`);
 							worktree = nested[0];
-						} else if (nested.length > 1) return { kind: "terminal", result: finish({ itemId, completed: false, cost: cost(), error: `worktree ambiguous: ${nested.join(", ")}` }) };
+						} else if (nested.length > 1) return { kind: "terminal", result: finishFailed(`worktree ambiguous: ${nested.join(", ")}`, "selection", { itemId, cost: cost() }) };
 						else {
 							const summary = all.map((p) => p.split(/[/\\]/).pop()).join(", ");
-							return { kind: "terminal", result: finish({ itemId, completed: false, cost: cost(), error: `worktree missing for ${itemId}: expected ${expected}; git worktree list (${all.length} entries): ${summary}` }) };
+							return { kind: "terminal", result: finishFailed(`worktree missing for ${itemId}: expected ${expected}; git worktree list (${all.length} entries): ${summary}`, "selection", { itemId, cost: cost() }) };
 						}
 					}
 				}
@@ -153,7 +156,7 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 			mutex?.release();
 		}
 	} else if (!opts.dryRun && !existsSync(worktree)) {
-		return { kind: "terminal", result: finish({ itemId, completed: false, cost: cost(), error: "worktree missing" }) };
+		return { kind: "terminal", result: finishFailed("worktree missing", "selection", { itemId, cost: cost() }) };
 	}
 
 	setLogLabel(itemId!);

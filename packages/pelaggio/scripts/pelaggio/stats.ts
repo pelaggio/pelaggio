@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { LOG_PATH } from "./config.js";
+import { decodeCycleOutcome } from "./cycle-outcome.js";
 import { A } from "./tui.js";
-import type { CycleLogEntry, StepLog, TokenUsage } from "./types.js";
+import type { StepLog, TokenUsage } from "./types.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -31,23 +32,26 @@ export interface Stats {
 	 * `totalCycles` with `parked` double-counted inside `failed`).
 	 */
 	failedCycles: number;
-	/** Cycles that ended parked. Disjoint from `completedCycles` and `failedCycles`. */
+	/** Cycles that ended parked. Disjoint from `completedCycles`, `blockedCycles`, and `failedCycles`. */
 	parkedCycles: number;
+	/** Cycles that ended blocked. Disjoint from completed/parked/failed. Not a fifth server RunStatus. */
+	blockedCycles: number;
 	shipwreckedCycles: number;
 	/**
 	 * Parked cycles grouped by closed park class. Records written before park
 	 * classification existed group under `unrecorded` rather than being folded into a
-	 * real class — an honest gap beats a wrong attribution.
+	 * real class — an honest gap beats a wrong attribution. `unknown` is a present
+	 * string not in the runtime allowlist (park members currently pass through).
 	 */
 	parksByClass: Record<string, number>;
 	/**
-	 * Failed (not parked) cycles grouped by cause: the step that failed, or — for a
-	 * pipeline guard that rejected before any step failed (`pick:worktree-exists`,
-	 * `plan needs rethink`, `nothing to ship: …`) — the stable prefix of the cycle error.
-	 * Those guard rejections are a real and separately-actionable share of failures, so
-	 * folding them into one `unattributed` bucket would hide them.
+	 * Failed cycles grouped solely by stored `failureClass` (display keys: members +
+	 * `unrecorded` + `unknown`). Prefix-sliced error causes (`implement`, `pick`) are
+	 * not inferred at read time.
 	 */
 	failuresByCause: Record<string, number>;
+	/** Blocked cycles grouped solely by stored `blockedKind`. */
+	blocksByKind: Record<string, number>;
 	/** Spend attributed to the realized driver of each step (#327 provenance). */
 	costByProvider: Record<string, number>;
 	/** Per-provider flag: true when that provider's cost included an estimate. */
@@ -94,48 +98,12 @@ function cacheHitRatio(t: TokenUsage): number {
 	return denom === 0 ? 0 : t.cacheRead / denom;
 }
 
-/**
- * Label for a failed cycle with no failed step — i.e. a pipeline guard rejected before or
- * between steps. Guard errors are either `prefix:detail` (`pick:worktree-exists`) or a
- * stable leading phrase (`plan needs rethink`). Keying on the part before the first colon
- * keeps variable detail — paths, item ids, receipt names — from fragmenting the grouping
- * into a long tail of one-count entries.
- */
-function failureCause(error: string | null | undefined): string {
-	const text = (error ?? "").trim();
-	if (!text) return "unattributed";
-	const colon = text.indexOf(":");
-	return colon > 0 ? text.slice(0, colon) : text;
-}
-
-/**
- * What actually ended a failed cycle.
- *
- * Two traps make the naive `steps.find(s => !s.ok)` wrong, because the pipeline logs **every
- * attempt** of a retried step rather than only its final one:
- *
- * 1. A step that failed once and then succeeded on retry is not the cause at all — it recovered.
- *    So collapse each step name to its *final* attempt before looking for a failure.
- * 2. When several steps genuinely failed, the one that ended the cycle is the *last*, not the
- *    first. `runPipeline`'s own diagnostic does the same thing (`[...steps].reverse().find`).
- *
- * If no step is still failing at the end, the cycle died on a pipeline guard between steps and
- * the cycle `error` carries the reason.
- */
-function terminalFailureCause(entry: CycleLogEntry): string {
-	const steps = entry.steps ?? [];
-	const finalAttemptOk = new Map<string, boolean>();
-	for (const s of steps) finalAttemptOk.set(s.name, s.ok !== false);
-	const terminal = [...steps].reverse().find((s) => finalAttemptOk.get(s.name) === false);
-	return terminal?.name ?? failureCause(entry.error);
-}
-
-export function reduce(all: CycleLogEntry[]): Stats {
+export function reduce(all: readonly unknown[]): Stats {
 	// Day-budget spend receipts (#398) are not pipeline cycles: drop them before any tally so
 	// `totalCycles`/`completedCycles`/`totalCostUsd`/`recentFailures` stay byte-identical to a
 	// log without them. `sumDaySpendFromLog` reads these rows directly, so `/stats` losing them
 	// costs the day-budget seed nothing.
-	const entries = all.filter((e) => !e.budgetCharge);
+	const entries = all.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null && !Array.isArray(e) && (e as { budgetCharge?: unknown }).budgetCharge !== true);
 	const totalTokens = emptyTokens();
 	const costByStep: Record<string, number> = {};
 	const costEstimatedByStep: Record<string, boolean> = {};
@@ -152,29 +120,38 @@ export function reduce(all: CycleLogEntry[]): Stats {
 	let completed = 0;
 	let failed = 0;
 	let parked = 0;
+	let blocked = 0;
 	let shipwrecked = 0;
 	const parksByClass: Record<string, number> = {};
 	const failuresByCause: Record<string, number> = {};
+	const blocksByKind: Record<string, number> = {};
 	const costByProvider: Record<string, number> = {};
 	const costEstimatedByProvider: Record<string, boolean> = {};
 	const tokensByProvider: Record<string, TokenUsage> = {};
 	const stepsByProvider: Record<string, number> = {};
 	const itemsDelivered: DeliveredItem[] = [];
 
+	const decodedEntries: Array<{ entry: Record<string, unknown>; decoded: NonNullable<ReturnType<typeof decodeCycleOutcome>> }> = [];
 	for (const entry of entries) {
-		totalCost += entry.total_cost ?? 0;
+		const decoded = decodeCycleOutcome(entry);
+		if (!decoded) continue;
+		decodedEntries.push({ entry, decoded });
+	}
+
+	for (const { entry, decoded } of decodedEntries) {
+		totalCost += typeof entry.total_cost === "number" ? entry.total_cost : 0;
 		if (entry.costEstimated) anyCostEstimated = true;
-		// Three-way and mutually exclusive: a parked cycle is checkpointed, not failed.
-		if (entry.completed) {
+		if (decoded.outcome === "completed") {
 			completed++;
-		} else if (entry.parked) {
+		} else if (decoded.outcome === "parked") {
 			parked++;
-			const cls = entry.parkClass ?? "unrecorded";
-			parksByClass[cls] = (parksByClass[cls] ?? 0) + 1;
+			parksByClass[decoded.parkClass] = (parksByClass[decoded.parkClass] ?? 0) + 1;
+		} else if (decoded.outcome === "blocked") {
+			blocked++;
+			blocksByKind[decoded.blockedKind] = (blocksByKind[decoded.blockedKind] ?? 0) + 1;
 		} else {
 			failed++;
-			const cause = terminalFailureCause(entry);
-			failuresByCause[cause] = (failuresByCause[cause] ?? 0) + 1;
+			failuresByCause[decoded.failureClass] = (failuresByCause[decoded.failureClass] ?? 0) + 1;
 		}
 		if (entry.shipwrecked) shipwrecked++;
 
@@ -182,7 +159,8 @@ export function reduce(all: CycleLogEntry[]): Stats {
 		const maxAttemptByStep = new Map<string, number>();
 		let cycleRethinks = 0;
 		const cycleTokens = emptyTokens();
-		for (const s of entry.steps ?? []) {
+		const cycleSteps = (Array.isArray(entry.steps) ? entry.steps : []) as StepLog[];
+		for (const s of cycleSteps) {
 			costByStep[s.name] = (costByStep[s.name] ?? 0) + (s.cost ?? 0);
 			if (s.costEstimated) costEstimatedByStep[s.name] = true;
 
@@ -234,15 +212,15 @@ export function reduce(all: CycleLogEntry[]): Stats {
 			}
 		}
 
-		if (entry.completed && entry.item) {
+		if (decoded.outcome === "completed" && typeof entry.item === "string") {
 			const tokSum = cycleTokens.input + cycleTokens.output + cycleTokens.cacheCreation;
 			itemsDelivered.push({
 				id: entry.item,
-				date: (entry.ts ?? "").slice(0, 10),
-				cost: entry.total_cost ?? 0,
+				date: (typeof entry.ts === "string" ? entry.ts : "").slice(0, 10),
+				cost: typeof entry.total_cost === "number" ? entry.total_cost : 0,
 				tokens: tokSum,
 				rethinks: cycleRethinks,
-				parked: !!entry.parked,
+				parked: false,
 			});
 		}
 	}
@@ -262,33 +240,34 @@ export function reduce(all: CycleLogEntry[]): Stats {
 		cacheHitRatioByStep[name] = cacheHitRatio(tokensByStep[name]);
 	}
 
-	const recentFailures: RecentFailure[] = entries
-		// Parked cycles are excluded for the same reason they are excluded from `failedCycles`:
-		// a park is a resumable checkpoint, not a failure. Listing them here would contradict
-		// the counts directly above it in both the CLI and web dashboards. Park causes are
-		// reported by `parksByClass` instead.
-		.filter((e) => !e.completed && !e.parked)
+	const recentFailures: RecentFailure[] = decodedEntries
+		// Parked and blocked cycles stay out of recentFailures — a park is a resumable
+		// checkpoint and a block is counted in `blocksByKind`, not failed. No recent-blocked list.
+		.filter(({ decoded }) => decoded.outcome === "failed")
 		.slice(-5)
 		.reverse()
-		.map((e) => {
-			const lastStep = e.steps?.[e.steps.length - 1];
+		.map(({ entry, decoded }) => {
+			const steps = (Array.isArray(entry.steps) ? entry.steps : []) as StepLog[];
+			const lastStep = steps[steps.length - 1];
 			const tail = lastStep?.outputTail;
 			return {
-				ts: e.ts,
-				item: e.item,
-				error: e.error,
+				ts: typeof entry.ts === "string" ? entry.ts : "",
+				item: typeof entry.item === "string" ? entry.item : null,
+				error: decoded.outcome === "failed" ? decoded.error : "",
 				...(tail ? { outputTail: tail } : {}),
 			};
 		});
 
 	return {
-		totalCycles: entries.length,
+		totalCycles: decodedEntries.length,
 		completedCycles: completed,
 		failedCycles: failed,
 		parkedCycles: parked,
+		blockedCycles: blocked,
 		shipwreckedCycles: shipwrecked,
 		parksByClass,
 		failuresByCause,
+		blocksByKind,
 		costByProvider,
 		costEstimatedByProvider,
 		tokensByProvider,
@@ -352,7 +331,7 @@ export function renderDashboard(stats: Stats): string {
 	// Cost & tokens
 	lines.push(A.bold("Cost & tokens"));
 	lines.push(
-		`  ${A.dim("Cycles")}       ${String(stats.totalCycles).padEnd(4)}  ${A.green(`completed ${stats.completedCycles}`)}  ${A.red(`failed ${stats.failedCycles}`)}  ${A.yellow(`parked ${stats.parkedCycles}`)}  shipwrecked ${stats.shipwreckedCycles}`,
+		`  ${A.dim("Cycles")}       ${String(stats.totalCycles).padEnd(4)}  ${A.green(`completed ${stats.completedCycles}`)}  ${A.red(`failed ${stats.failedCycles}`)}  ${A.yellow(`parked ${stats.parkedCycles}`)}  ${A.magenta(`blocked ${stats.blockedCycles}`)}  shipwrecked ${stats.shipwreckedCycles}`,
 	);
 	lines.push(`  ${A.dim("Spend")}        ${fmtUsd(stats.totalCostUsd, stats.costEstimated)}${stats.costEstimated ? A.dim("  (~ = includes provider estimates)") : ""}`);
 	lines.push(`  ${A.dim("Tokens")}       in ${fmtNum(stats.totalTokens.input)}  out ${fmtNum(stats.totalTokens.output)}  cache-write ${fmtNum(stats.totalTokens.cacheCreation)}  cache-read ${fmtNum(stats.totalTokens.cacheRead)}`);
@@ -387,25 +366,32 @@ export function renderDashboard(stats: Stats): string {
 		lines.push("");
 	}
 
-	// Outcomes — the fail-closed split. A park is a resumable checkpoint; a failure is not.
+	// Outcomes — the fail-closed split. A park is a resumable checkpoint; a block is a
+	// distinct recorded identity, not a failure. Classification gaps render as unrecorded
+	// (absent) or unknown (present but not in the runtime allowlist).
+	const classNote = (cls: string): string => (cls === "unrecorded" || cls === "unknown" ? A.dim(`  (${cls === "unrecorded" ? "logged before classification" : "stored member not in runtime allowlist"})`) : "");
 	const parkRows = Object.entries(stats.parksByClass).sort(([, a], [, b]) => b - a);
+	const blockRows = Object.entries(stats.blocksByKind).sort(([, a], [, b]) => b - a);
 	const failRows = Object.entries(stats.failuresByCause).sort(([, a], [, b]) => b - a);
-	if (parkRows.length > 0 || failRows.length > 0) {
+	if (parkRows.length > 0 || blockRows.length > 0 || failRows.length > 0) {
 		lines.push(A.bold("Outcomes"));
 		if (parkRows.length > 0) {
 			lines.push(`  ${A.dim("Parked by cause")}`);
 			for (const [cls, count] of parkRows) {
-				const note = cls === "unrecorded" ? A.dim("  (logged before park classification)") : "";
-				lines.push(`    ${A.yellow(cls.padEnd(20))} ${String(count).padStart(3)}${note}`);
+				lines.push(`    ${A.yellow(cls.padEnd(20))} ${String(count).padStart(3)}${classNote(cls)}`);
+			}
+		}
+		if (blockRows.length > 0) {
+			lines.push(`  ${A.dim("Blocked by kind")}`);
+			for (const [kind, count] of blockRows) {
+				lines.push(`    ${A.magenta(kind.padEnd(20))} ${String(count).padStart(3)}${classNote(kind)}`);
 			}
 		}
 		if (failRows.length > 0) {
 			lines.push(`  ${A.dim("Failed by cause")}`);
 			for (const [cause, count] of failRows) {
-				// Guard causes are whole error phrases, so clamp the label to keep the count column
-				// aligned. The full string stays in `recentFailures` below and in the jsonl.
 				const label = cause.length > 28 ? `${cause.slice(0, 27)}…` : cause;
-				lines.push(`    ${A.red(label.padEnd(28))} ${String(count).padStart(3)}`);
+				lines.push(`    ${A.red(label.padEnd(28))} ${String(count).padStart(3)}${classNote(cause)}`);
 			}
 		}
 		lines.push("");
@@ -481,18 +467,18 @@ export function computeStats(opts: { logPath?: string } = {}): Stats {
 	const path = opts.logPath ?? LOG_PATH;
 	if (!existsSync(path)) return reduce([]);
 	const raw = readFileSync(path, "utf-8");
-	const entries: CycleLogEntry[] = raw
+	const entries: unknown[] = raw
 		.split("\n")
 		.map((l) => l.trim())
 		.filter(Boolean)
 		.map((l) => {
 			try {
-				return JSON.parse(l) as CycleLogEntry;
+				return JSON.parse(l) as unknown;
 			} catch {
 				return null;
 			}
 		})
-		.filter((e): e is CycleLogEntry => e !== null && Array.isArray((e as { steps?: StepLog[] }).steps));
+		.filter((e): e is Record<string, unknown> => e !== null && typeof e === "object" && !Array.isArray(e) && Array.isArray((e as { steps?: unknown }).steps));
 	return reduce(entries);
 }
 

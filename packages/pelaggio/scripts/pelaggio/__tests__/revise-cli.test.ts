@@ -137,7 +137,8 @@ function harness(
 		runOrchestrator: async (flags, orchDeps = {}) => {
 			effects.push("orchestrator");
 			orchCalls.push({ flags, deps: { mode: orchDeps.mode } });
-			const result: CycleResult = { itemId: flags.resume ?? null, completed: (over.orchExit ?? 0) === 0, cost: 0 };
+			const result: CycleResult =
+				(over.orchExit ?? 0) === 0 ? { itemId: flags.resume ?? null, cost: 0, outcome: "completed" } : { itemId: flags.resume ?? null, cost: 0, outcome: "failed", failureClass: "unclassified", error: "revise failed" };
 			return { exitCode: over.orchExit ?? 0, results: [result] };
 		},
 		resolveWorktree: (id) => join(repo, `wt-${id}`),

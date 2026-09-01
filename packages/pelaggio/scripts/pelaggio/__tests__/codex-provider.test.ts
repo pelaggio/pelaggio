@@ -139,7 +139,17 @@ describe("buildCodexStepResult", () => {
 		assert.equal(out.result.ok, false);
 		assert.equal(out.result.subtype, "blocked");
 		assert.equal(out.result.text, "missing credentials");
+		assert.equal(out.result.blockedKind, "unclassified");
 		assert.ok(out.events.some((e) => e.type === "blocked" && e.reason === "missing credentials"));
+	});
+
+	it("carries a named blocked kind from the structured sentinel", () => {
+		const out = buildCodexStepResult("implement", [{ type: "turn.started" }, { type: "item.completed", item: { type: "agent_message", text: "Cannot continue.\n\nBLOCKED: capability | missing credentials" } }, { type: "turn.completed" }], {
+			exitCode: 0,
+		});
+		assert.equal(out.result.subtype, "blocked");
+		assert.equal(out.result.blockedKind, "capability");
+		assert.equal(out.result.text, "missing credentials");
 	});
 
 	it("maps refusal-shaped final text to error_refusal", () => {

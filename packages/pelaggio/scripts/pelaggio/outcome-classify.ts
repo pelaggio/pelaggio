@@ -1,6 +1,8 @@
 /** Parse provider/step results into typed shapes — errors, refusals, park signals (L1). Renders no verdict. */
 
-import type { ParkClass, StepResult } from "./types.js";
+import type { BlockedKind, ParkClass, StepResult } from "./types.js";
+
+const NAMED_BLOCKED_KINDS: ReadonlySet<string> = new Set(["spec-defect", "prerequisite", "capability", "environment", "charter-defect"]);
 
 // Anchored refusal openers: a decline announces itself in the first sentence.
 // Matching only at the start of the trimmed final result keeps a review that
@@ -110,14 +112,33 @@ export function classifyParkReason(reason: string | null | undefined, limitType:
  * matching `parseVerdict`. `BLOCKED` stays uppercase/case-sensitive so prose
  * ("the task is blocked") never matches. Returns the reason, or null when not blocked.
  */
-export function parseBlockedReason(text: string): string | null {
+function lastNonBlankLine(text: string): string | null {
 	const lines = text.split("\n");
-	let i = lines.length - 1;
-	while (i >= 0 && lines[i].trim() === "") i--;
-	if (i < 0) return null;
-	const m = lines[i].match(/^\s*\*{0,2}BLOCKED:\*{0,2}\s*(.*\S)?\s*$/);
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i];
+		if (line !== undefined && line.trim() !== "") return line;
+	}
+	return null;
+}
+
+export function parseBlockedSignal(text: string): { kind: BlockedKind; reason: string } | null {
+	const last = lastNonBlankLine(text);
+	if (last === null) return null;
+	const m = last.match(/^\s*\*{0,2}BLOCKED:\*{0,2}\s*(.*)?\s*$/);
 	if (!m) return null;
-	return m[1]?.trim() || "(no reason given)";
+	const remainder = (m[1] ?? "").trim();
+	if (!remainder) return { kind: "unclassified", reason: "(no reason given)" };
+	const pipe = remainder.indexOf("|");
+	if (pipe < 0) return { kind: "unclassified", reason: remainder };
+	const left = remainder.slice(0, pipe).trim();
+	const right = remainder.slice(pipe + 1).trim();
+	if (NAMED_BLOCKED_KINDS.has(left)) return { kind: left as Exclude<BlockedKind, "unclassified">, reason: right || "(no reason given)" };
+	return { kind: "unclassified", reason: remainder };
+}
+
+/** Compatibility projection for callers that only need the reason. */
+export function parseBlockedReason(text: string): string | null {
+	return parseBlockedSignal(text)?.reason ?? null;
 }
 
 // Offer-to-continue phrasings that read as a stall even without a trailing `?`.
@@ -130,11 +151,9 @@ const STALLED_ASK_PHRASING = /\b(want me to|shall i|should i|let me know|would y
  * `stalled_ask` telemetry, so false positives are acceptable.
  */
 export function looksLikeStalledAsk(text: string): boolean {
-	const lines = text.split("\n");
-	let i = lines.length - 1;
-	while (i >= 0 && lines[i].trim() === "") i--;
-	if (i < 0) return false;
-	const last = lines[i].trim();
+	const lastLine = lastNonBlankLine(text);
+	if (lastLine === null) return false;
+	const last = lastLine.trim();
 	return last.endsWith("?") || STALLED_ASK_PHRASING.test(last);
 }
 

@@ -39,6 +39,51 @@ function envelope(type: string, overrides: Record<string, unknown> = {}): Record
 }
 
 describe("flow event writer", () => {
+	it("accepts every complete cycle outcome branch", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++]!, now: () => new Date("2026-07-13T12:00:00.000Z") });
+		const base = { type: "pelaggio.cycle-completed" as const, cycle: 1, item: "672", quick: false, steps: [], total_cost: 1, verdict: null };
+		const inputs = [
+			{ ...base, outcome: "completed" },
+			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: "quota" },
+			{ ...base, outcome: "blocked", blockedKind: "capability", reason: "missing token" },
+			{ ...base, outcome: "failed", failureClass: "provider", error: "sdk failure" },
+		] satisfies FlowEventInput[];
+		const events = inputs.map((input) => writer.append(input));
+		assert.deepEqual(
+			events.map((event) => ("outcome" in event ? event.outcome : undefined)),
+			["completed", "parked", "blocked", "failed"],
+		);
+
+		// @ts-expect-error failed cycle event inputs require their branch diagnostics
+		const incompleteFailed: FlowEventInput = { ...base, outcome: "failed" };
+		void incompleteFailed;
+	});
+
+	it("rejects incomplete or overlapping cycle outcome branches without persisting them", () => {
+		const root = tempRoot();
+		let index = 0;
+		const writer = createEventWriter({ root, idFactory: () => IDS[index++]! });
+		const base = { type: "pelaggio.cycle-completed" as const, cycle: 1, item: "672", quick: false, steps: [], total_cost: 1, verdict: null };
+		const invalid = [
+			{ ...base, outcome: "completed", failureClass: "provider", error: "boom" },
+			{ ...base, outcome: "parked", parkClass: "rate-limit" },
+			{ ...base, outcome: "parked", parkClass: "rate-limit", parkReason: null, blockedKind: "capability", reason: "overlap" },
+			{ ...base, outcome: "blocked", blockedKind: "capability" },
+			{ ...base, outcome: "blocked", blockedKind: "capability", reason: "blocked", failureClass: "provider", error: "overlap" },
+			{ ...base, outcome: "failed", error: "missing class" },
+			{ ...base, outcome: "failed", failureClass: "provider", error: "boom", parkClass: "rate-limit", parkReason: null },
+			{ ...base, outcome: "failed", failureClass: "provider", error: "boom", completed: false },
+		];
+		for (const input of invalid) assert.throws(() => writer.append(input as unknown as FlowEventInput), /Invalid flow event/);
+
+		const event = writer.append({ ...base, outcome: "failed", failureClass: "provider", error: "valid" });
+		assert.equal(event.seq, 1);
+		const persisted = readFileSync(join(root, ".dev", "flow-events", `${writer.streamId}.jsonl`), "utf8");
+		assert.equal(persisted, `${JSON.stringify(event)}\n`);
+	});
+
 	it("owns immutable identities and contiguous writer-local sequence", () => {
 		const root = tempRoot();
 		let index = 0;
@@ -245,6 +290,20 @@ describe("dual-format reader", () => {
 		);
 		assert.equal(diagnostics.counts.sequenceGap, 0, "skipping a receipt must be diagnostically invisible");
 		assert.deepEqual(diagnostics.details, []);
+	});
+
+	it("promotes current union cycle records and retains unknown class members", () => {
+		const root = tempRoot();
+		const cycleLogPath = join(root, ".dev", "pelaggio-log.jsonl");
+		mkdirSync(dirname(cycleLogPath), { recursive: true });
+		const current = { ts: "2026-08-05T00:00:00.000Z", cycle: 1, item: "42", quick: false, steps: [], total_cost: 1.5, verdict: null, outcome: "failed", failureClass: "future-class", error: "boom" };
+		const blocked = { ts: "2026-08-05T00:01:00.000Z", cycle: 2, item: "43", quick: false, steps: [], total_cost: 0.2, verdict: null, outcome: "blocked", blockedKind: "capability", reason: "no key" };
+		writeFileSync(cycleLogPath, `${JSON.stringify(current)}\n${JSON.stringify(blocked)}\n`);
+		const { events, diagnostics } = readEventLog({ root });
+		assert.equal(events.length, 2);
+		assert.equal(diagnostics.counts.malformed, 0);
+		assert.equal("failureClass" in events[0]! && events[0]!.failureClass, "future-class");
+		assert.equal("blockedKind" in events[1]! && events[1]!.blockedKind, "capability");
 	});
 
 	it("preserves additive provenance on normalized legacy cycle records", () => {

@@ -62,18 +62,32 @@ const NON_ACTIONABLE = new Set<string>([...RECOVERABLE_ERRORS, "aborted"]);
  * parked > pr-opened / shipped (completed) > skip (non-actionable) > shipwrecked > failed.
  *
  * A cycle that shipwrecked but recovered classifies as shipped/pr-opened (it did land);
- * the payload still carries `shipwrecked: true`, so no signal is lost. `parked` short-circuits
- * before the `NON_ACTIONABLE` skip even though it lives in that set. The skip outranks
+ * the payload still carries `shipwrecked: true`, so no signal is lost. `parked` is its own
+ * outcome and short-circuits before the failed-branch `NON_ACTIONABLE` skip. The skip outranks
  * `shipwrecked`: an `aborted` error is always a deliberate interactive Ctrl-C (unattended runs
  * have no keyboard), so paging "shipwrecked" for it would contradict the documented
  * "aborted never pages" rule while the user is sitting at the terminal watching.
  */
 export function classifyEvent(result: CycleResult): Exclude<NotifyEvent, "decision"> | null {
-	if (result.error === "parked") return "parked";
-	if (result.completed) return result.awaitingMerge ? "pr-opened" : "shipped";
-	if (result.error && NON_ACTIONABLE.has(result.error)) return null;
+	if (result.outcome === "parked") return "parked";
+	if (result.outcome === "completed") return result.awaitingMerge ? "pr-opened" : "shipped";
+	if (result.outcome === "failed" && NON_ACTIONABLE.has(result.error)) return null;
 	if (result.shipwrecked) return "shipwrecked";
 	return "failed";
+}
+
+/** Derived webhook `error` — keep `completed`/`error` as the established wire projection. */
+export function notifyWireError(result: CycleResult): string | undefined {
+	switch (result.outcome) {
+		case "completed":
+			return undefined;
+		case "parked":
+			return "parked";
+		case "blocked":
+			return result.blockedStep ? `${result.blockedStep} blocked: ${result.reason}` : result.reason;
+		case "failed":
+			return result.error;
+	}
 }
 
 // ── Text summary (pure, ANSI-free) ─────────────────────────────────────
@@ -194,14 +208,15 @@ export async function notifyCycle(cfg: NotifyConfig, result: CycleResult, logPat
 	const send = deps.send ?? sendNotification;
 	const title = await resolveTitleBounded(deps.resolveTitle, result.itemId, deps.titleTimeoutMs ?? TITLE_TIMEOUT_MS);
 
+	const wireError = notifyWireError(result);
 	const base = {
 		event,
 		itemId: result.itemId,
 		...(title ? { title } : {}),
-		completed: result.completed,
+		completed: result.outcome === "completed",
 		cost: result.cost,
 		...(result.costEstimated ? { costEstimated: true } : {}),
-		...(result.error ? { error: result.error } : {}),
+		...(wireError ? { error: wireError } : {}),
 		...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 		...(result.prUrl ? { prUrl: result.prUrl } : {}),
 		shipwrecked: result.shipwrecked ?? false,

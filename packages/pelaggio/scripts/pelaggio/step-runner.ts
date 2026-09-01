@@ -13,6 +13,7 @@ export {
 	blockPlanPolish,
 	blockWorktreeInstall,
 	CLAUDE_CAPABILITIES,
+	classifyClaudeTerminalText,
 	claudeProvider,
 	endMainCheckoutAttribution,
 	isClaudeMaxTurnsError,

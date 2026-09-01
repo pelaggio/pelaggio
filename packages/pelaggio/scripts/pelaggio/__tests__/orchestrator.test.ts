@@ -88,7 +88,7 @@ describe("runOrchestrator — resume mode", () => {
 		assert.equal(calls[0].opts.startFrom, "implement");
 		assert.equal(calls[0].opts.worktree, "/fake/wt-tool-99");
 		assert.equal(results.length, 1);
-		assert.equal(results[0].completed, true);
+		assert.equal(results[0].outcome === "completed", true);
 	});
 
 	it("failure: exitCode 1 when runPipeline returns completed false", async (t) => {
@@ -275,9 +275,9 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 		assert.equal(calls.at(0)?.opts.itemId, "498");
 		assert.equal(calls.at(1)?.opts.itemId, "498");
 		assert.equal(results.length, 2);
-		assert.equal(results.at(0)?.error, "parked");
+		assert.equal(results.at(0)?.outcome, "parked");
 		assert.equal(results.at(0)?.cost, 0.2);
-		assert.equal(results.at(1)?.completed, true);
+		assert.equal(results.at(1)?.outcome === "completed", true);
 		assert.equal(results.at(1)?.cost, 0.5);
 		assert.equal(sent.length, 2);
 		assert.equal(sent.at(0)?.payload.event, "parked");
@@ -347,9 +347,9 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 				delete flags["review-findings"];
 				unlinkSync(findingsPath);
 				Object.assign(parkSignal, { parked: true, resetsAt: baseNow + 60_000, limitType: "5h" });
-				return { itemId: "498", completed: false, cost: 0.2, error: "parked" };
+				return { itemId: "498", cost: 0.2, outcome: "parked", parkClass: "rate-limit", parkReason: null };
 			}
-			return { itemId: "498", completed: true, cost: 0.5 };
+			return { itemId: "498", cost: 0.5, outcome: "completed" };
 		};
 
 		const promise = runOrchestrator(resumeFlags(), {
@@ -387,7 +387,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 				unlinkSync(findingsPath);
 				Object.assign(parkSignal, { parked: true, resetsAt: 0, limitType: "paused" });
 			}
-			return { itemId: opts.itemId ?? null, completed: false, cost: 0.1, error: "parked" };
+			return { itemId: opts.itemId ?? null, cost: 0.1, outcome: "parked", parkClass: "rate-limit", parkReason: null };
 		};
 
 		const promise = runOrchestrator(resumeFlags(), {
@@ -500,7 +500,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 			delete flags["review-findings"];
 			unlinkSync(findingsPath);
 			Object.assign(parkSignal, { parked: true, resetsAt: 1_700_000_060_000, limitType: "5h" });
-			return { itemId: opts.itemId ?? null, completed: false, cost: 0.1, error: "parked" };
+			return { itemId: opts.itemId ?? null, cost: 0.1, outcome: "parked", parkClass: "rate-limit", parkReason: null };
 		};
 
 		const { exitCode } = await runOrchestrator(resumeFlags(), {
@@ -619,7 +619,7 @@ describe("runOrchestrator — operator-revision mode (#498)", () => {
 		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1, "standard resume must not enter the wait/resume loop");
 		assert.equal(results.length, 1);
-		assert.equal(results.at(0)?.error, "parked");
+		assert.equal(results.at(0)?.outcome, "parked");
 	});
 
 	it("CI / no-worktree findings resume stays single-attempt", async (t) => {
@@ -831,7 +831,11 @@ describe("runOrchestrator — sustained transient SDK outage (#128)", () => {
 		const { exitCode, results } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5" }, { runPipeline, notifyConfig: { url: "https://hook.example" }, sendNotification });
 		assert.equal(calls.length, 3, "worker must stop after the 3rd consecutive transient error, never reaching A-4/A-5");
 		assert.equal(exitCode, PARKED_EXIT_CODE);
-		assert.equal(results.at(-1)?.error, "parked", "the tripping cycle is relabeled parked so it flows through the park path");
+		const tripping = results.at(-1);
+		assert.equal(tripping?.outcome, "parked", "the tripping cycle is relabeled parked so it flows through the park path");
+		assert.equal(tripping && "error" in tripping, false, "outage relabel reconstructs a parked branch rather than mutating leftover failure fields");
+		assert.equal(tripping && "failureClass" in tripping, false);
+		assert.equal(tripping?.outcome === "parked" ? tripping.parkClass : undefined, "sdk-outage");
 		assert.equal(sent.length, 1, "the sustained outage must page exactly once");
 		assert.equal(sent[0].payload.event, "parked");
 		assert.equal(sent[0].payload.itemId, "A-3");
@@ -915,7 +919,7 @@ describe("runOrchestrator — cycle disposition", () => {
 		const { runPipeline, calls } = createMockRunPipeline({ byItem: { ...byItem, "A-6": { completed: true, cost: 0 } } });
 		const { results } = await runOrchestrator({ ...baseFlags, item: "A-1,A-2,A-3,A-4,A-5,A-6" }, { runPipeline });
 		assert.equal(calls.length, 5);
-		assert.equal(results.at(-1)?.error, "implement blocked: x");
+		assert.equal(results.at(-1)?.outcome, "blocked");
 		assert.equal(results.at(-1)?.disposition, "halt-campaign");
 	});
 
@@ -939,9 +943,9 @@ describe("runOrchestrator — cycle disposition", () => {
 			calls.push(opts.itemId ?? "");
 			if (opts.itemId === "A-1") {
 				await held;
-				return { itemId: "A-1", completed: true, cost: 0 };
+				return { itemId: "A-1", cost: 0, outcome: "completed" as const };
 			}
-			return { itemId: opts.itemId ?? null, completed: false, cost: 0, error: "implement failed: confinement violation" };
+			return { itemId: opts.itemId ?? null, cost: 0, outcome: "failed" as const, failureClass: "confinement" as const, error: "implement failed: confinement violation" };
 		};
 		const pending = runOrchestrator({ ...baseFlags, parallel: "2", item: "A-1,A-2,A-3" }, { runPipeline });
 		while (calls.length < 2) await new Promise(setImmediate);
@@ -989,8 +993,8 @@ describe("runOrchestrator — park-and-resume", () => {
 		assert.ok(detectCalled >= 1, "detectResumeStep should be called for resume");
 		// Results array holds both the parked cycle and the successful resume.
 		assert.equal(results.length, 2);
-		assert.equal(results[0].error, "parked");
-		assert.equal(results[1].completed, true);
+		assert.equal(results[0].outcome, "parked");
+		assert.equal(results[1].outcome === "completed", true);
 	});
 
 	it("exceeds --max-wait: uses the parked exit code and does not re-invoke runPipeline", async (t) => {
@@ -1147,7 +1151,7 @@ describe("runOrchestrator — auto-resume config", () => {
 		const { results } = await promise;
 
 		assert.equal(calls.length, 3, `expected 3 runPipeline calls (initial park + 2 resume rounds); got ${calls.length}`);
-		assert.equal(results.at(-1)?.completed, true, "final resume should complete");
+		assert.equal(results.at(-1)?.outcome === "completed", true, "final resume should complete");
 	});
 
 	it("config park.max-wait caps the wait when --max-wait flag is unset (exits parked)", async (t) => {
@@ -1190,7 +1194,7 @@ describe("runOrchestrator — auto-resume config", () => {
 		const { results } = await promise;
 
 		assert.equal(calls.length, 2, `expected resume to proceed (CLI cap 5h > 3h wait); got ${calls.length}`);
-		assert.equal(results.at(-1)?.completed, true);
+		assert.equal(results.at(-1)?.outcome === "completed", true);
 	});
 
 	it("multi-window then exceeds max-wait: tears down the status bar before exiting (no leaked scroll region)", async (t) => {
@@ -1805,7 +1809,7 @@ describe("runOrchestrator — revise sweep (issue #76)", () => {
 		);
 		assert.equal(exitCode, PARKED_EXIT_CODE);
 		assert.equal(calls.length, 1, "the park after the revision skips the pick worker pool");
-		assert.equal(results[0].error, "parked");
+		assert.equal(results[0].outcome, "parked");
 		assert.equal(results[0].itemId, "76");
 	});
 });
@@ -2506,7 +2510,7 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 			maxInFlight = Math.max(maxInFlight, inFlight);
 			await new Promise<void>((r) => setTimeout(r, 30));
 			inFlight--;
-			return { itemId: `item-${calls}`, completed: true, cost: 0.1 };
+			return { itemId: `item-${calls}`, cost: 0.1, outcome: "completed" as const };
 		};
 		let probes = 0;
 		const { exitCode } = await runOrchestrator(
@@ -2544,7 +2548,7 @@ describe("runOrchestrator — continuous mode (issue #82)", () => {
 					calls++;
 					await secondProbeEntered;
 					setImmediate(releaseSecondProbe);
-					return { itemId: "A-1", completed: false, cost: 0, error: "implement failed: confinement violation", disposition: "halt-campaign" };
+					return { itemId: "A-1", cost: 0, outcome: "failed", failureClass: "confinement", error: "implement failed: confinement violation", disposition: "halt-campaign" };
 				},
 				queueProbe: async () => {
 					probes++;

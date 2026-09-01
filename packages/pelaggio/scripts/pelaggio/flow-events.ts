@@ -3,8 +3,9 @@ import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, 
 import { isAbsolute, join, resolve } from "node:path";
 import { ulid } from "ulid";
 import { LOG_PATH, logPathFor, REPO } from "./config.js";
+import { CYCLE_OUTCOME_SET } from "./cycle-errors.js";
 import { ensureDevRoot, registerPath } from "./registers.js";
-import type { CycleLogEntry, EventLogDiagnostic, EventLogDiagnosticKind, EventLogDiagnostics, EventWriter, FlowEvent, FlowEventInput, FlowEventProjection, PelaggioEventType, ReadEventLogResult } from "./types.js";
+import type { EventLogDiagnostic, EventLogDiagnosticKind, EventLogDiagnostics, EventWriter, FlowEvent, FlowEventInput, FlowEventProjection, PelaggioEventType, RawCycleLogRecord, ReadEventLogResult } from "./types.js";
 
 export const PELAGGIO_EVENT_TYPES = [
 	"pelaggio.cycle-completed",
@@ -57,17 +58,37 @@ function isCanonicalInstant(value: unknown): value is string {
 	return !Number.isNaN(date.valueOf()) && date.toISOString() === value;
 }
 
-function isCycleFields(value: UnknownRecord): value is UnknownRecord & CycleLogEntry {
-	return (
+function isCurrentCycleOutcome(value: UnknownRecord): boolean {
+	if (value.completed !== undefined) return false;
+	switch (value.outcome) {
+		case "completed":
+			return value.parkClass === undefined && value.parkReason === undefined && value.blockedKind === undefined && value.reason === undefined && value.failureClass === undefined && value.error === undefined;
+		case "parked":
+			return (
+				typeof value.parkClass === "string" && (value.parkReason === null || typeof value.parkReason === "string") && value.blockedKind === undefined && value.reason === undefined && value.failureClass === undefined && value.error === undefined
+			);
+		case "blocked":
+			return typeof value.blockedKind === "string" && typeof value.reason === "string" && value.parkClass === undefined && value.parkReason === undefined && value.failureClass === undefined && value.error === undefined;
+		case "failed":
+			return typeof value.failureClass === "string" && typeof value.error === "string" && value.parkClass === undefined && value.parkReason === undefined && value.blockedKind === undefined && value.reason === undefined;
+		default:
+			return false;
+	}
+}
+
+function isCycleFields(value: UnknownRecord): value is UnknownRecord & RawCycleLogRecord {
+	const envelope =
 		typeof value.cycle === "number" &&
 		Number.isSafeInteger(value.cycle) &&
 		(value.item === null || typeof value.item === "string") &&
 		typeof value.quick === "boolean" &&
 		Array.isArray(value.steps) &&
 		typeof value.total_cost === "number" &&
-		(value.verdict === null || typeof value.verdict === "string") &&
-		typeof value.completed === "boolean" &&
-		(value.error === null || typeof value.error === "string")
+		(value.verdict === null || typeof value.verdict === "string");
+	if (!envelope) return false;
+	return (
+		(typeof value.outcome === "string" && CYCLE_OUTCOME_SET.has(value.outcome) && isCurrentCycleOutcome(value)) ||
+		(value.outcome === undefined && typeof value.completed === "boolean" && (value.error === null || typeof value.error === "string"))
 	);
 }
 
@@ -272,7 +293,7 @@ function digestId(domain: string, value: string): string {
 	return output;
 }
 
-function legacyEvent(record: UnknownRecord & CycleLogEntry, source: string, line: number, bytes: string, seq: number): FlowEvent | undefined {
+function legacyEvent(record: UnknownRecord & RawCycleLogRecord, source: string, line: number, bytes: string, seq: number): FlowEvent | undefined {
 	const key = `${source}\0${line}\0${bytes}`;
 	return decodeFlowEvent({
 		...record,

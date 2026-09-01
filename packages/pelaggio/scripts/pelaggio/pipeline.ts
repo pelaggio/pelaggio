@@ -6,7 +6,7 @@ import { allocateAttempt, attemptRunId } from "./attempt-identity.js";
 import { CONFIG, CONFINEMENT_CONFIG, LOG_PATH, modelForProvider, REPO, ROADMAP_GITHUB, ROADMAP_LINEAR, ROADMAP_SOURCE, resolveDriverCandidates, resolveProviderBin } from "./config.js";
 import { diffForbiddenRootSnapshots, snapshotForbiddenRoots } from "./confinement/roots.js";
 import { captureEvaluatorContext, createSessionController, resolveEligibleSessions, revalidateChangedRoot, type SessionController, type SessionEvaluatorContext } from "./confinement/sessions.js";
-import { canRetryWithinBudget, classifyOutcome } from "./cycle-outcome.js";
+import { canRetryWithinBudget, classifyFailure, classifyOutcome, cycleResultBase } from "./cycle-outcome.js";
 import { readRuntimeVersions, stepIndex, uniqueDriverProvenance } from "./cycle-support.js";
 import { appendDecisions as appendDecisionsDefault, appendReviewEscalation as appendReviewEscalationDefault, lookupReviewEscalation as lookupReviewEscalationDefault } from "./decisions.js";
 import { createDriverAssignmentState, type DriverIdentity, recordArtifactAuthor, resolveStaticAuthor } from "./driver-assignment.js";
@@ -33,7 +33,7 @@ import { runShakedownCode } from "./steps/shakedown-code.js";
 import { runShakedownPlan } from "./steps/shakedown-plan.js";
 import { runShip } from "./steps/ship.js";
 import { A, fmtElapsed } from "./tui.js";
-import type { CycleDisposition, CycleGitBinding, CycleResult, CycleVersionProvenance, ExecutionReceiptDescriptor, Flags, ParkSignal, PipelineOpts, Step, StepLog } from "./types.js";
+import type { BlockedKind, CycleDisposition, CycleGitBinding, CycleResult, CycleResultBase, CycleVersionProvenance, ExecutionReceiptDescriptor, FailureClass, Flags, ParkSignal, PipelineOpts, Step, StepLog } from "./types.js";
 
 // Re-exported for pipeline.test.ts; the implementation moved with the implement step (plan step 9).
 export { archiveReviewFindingsAfterImplement };
@@ -339,11 +339,12 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			// Teardown must not change the cycle outcome.
 		}
 		sessionController = undefined;
-		// Park wins over abort (it's a preserve-work path; abort is discard-work).
-		// Don't relabel successful cycles — SIGINT during the 2s grace after ship
-		// completed shouldn't turn a real success into a phantom abort.
-		if (opts.signal?.aborted && !result.completed && result.error !== "parked") {
-			result = { ...result, error: "aborted" };
+		// Park and completed win over abort (preserve-work / real success). SIGINT during the
+		// 2s grace after ship completed shouldn't turn a real success into a phantom abort.
+		// Reconstruct the failed/aborted branch — spreading a different branch and overwriting
+		// the discriminant would leave failureClass/error on a parked object at runtime.
+		if (opts.signal?.aborted && result.outcome !== "completed" && result.outcome !== "parked") {
+			result = { ...cycleResultBase(result), outcome: "failed", failureClass: "aborted", error: "aborted" };
 		}
 		// Surface the local shipwreck flag on the returned result so the orchestrator can
 		// classify a `shipwrecked` notification (also brings CycleResult into parity with
@@ -353,16 +354,19 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		// prints) and the jsonl (stats/notify) so a subscription-provider run never reads as USD.
 		const costEstimated = steps.some((s) => s.costEstimated);
 		if (costEstimated) result = { ...result, costEstimated: true };
-		// Compose a legible failure one-liner (#268): keep `error` as the classification string, but
-		// attach the last failing step's subtype + bounded output tail so a non-verbose failure explains
-		// itself in the console instead of a bare "parked"/"<step> failed".
-		if (!result.completed && result.error && !result.detail) {
-			const failed = [...steps].reverse().find((s) => !s.ok);
-			const bits = failed ? [failed.subtype, failed.outputTail].filter(Boolean).join(": ") : "";
-			if (bits) result = { ...result, detail: `${result.error} — ${failed?.name}: ${bits}`.slice(0, 200) };
+		const failedStep = [...steps].reverse().find((s) => !s.ok);
+		// Compose a legible failure one-liner (#268): the branch diagnostic plus the last
+		// failing step's subtype + bounded output tail.
+		if (result.outcome !== "completed" && !result.detail) {
+			const diagnostic = result.outcome === "failed" ? result.error : result.outcome === "blocked" ? result.reason : result.parkReason;
+			if (diagnostic) {
+				const bits = failedStep ? [failedStep.subtype, failedStep.outputTail].filter(Boolean).join(": ") : "";
+				const head = result.outcome === "blocked" && failedStep ? `${failedStep.name} blocked: ${result.reason}` : diagnostic;
+				if (bits) result = { ...result, detail: `${head} — ${failedStep?.name}: ${bits}`.slice(0, 200) };
+				else if (result.outcome === "blocked" && failedStep) result = { ...result, detail: head };
+			}
 		}
 		if (!opts.dryRun) {
-			const parked = result.error === "parked";
 			const drivers = uniqueDriverProvenance(steps);
 			const unavailable: string[] = [...provenanceUnavailable];
 			let versions: CycleVersionProvenance = { pelaggio: "unknown", node: process.version, drivers: {} };
@@ -378,6 +382,14 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			} catch {
 				unavailable.push("git");
 			}
+			const persistedOutcome =
+				result.outcome === "completed"
+					? { outcome: "completed" as const }
+					: result.outcome === "parked"
+						? { outcome: "parked" as const, parkClass: result.parkClass, parkReason: result.parkReason }
+						: result.outcome === "blocked"
+							? { outcome: "blocked" as const, blockedKind: result.blockedKind, reason: result.reason }
+							: { outcome: "failed" as const, failureClass: result.failureClass, error: result.error };
 			appendLog({
 				ts: new Date().toISOString(),
 				cycle: opts.cycle,
@@ -387,11 +399,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				total_cost: Number(result.cost.toFixed(4)),
 				...(costEstimated ? { costEstimated: true } : {}),
 				verdict: result.verdict ?? null,
-				completed: result.completed,
-				error: result.error ?? null,
-				parked,
-				parkReason: parked ? parkReasonDetail || parkSignal.limitType || null : null,
-				...(parked ? { parkClass: classifyParkReason(parkReasonDetail, parkSignal.limitType) } : {}),
+				...persistedOutcome,
 				shipwrecked,
 				...(result.bookkeepingWarnings?.length ? { bookkeepingWarnings: result.bookkeepingWarnings } : {}),
 				provenance: {
@@ -415,6 +423,33 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		return result;
 	}
 
+	function finishFailed(error: string, failureClass: FailureClass, extra: Partial<CycleResultBase> = {}): CycleResult {
+		const { itemId: id, cost: c, ...rest } = extra;
+		return finish({ itemId: id !== undefined ? id : itemId, cost: c ?? cost, ...rest, outcome: "failed", failureClass, error });
+	}
+
+	function finishCompleted(extra: Partial<CycleResultBase> = {}): CycleResult {
+		const { itemId: id, cost: c, ...rest } = extra;
+		return finish({ itemId: id !== undefined ? id : itemId, cost: c ?? cost, ...rest, outcome: "completed" });
+	}
+
+	function finishBlocked(blockedKind: BlockedKind, reason: string, extra: Partial<CycleResultBase> & { blockedStep?: Step } = {}): CycleResult {
+		const { itemId: id, cost: c, blockedStep, ...rest } = extra;
+		return finish({ itemId: id !== undefined ? id : itemId, cost: c ?? cost, ...rest, outcome: "blocked", blockedKind, reason, ...(blockedStep ? { blockedStep } : {}) });
+	}
+
+	function finishParked(extra: Partial<CycleResultBase> = {}): CycleResult {
+		const { itemId: id, cost: c, ...rest } = extra;
+		return finish({
+			itemId: id !== undefined ? id : itemId,
+			cost: c ?? cost,
+			...rest,
+			outcome: "parked",
+			parkClass: classifyParkReason(parkReasonDetail, parkSignal.limitType),
+			parkReason: parkReasonDetail || parkSignal.limitType || null,
+		});
+	}
+
 	// ── Resolve item + worktree ──
 
 	let itemId = opts.itemId ?? null;
@@ -433,7 +468,9 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 			opts,
 			roadmap,
 			log,
-			finish,
+			finishFailed,
+			finishBlocked,
+			finishParked,
 			step,
 			itemRunIdFor,
 			cost: () => cost,
@@ -464,15 +501,16 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		if (reason) parkReasonDetail = reason;
 		if (worktree) checkpoint(worktree, reason ? "review-loop park" : "rate-limit park");
 		log(`⏸ parked (${reason ?? parkSignal.limitType})`);
-		return finish({ itemId, completed: false, cost, error: "parked" });
+		return finishParked();
 	}
 
-	function quarantineExit(error: string, extra: Pick<CycleResult, "verdict"> = {}): CycleResult {
+	function quarantineExit(opts: { blockedKind: BlockedKind; reason: string; step: Step } & Pick<CycleResult, "verdict">): CycleResult {
 		const preserved = worktree ? quarantineCheckpoint(worktree, "andon quarantine") : true;
 		const disposition: CycleDisposition = preserved ? "quarantine-and-continue" : "halt-campaign";
-		if (preserved) log(`⊘ quarantined: ${error} — checkpointed, sweep continues`);
+		const display = `${opts.step} blocked: ${opts.reason}`;
+		if (preserved) log(`⊘ quarantined: ${display} — checkpointed, sweep continues`);
 		else log("⚠ quarantine checkpoint failed — halting campaign to preserve WIP + diagnosis");
-		return finish({ ...extra, itemId, completed: false, cost, error, disposition });
+		return finishBlocked(opts.blockedKind, opts.reason, { ...(opts.verdict ? { verdict: opts.verdict } : {}), blockedStep: opts.step, disposition });
 	}
 
 	/**
@@ -518,28 +556,31 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 
 			const outcome = classifyOutcome(result);
 			if (outcome === "error_confinement") {
-				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed: confinement violation` }) };
+				return { kind: "terminal", cycleResult: finishFailed(`${cfg.name} failed: confinement violation`, "confinement") };
 			}
 			if (outcome === "error_rate_limit" || parkSignal.parked) {
-				return { kind: "terminal", cycleResult: parkExit() ?? finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
+				return { kind: "terminal", cycleResult: parkExit() ?? finishFailed(`${cfg.name} failed`, classifyFailure({ error: `${cfg.name} failed`, subtype: result.subtype })) };
 			}
 			if (outcome === "blocked") {
-				return { kind: "terminal", cycleResult: quarantineExit(`${cfg.name} blocked: ${result.text}`) };
+				return { kind: "terminal", cycleResult: quarantineExit({ blockedKind: result.blockedKind ?? "unclassified", reason: result.text, step: cfg.name }) };
 			}
 			if (outcome === "error_refusal") {
-				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: cfg.refusedError }) };
+				return { kind: "terminal", cycleResult: finishFailed(cfg.refusedError, "refusal") };
 			}
 			if (cfg.retryOnEditLoop && outcome === "edit_loop") {
 				const match = result.text.match(/Edit loop detected: (.+?) edited/);
 				lastLoopFile = match?.[1]?.replace(/^.*[/\\]/, "") ?? null;
 				prevMaxTurns = false;
+				if (attempt === maxAttempts) {
+					return { kind: "terminal", cycleResult: finishFailed(`${cfg.name} failed (max retries)`, "unclassified") };
+				}
 				log(`edit loop on ${lastLoopFile ?? "unknown file"} — will retry with fresh approach`);
 				continue;
 			}
 			if (isTransientSdkError(result)) {
 				transientAttempts++;
 				if (transientAttempts >= TRANSIENT_MAX_ATTEMPTS) {
-					return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: "transient sdk error" }) };
+					return { kind: "terminal", cycleResult: finishFailed("transient sdk error", "provider") };
 				}
 				const backoffMs = TRANSIENT_BACKOFF_MS * 2 ** (transientAttempts - 1);
 				log(`transient SDK error in ${cfg.name} (attempt ${transientAttempts}/${TRANSIENT_MAX_ATTEMPTS - 1}) — retrying after ${backoffMs / 1000}s`);
@@ -548,22 +589,22 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 				continue;
 			}
 			if (outcome !== "error_max_turns") {
-				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed` }) };
+				return { kind: "terminal", cycleResult: finishFailed(`${cfg.name} failed`, classifyFailure({ error: `${cfg.name} failed`, subtype: result.subtype })) };
 			}
 			// error_max_turns
 			prevMaxTurns = true;
 			log(`${noun} hit turn limit (attempt ${attempt}/${maxAttempts})`);
 			if (attempt === maxAttempts) {
-				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (max retries)` }) };
+				return { kind: "terminal", cycleResult: finishFailed(`${cfg.name} failed (max retries)`, "turn-limit") };
 			}
 			if (!canRetryWithinBudget({ spent: cost, maxBudget, stepBudget: cfg.stepBudget })) {
-				return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (insufficient budget to retry after max turns)` }) };
+				return { kind: "terminal", cycleResult: finishFailed(`${cfg.name} failed (insufficient budget to retry after max turns)`, "budget") };
 			}
 			// budget OK, more attempts remain — continue.
 		}
 		// Unreachable: the `attempt === maxAttempts` guard returns on the final iteration.
 		// Present so the function is total over StepAttempt.
-		return { kind: "terminal", cycleResult: finish({ itemId, completed: false, cost, error: `${cfg.name} failed (max retries)` }) };
+		return { kind: "terminal", cycleResult: finishFailed(`${cfg.name} failed (max retries)`, "turn-limit") };
 	}
 
 	// ── Plan + Shakedown-plan ──
@@ -632,6 +673,10 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 		log,
 		roadmap,
 		finish,
+		finishFailed,
+		finishBlocked,
+		finishCompleted,
+		finishParked,
 		parkExit,
 		runStepWithRetry,
 		step,
