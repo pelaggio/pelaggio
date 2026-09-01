@@ -105,13 +105,13 @@ interface GoldenInput {
 	omitAttachment?: boolean;
 }
 
-function publishPacket(dest: string, input: GoldenInput): { caseDigest: string } {
+function publishPacket(dest: string, input: GoldenInput, subjectRoot: string): { caseDigest: string } {
 	if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
 	mkdirSync(dest, { recursive: true });
 	const git = input.git;
 	const resultTree = input.caseTree ?? git.resultTree;
 	const bindingTree = input.subjectBindingTree ?? git.resultTree;
-	const { facts: ctxFacts, residuals: ctxResiduals } = contextFacts(process.cwd());
+	const { facts: ctxFacts, residuals: ctxResiduals } = contextFacts(subjectRoot);
 	const att = input.omitAttachment ? undefined : publishAttachment(dest, input.handoff);
 	const subject = rec({
 		id: "subject-751",
@@ -235,7 +235,7 @@ export function composeReconciledChange751(args: ComposeArgs): ComposeResult {
 	const out = args.out;
 	mkdirSync(out, { recursive: true });
 	const goldenDir = join(out, "golden");
-	const { caseDigest } = publishPacket(goldenDir, { git, handoff });
+	const { caseDigest } = publishPacket(goldenDir, { git, handoff }, args.cwd);
 	const goldenVerify = writeProjections(goldenDir, git);
 	if (goldenVerify.caseDisposition !== "ACCEPTED") {
 		const payload = { caseDigest, status: "withheld" as const, reason: "golden Case is not ACCEPTED", verify: goldenVerify };
@@ -281,7 +281,7 @@ export function composeReconciledChange751(args: ComposeArgs): ComposeResult {
 	const mutations = {} as ComposeResult["mutations"];
 	for (const name of MUTATION_NAMES) {
 		const dir = join(out, "mutations", name);
-		publishPacket(dir, mutationSpecs[name]);
+		publishPacket(dir, mutationSpecs[name], args.cwd);
 		const result = writeProjections(dir, git);
 		mutations[name] = { overall: result.overall, caseDisposition: result.caseDisposition };
 	}

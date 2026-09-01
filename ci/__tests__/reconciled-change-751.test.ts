@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { loadBundle } from "../../packages/pelaggio/scripts/pelaggio/delivery/bundle.js";
+import { loadBundle, validateDeliveryRecord } from "../../packages/pelaggio/scripts/pelaggio/delivery/bundle.js";
 import { inspectGitSubject } from "../../packages/pelaggio/scripts/pelaggio/delivery/git-subject.js";
 import { renderDossier, verifyLoadedBundle } from "../../packages/pelaggio/scripts/pelaggio/delivery/verify.js";
 import { registerPath } from "../../packages/pelaggio/scripts/pelaggio/registers.js";
@@ -118,5 +119,22 @@ describe("reconciled-change-751 composer", () => {
 		});
 		assert.equal(code, 1, logs.join("\n"));
 		assert.equal(JSON.parse(logs[0] ?? "{}").overall, "WITHHOLD");
+	});
+
+	it("binds governing context from the selected target repository", () => {
+		const repo = tempGit();
+		const targetContext = "# target repository context\n";
+		writeFileSync(join(repo, "AGENTS.md"), targetContext);
+		const out = mkdtempSync(join(tmpdir(), "pelaggio-751-out-"));
+		composeReconciledChange751({ out, cwd: repo });
+
+		const bundle = loadBundle(join(out, "golden"));
+		const contextRecords = [...bundle.objects.values()]
+			.filter((object) => typeof object.value === "object" && object.value !== null && "kind" in object.value && object.value.kind !== "Case")
+			.map((object) => validateDeliveryRecord(object.value))
+			.filter((record) => record.role === "governing-context");
+		assert.equal(contextRecords.length, 1);
+		const agentsFact = contextRecords[0]?.facts?.find((fact) => fact.key === "AGENTS.md");
+		assert.equal(agentsFact?.value, createHash("sha256").update(targetContext).digest("hex"));
 	});
 });

@@ -144,6 +144,36 @@ describe("verifyLoadedBundle — golden cold packet", () => {
 		assert.match(first, /Overall: WITHHOLD/);
 		assert.doesNotMatch(first, /^# green/m);
 	});
+
+	it("withholds an empty Case even when a Human Decision authorizes it", () => {
+		const { root, deliveryCase } = publishGolden();
+		const emptyCaseDigest = publishObject(root, { ...deliveryCase, admittedRecords: [], obligations: [] });
+		const humanDigest = publishObject(root, rec({ kind: "Decision", id: "human-empty", role: "human-authorization", caseDigest: emptyCaseDigest, authority: "operator" }));
+		writeRoots(root, { schemaVersion: 1, case: emptyCaseDigest, humanDecision: humanDigest });
+		const result = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
+		assert.equal(result.authorization, "authorized");
+		assert.equal(result.caseDisposition, "WITHHOLD");
+		assert.equal(result.overall, "WITHHOLD");
+		assert.equal(result.obligations.filter((row) => row.state === "open").length, 7);
+	});
+
+	it("withholds under-declared and vacuous required obligation groups", () => {
+		const { root, deliveryCase } = publishGolden();
+		const underDeclaredDigest = publishObject(root, { ...deliveryCase, obligations: deliveryCase.obligations.slice(0, 1) });
+		writeRoots(root, { schemaVersion: 1, case: underDeclaredDigest });
+		const underDeclared = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
+		assert.equal(underDeclared.caseDisposition, "WITHHOLD");
+		assert.ok(underDeclared.reasons.some((reason) => reason.detail.includes("required obligation group scope is missing")));
+
+		const vacuousDigest = publishObject(root, {
+			...deliveryCase,
+			obligations: deliveryCase.obligations.map((obligation) => ({ ...obligation, recordDigests: [], attachmentDigests: [] })),
+		});
+		writeRoots(root, { schemaVersion: 1, case: vacuousDigest });
+		const vacuous = verifyLoadedBundle(loadBundle(root), git(), INSPECT);
+		assert.equal(vacuous.caseDisposition, "WITHHOLD");
+		assert.ok(vacuous.obligations.every((row) => row.state === "open"));
+	});
 });
 
 describe("verifyLoadedBundle — mutations", () => {

@@ -17,6 +17,7 @@ The screen reports four independent lines: overall, Case, authorization, and eff
 ## Trust limits
 
 - Objects are content-addressed (`sha256(domain || 0x00 || canonical-bytes)`). Unknown schema versions and unknown fields fail closed.
+- A Case must close non-empty `intent`, `subject-result-tree`, `subject-config-binding`, `scope`, `governing-context`, `acceptance`, and `review-findings` obligations with admitted records of the matching role. Missing, empty, unadmitted, or role-mismatched evidence withholds the Case.
 - `dossier.md` and stored `verify.json` / `verify.txt` are regenerated projections, never evidence. A hand-edited green dossier is discarded.
 - Unattached extra objects may produce a diagnostic; they cannot strengthen disposition.
 - Identities are `local` / `shadow` / `harness`. No signature, PKI, or authentication claim is made.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -161,8 +161,28 @@ describe("publish + load integrity", () => {
 		const caseDigest = publishObject(root, c);
 		writeRoots(root, { schemaVersion: 1, case: caseDigest });
 		const loaded = loadBundle(root);
-		assert.equal(loaded.attachments.get(att)?.bytes, "handoff-bytes\n");
+		assert.deepEqual(loaded.attachments.get(att)?.bytes, Buffer.from("handoff-bytes\n"));
 		assert.deepEqual(loaded.unattachedObjectDigests, []);
+	});
+
+	it("preserves arbitrary attachment bytes through digest, publication, and load", () => {
+		const root = tempRoot();
+		const bytes = Uint8Array.from([0x00, 0xff, 0xc3, 0x28, 0x80]);
+		const att = publishAttachment(root, bytes);
+		const recDigest = publishObject(root, record({ role: "authorized-intent", attachments: [{ digest: att, role: "handoff" }] }));
+		const caseDigest = publishObject(root, {
+			schemaVersion: 1,
+			kind: "Case",
+			id: "case-binary",
+			issuedAt: ISSUED,
+			issuer: issuer(),
+			subject: subject(),
+			admittedRecords: [recDigest],
+			obligations: [{ id: "intent", group: "intent", recordDigests: [recDigest], attachmentDigests: [att] }],
+			residuals: [],
+		});
+		writeRoots(root, { schemaVersion: 1, case: caseDigest });
+		assert.deepEqual([...(loadBundle(root).attachments.get(att)?.bytes ?? [])], [...bytes]);
 	});
 
 	it("reports extra unreachable objects without treating them as roots", () => {
@@ -195,5 +215,18 @@ describe("publish + load integrity", () => {
 		symlinkSync(join(outside, "x"), join(root, "objects", "sha256", DIGEST));
 		writeRoots(root, { schemaVersion: 1, case: DIGEST });
 		assert.throws(() => loadBundle(root), /symlink|missing/);
+	});
+
+	it("refuses symlinked publication ancestors before writing outside the bundle", () => {
+		for (const ancestor of ["objects", join("objects", "sha256"), "attachments", join("attachments", "sha256")]) {
+			const root = tempRoot();
+			const outside = tempRoot();
+			const parent = join(root, ancestor, "..");
+			mkdirSync(parent, { recursive: true });
+			symlinkSync(outside, join(root, ancestor));
+			const publish = ancestor.startsWith("objects") ? () => publishObject(root, record()) : () => publishAttachment(root, Uint8Array.from([0xff]));
+			assert.throws(publish, (e: unknown) => e instanceof DeliveryBundleError && e.code === "containment");
+			assert.deepEqual(readdirSync(outside), []);
+		}
 	});
 });

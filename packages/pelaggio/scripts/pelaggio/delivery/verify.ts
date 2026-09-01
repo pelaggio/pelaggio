@@ -4,9 +4,30 @@
  * verify.json as evidence, never trusts filenames, unattached objects, or issuer prose.
  */
 import { DeliveryBundleError, type LoadedBundle, requireAttachment, requireObject, validateDeliveryCase, validateDeliveryRecord } from "./bundle.js";
-import type { DeliveryAuthorizationState, DeliveryCase, DeliveryDisposition, DeliveryEffectState, DeliveryLocalizedReason, DeliveryObligationRow, DeliveryRecord, DeliverySubject, DeliveryVerifyResult } from "./types.js";
+import type {
+	DeliveryAuthorizationState,
+	DeliveryCase,
+	DeliveryDisposition,
+	DeliveryEffectState,
+	DeliveryLocalizedReason,
+	DeliveryObligationGroup,
+	DeliveryObligationRow,
+	DeliveryRecord,
+	DeliveryRecordRole,
+	DeliverySubject,
+	DeliveryVerifyResult,
+} from "./types.js";
 
 const HUMAN_AUTHORITIES = new Set(["operator", "human-operator"]);
+const REQUIRED_OBLIGATION_ROLES = new Map<DeliveryObligationGroup, DeliveryRecordRole>([
+	["intent", "authorized-intent"],
+	["subject-result-tree", "subject"],
+	["subject-config-binding", "acceptance-claim"],
+	["scope", "scope"],
+	["governing-context", "governing-context"],
+	["acceptance", "acceptance-claim"],
+	["review-findings", "review"],
+]);
 
 export function renderDossier(result: DeliveryVerifyResult): string {
 	const lines: string[] = [
@@ -163,19 +184,37 @@ export function verifyLoadedBundle(bundle: LoadedBundle, git: DeliverySubject, i
 		}
 	}
 
+	for (const [group] of REQUIRED_OBLIGATION_ROLES) {
+		if (deliveryCase.obligations.some((obligation) => obligation.group === group)) continue;
+		failCase("WITHHOLD", {
+			code: "obligation-evidence-missing",
+			group,
+			disposition: "WITHHOLD",
+			detail: `required obligation group ${group} is missing`,
+		});
+		obligationRows.push({ id: `required:${group}`, group, state: "open", detail: "required group is missing" });
+	}
+
 	for (const obligation of deliveryCase.obligations) {
 		const missing: string[] = [];
+		if (obligation.recordDigests.length === 0 && obligation.attachmentDigests.length === 0) missing.push("evidence:none");
+		if (obligation.group === "intent" && obligation.attachmentDigests.length === 0) missing.push("attachment:required-handoff");
+		const referencedAttachments = new Set<string>();
 		for (const digest of obligation.recordDigests) {
-			if (!bundle.objects.has(digest)) missing.push(`record:${digest}`);
-			else {
-				try {
-					validateDeliveryRecord(requireObject(bundle, digest).value);
-				} catch (e) {
-					missing.push(`record:${digest}:${e instanceof Error ? e.message : "invalid"}`);
-				}
+			const record = admitted.get(digest);
+			if (!record) {
+				missing.push(`record:${digest}:not-admitted`);
+				continue;
 			}
+			const requiredRole = REQUIRED_OBLIGATION_ROLES.get(obligation.group);
+			if (requiredRole && record.role !== requiredRole) missing.push(`record:${digest}:role-${record.role}-not-${requiredRole}`);
+			if (obligation.group === "subject-config-binding" && !record.subjectBinding?.configuration) {
+				missing.push(`record:${digest}:configuration-missing`);
+			}
+			for (const attachment of record.attachments ?? []) referencedAttachments.add(attachment.digest);
 		}
 		for (const digest of obligation.attachmentDigests) {
+			if (!referencedAttachments.has(digest)) missing.push(`attachment:${digest}:not-referenced-by-obligation-record`);
 			try {
 				requireAttachment(bundle, digest);
 			} catch (e) {

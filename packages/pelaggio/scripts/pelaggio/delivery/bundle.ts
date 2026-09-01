@@ -155,11 +155,32 @@ function assertNotSymlink(path: string): void {
 	if (st.isSymbolicLink()) throw new DeliveryBundleError("containment", `symlink refused: ${path}`);
 }
 
-function publishBytes(path: string, bytes: string, opts: { overwrite?: boolean } = {}): void {
-	assertNotSymlink(path);
+function assertPublishTarget(root: string, target: string): void {
+	assertContained(root, target);
+	const rootResolved = resolve(root);
+	if (!existsSync(rootResolved)) throw new DeliveryBundleError("containment", `bundle root does not exist: ${rootResolved}`);
+	assertNotSymlink(rootResolved);
+	if (!lstatSync(rootResolved).isDirectory()) throw new DeliveryBundleError("containment", `bundle root is not a directory: ${rootResolved}`);
+	const rootReal = realpathSync(rootResolved);
+	const parentRelative = relative(rootResolved, dirname(resolve(target)));
+	let ancestor = rootResolved;
+	for (const segment of parentRelative.split(sep).filter(Boolean)) {
+		ancestor = join(ancestor, segment);
+		if (!existsSync(ancestor)) break;
+		assertNotSymlink(ancestor);
+		if (!lstatSync(ancestor).isDirectory()) throw new DeliveryBundleError("containment", `publish ancestor is not a directory: ${ancestor}`);
+		assertContained(rootReal, realpathSync(ancestor));
+	}
+	assertNotSymlink(target);
+	if (existsSync(target)) assertContained(rootReal, realpathSync(target));
+}
+
+function publishBytes(root: string, path: string, bytes: string | Uint8Array, opts: { overwrite?: boolean } = {}): void {
+	assertPublishTarget(root, path);
 	if (existsSync(path)) {
-		const existing = readFileSync(path, "utf8");
-		if (existing === bytes) return;
+		const existing = readFileSync(path);
+		const expected = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : Buffer.from(bytes);
+		if (existing.equals(expected)) return;
 		if (!opts.overwrite) throw new DeliveryBundleError("collision", `object already exists with different bytes: ${path}`);
 	}
 	mkdirSync(dirname(path), { recursive: true });
@@ -170,26 +191,21 @@ export function publishObject(root: string, value: unknown): string {
 	const bytes = canonicalJson(value);
 	const digest = digestObjectBytes(bytes);
 	const path = objectPath(root, digest);
-	assertContained(root, path);
-	publishBytes(path, bytes);
+	publishBytes(root, path, bytes);
 	return digest;
 }
 
 export function publishAttachment(root: string, bytes: string | Uint8Array): string {
-	const body = typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("utf8");
-	const digest = digestAttachmentBytes(body);
+	const digest = digestAttachmentBytes(bytes);
 	const path = attachmentPath(root, digest);
-	assertContained(root, path);
-	publishBytes(path, body);
+	publishBytes(root, path, bytes);
 	return digest;
 }
 
 export function writeRoots(root: string, roots: DeliveryRoots): void {
 	const valid = validateDeliveryRoots(roots);
 	const path = rootsPath(root);
-	assertContained(root, path);
-	assertNotSymlink(path);
-	publishBytes(path, canonicalJson(valid), { overwrite: true });
+	publishBytes(root, path, canonicalJson(valid), { overwrite: true });
 }
 
 export function validateDeliveryIssuer(value: unknown, label = "issuer"): DeliveryIssuer {
@@ -365,11 +381,11 @@ export interface LoadedBundle {
 	root: string;
 	roots: DeliveryRoots;
 	objects: Map<string, LoadedObject>;
-	attachments: Map<string, { digest: string; bytes: string }>;
+	attachments: Map<string, { digest: string; bytes: Uint8Array }>;
 	unattachedObjectDigests: string[];
 }
 
-function readContainedFile(root: string, path: string): string {
+function readContainedFile(root: string, path: string): Buffer {
 	assertContained(root, path);
 	assertNotSymlink(path);
 	if (existsSync(path)) {
@@ -381,7 +397,7 @@ function readContainedFile(root: string, path: string): string {
 		}
 	}
 	if (!existsSync(path)) throw new DeliveryBundleError("missing", `missing ${relative(root, path)}`);
-	return readFileSync(path, "utf8");
+	return readFileSync(path);
 }
 
 function listDigestFiles(dir: string): string[] {
@@ -391,7 +407,7 @@ function listDigestFiles(dir: string): string[] {
 }
 
 export function loadBundle(root: string): LoadedBundle {
-	const rootsBytes = readContainedFile(root, rootsPath(root));
+	const rootsBytes = readContainedFile(root, rootsPath(root)).toString("utf8");
 	const roots = validateDeliveryRoots(JSON.parse(rootsBytes));
 	if (canonicalJson(roots) !== rootsBytes) {
 		// roots must be canonical; a pretty-printed file is still parseable but is not the identity.
@@ -400,13 +416,13 @@ export function loadBundle(root: string): LoadedBundle {
 	const objectDir = resolve(root, OBJECTS_DIR);
 	for (const digest of listDigestFiles(objectDir)) {
 		const path = objectPath(root, digest);
-		const bytes = readContainedFile(root, path);
+		const bytes = readContainedFile(root, path).toString("utf8");
 		const value = JSON.parse(bytes) as unknown;
 		if (digestObjectBytes(bytes) !== digest) throw new DeliveryBundleError("tampered", `object ${digest} does not rehash to its name`);
 		if (canonicalJson(value) !== bytes) throw new DeliveryBundleError("tampered", `object ${digest} bytes are not canonical`);
 		objects.set(digest, { digest, bytes, value });
 	}
-	const attachments = new Map<string, { digest: string; bytes: string }>();
+	const attachments = new Map<string, { digest: string; bytes: Uint8Array }>();
 	const attachmentDir = resolve(root, ATTACHMENTS_DIR);
 	for (const digest of listDigestFiles(attachmentDir)) {
 		const path = attachmentPath(root, digest);
@@ -448,7 +464,7 @@ export function requireObject(bundle: LoadedBundle, digest: string): LoadedObjec
 	return obj;
 }
 
-export function requireAttachment(bundle: LoadedBundle, digest: string): { digest: string; bytes: string } {
+export function requireAttachment(bundle: LoadedBundle, digest: string): { digest: string; bytes: Uint8Array } {
 	const att = bundle.attachments.get(digest);
 	if (!att) throw new DeliveryBundleError("missing", `required attachment ${digest} is missing`);
 	return att;
