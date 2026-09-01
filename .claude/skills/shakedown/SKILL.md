@@ -10,7 +10,16 @@ allowed-tools: Read Glob Grep Edit Write Bash(git:*) Bash(ls:*) Bash(pnpm:*) Bas
 
 # /shakedown — Review and Fix
 
-Stress-test current work against the rubric. Surface every issue, fix what's fixable, defer what's out of scope. Applies to plans *or* code — detect the target, dispatch, do the work.
+Stress-test current work against the rubric. Surface every issue as one class finding plus a sweep: a confirmed finding names the defect class and sweeps that class's surface (N instances of one class are one class finding, not N patch requests). Fix what's fixable, defer what's out of scope. Applies to plans *or* code — detect the target, dispatch, do the work.
+
+When a confirmed finding can be classified, note optional `closure` as exactly one of:
+
+- `patch` — a localized fix retires the finding and should converge.
+- `construction` — the finding is one instance of a class with a completeness surface; retirement requires a §8.2 construction move (chokepoint, extract-and-require, or default-deny), because an instance patch predicts recurrence.
+- `authority` — the guarantee is not this item's to make; closure is chartering/re-chartering through the authority path established by #745.
+- `policy` — the finding trades against a stated design constraint; closure requires a routed decision.
+
+Do not put closure modes in taxonomy `class` / `classHint`. Taxonomy class remains the safety/judgment floor (#293/#294); closure is a second, optional axis. This does not change the APPROVE / REVISE / RETHINK protocol.
 
 ## Context
 

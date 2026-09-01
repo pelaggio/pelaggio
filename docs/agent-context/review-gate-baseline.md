@@ -84,6 +84,22 @@ shapes, so adjudication is not blocked by the label. The remaining vocabulary ga
 the record nor the graph can express *which* reviewers split or *over what*, so the rationale reaches
 a human only as prose in the gate comment.
 
+## Closure-mode distribution (2026-09-01)
+
+Tied to the same frozen corpus `82:e7615e16408b`. The pre-instrument corpus carries no
+`closure` field on recurrence observations, so all four observed counts are zero:
+
+| mode | classified confirmed-survivor observations |
+|---|---|
+| patch | 0 |
+| construction | 0 |
+| authority | 0 |
+| policy | 0 |
+
+Absence is compatibility state, not a fifth classification. Do not retrospectively infer
+modes from historical prose. This is the honest pre-change baseline for A-1/A-2 rather
+than a fabricated classification of the frozen rolls.
+
 ## Known gap: wall-clock is not instrumented
 
 This document calls wall-clock the scarce resource and then does not measure it. That matters most

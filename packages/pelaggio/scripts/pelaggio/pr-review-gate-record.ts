@@ -2,7 +2,7 @@ import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { writeAtomically } from "./record-store.js";
 import { type RegisterName, registerPath } from "./registers.js";
-import type { ReviewExhaustionReason } from "./review/findings.js";
+import { REVIEW_FINDING_CLOSURES, type ReviewExhaustionReason, type ReviewFindingClosure } from "./review/findings.js";
 import { isWellFormedClassId } from "./review/taxonomy.js";
 import type { PrReviewAgreement } from "./types.js";
 
@@ -18,6 +18,7 @@ export interface PrReviewRecurrenceFinding {
 	fingerprintDigest: string;
 	path?: string;
 	findingClass: string;
+	closure?: ReviewFindingClosure;
 }
 
 export interface PrReviewGateRecordV1 {
@@ -121,7 +122,7 @@ const FLEET_V2_KEYS = [
 ] as const;
 const OPERATOR_V2_KEYS = ["schemaVersion", "producer", "agreement", "prNumber", "itemId", "headSha", "gate", "runner", "reviewedAt", "adjudicator", "reviewedSourceSha", "interdiffDigest", "dispositions"] as const;
 const DISPOSITION_ENTRY_KEYS = ["disposition", "rationale"] as const;
-const RECURRENCE_FINDING_KEYS = ["fingerprintDigest", "path", "findingClass"] as const;
+const RECURRENCE_FINDING_KEYS = ["fingerprintDigest", "path", "findingClass", "closure"] as const;
 const RECURRENCE_FINDINGS_MAX = 64;
 
 export function gateRecordsDir(mainRepo: string): string {
@@ -297,12 +298,17 @@ function requireOptionalRecurrenceFindings(value: unknown): PrReviewRecurrenceFi
 		if (seen.has(entry.fingerprintDigest)) fail("fingerprintDigest");
 		seen.add(entry.fingerprintDigest);
 		if (typeof entry.findingClass !== "string" || !isWellFormedClassId(entry.findingClass)) fail("findingClass");
+		if (entry.closure !== undefined && (typeof entry.closure !== "string" || !(REVIEW_FINDING_CLOSURES as readonly string[]).includes(entry.closure))) fail("closure");
+		const observation: PrReviewRecurrenceFinding = {
+			fingerprintDigest: entry.fingerprintDigest,
+			findingClass: entry.findingClass,
+		};
 		if (entry.path !== undefined) {
 			if (typeof entry.path !== "string" || !isCanonicalStoredPath(entry.path)) fail("path");
-			observations.push({ fingerprintDigest: entry.fingerprintDigest, path: entry.path, findingClass: entry.findingClass });
-		} else {
-			observations.push({ fingerprintDigest: entry.fingerprintDigest, findingClass: entry.findingClass });
+			observation.path = entry.path;
 		}
+		if (entry.closure !== undefined) observation.closure = entry.closure as ReviewFindingClosure;
+		observations.push(observation);
 	}
 	return observations;
 }

@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { REVIEW_FINDING_CLOSURES, type ReviewFindingClosure } from "../packages/pelaggio/scripts/pelaggio/review/findings.js";
 
 export interface GateRecord {
 	prNumber: number;
@@ -29,6 +30,9 @@ export interface GateRecord {
 	costEstimated?: boolean;
 	turns?: number;
 	reviewedAt?: string;
+	schemaVersion?: number;
+	producer?: string;
+	recurrenceFindings?: readonly { closure?: string }[];
 }
 
 export function repoRoot(): string {
@@ -114,6 +118,8 @@ export interface Baseline {
 	/** Blocks whose breaker was `invalid-pass` while the record was structurally complete (ok=true):
 	 *  the #525/#593 mislabel — a genuine verdict SPLIT riding the invalid channel. */
 	mislabelledSplits: number;
+	/** Classified confirmed-survivor observations only. Absence is not a fifth mode. */
+	closureModes: Record<ReviewFindingClosure, number>;
 }
 
 export function summarize(records: readonly GateRecord[]): Baseline {
@@ -127,6 +133,18 @@ export function summarize(records: readonly GateRecord[]): Baseline {
 		agreements[key] = (agreements[key] ?? 0) + 1;
 	}
 	const div = (n: number, d: number): number => (d === 0 ? 0 : Number((n / d).toFixed(2)));
+	const closureModes = Object.fromEntries(REVIEW_FINDING_CLOSURES.map((mode) => [mode, 0])) as Record<ReviewFindingClosure, number>;
+	for (const r of records) {
+		if (r.schemaVersion !== 2 || r.producer !== "fleet") continue;
+		const observations = r.recurrenceFindings;
+		if (!Array.isArray(observations)) continue;
+		for (const observation of observations) {
+			if (!observation || typeof observation !== "object") continue;
+			const mode = observation.closure;
+			if (typeof mode !== "string" || !(REVIEW_FINDING_CLOSURES as readonly string[]).includes(mode)) continue;
+			closureModes[mode as ReviewFindingClosure] += 1;
+		}
+	}
 	return {
 		prs: rollups.length,
 		rolls: records.length,
@@ -143,7 +161,25 @@ export function summarize(records: readonly GateRecord[]): Baseline {
 		),
 		agreements,
 		mislabelledSplits: records.filter((r) => r.ok && r.breakerReason === "invalid-pass" && r.agreement === "disagreement").length,
+		closureModes,
 	};
+}
+
+/** Stable CLI table rows. Existing rows stay in order; the closure row is appended. */
+export function formatBaselineRows(s: Baseline): string {
+	return [
+		`  PRs gated                ${s.prs}`,
+		`  rolls                    ${s.rolls}   (${s.rollsPerPr} per PR)`,
+		`  single-roll / repeat     ${s.singleRollPrs} / ${s.repeatRollPrs}`,
+		`  reached a pass           ${s.reachedPass} of ${s.prs}`,
+		`  cost                     $${s.totalCost}   ($${s.costPerRoll}/roll, $${s.costPerPassingPr}/passing PR)`,
+		`  survivors per block      ${s.survivorsPerBlock}`,
+		`  agreement               ${Object.entries(s.agreements)
+			.map(([k, v]) => ` ${k}=${v}`)
+			.join("")}`,
+		`  mislabelled splits       ${s.mislabelledSplits}  (ok=true + disagreement stamped invalid-pass)`,
+		`  closure modes            patch=${s.closureModes.patch} construction=${s.closureModes.construction} authority=${s.closureModes.authority} policy=${s.closureModes.policy}   (classified confirmed-survivor observations)`,
+	].join("\n");
 }
 
 /** Stable fingerprint of the exact corpus a number was computed from. A baseline that cannot name
@@ -170,18 +206,7 @@ function main(): void {
 	const span = `${records[0].reviewedAt?.slice(0, 10)} → ${records[records.length - 1].reviewedAt?.slice(0, 10)}`;
 	const digest = corpusDigest(records);
 	process.stdout.write(`\nFleet gate baseline  (${span})\n  corpus ${digest}${until ? `  --until ${until}` : "  (live)"}\n${"─".repeat(72)}\n`);
-	process.stdout.write(`  PRs gated                ${s.prs}\n`);
-	process.stdout.write(`  rolls                    ${s.rolls}   (${s.rollsPerPr} per PR)\n`);
-	process.stdout.write(`  single-roll / repeat     ${s.singleRollPrs} / ${s.repeatRollPrs}\n`);
-	process.stdout.write(`  reached a pass           ${s.reachedPass} of ${s.prs}\n`);
-	process.stdout.write(`  cost                     $${s.totalCost}   ($${s.costPerRoll}/roll, $${s.costPerPassingPr}/passing PR)\n`);
-	process.stdout.write(`  survivors per block      ${s.survivorsPerBlock}\n`);
-	process.stdout.write(
-		`  agreement               ${Object.entries(s.agreements)
-			.map(([k, v]) => ` ${k}=${v}`)
-			.join("")}\n`,
-	);
-	process.stdout.write(`  mislabelled splits       ${s.mislabelledSplits}  (ok=true + disagreement stamped invalid-pass)\n`);
+	process.stdout.write(`${formatBaselineRows(s)}\n`);
 	process.stdout.write(`\n  per PR (by cost)\n  ${"─".repeat(68)}\n`);
 	process.stdout.write(`  ${"PR".padEnd(6)}${"item".padEnd(7)}${"rolls".padEnd(7)}${"heads".padEnd(7)}${"cost".padEnd(10)}${"final".padEnd(8)}surv\n`);
 	for (const r of rollupByPr(records)) {

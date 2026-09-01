@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { SCHEMA_EXAMPLE_FINDINGS } from "../review/findings.js";
 import type { RoadmapSource } from "../roadmap/types.js";
 import { buildStepArgs, expandSkill, reviewFindingsPreamble } from "../skills.js";
 
@@ -96,5 +97,42 @@ describe("shakedown skill contract", () => {
 		const expanded = expandSkill("shakedown");
 		assert.doesNotMatch(expanded, /^---/);
 		assert.match(expanded, /!`cat \.claude\/skills\/_rubric\.md`/);
+	});
+});
+
+describe("finding closure mode prompt contract (#756)", () => {
+	function assertClosureRubric(body: string): void {
+		for (const mode of ["patch", "construction", "authority", "policy"]) assert.match(body, new RegExp(`\`${mode}\``));
+		assert.match(body, /a localized fix retires the finding and should converge/);
+		assert.match(body, /completeness surface/);
+		assert.match(body, /chokepoint, extract-and-require, or default-deny/);
+		assert.match(body, /instance patch predicts recurrence/);
+		assert.match(body, /not this item's to make/);
+		assert.match(body, /chartering\/re-chartering/);
+		assert.match(body, /trades against a stated design constraint/);
+		assert.match(body, /routed decision/);
+		assert.match(body, /N instances of one class/);
+		assert.match(body, /one class finding/);
+		assert.match(body, /sweeps that class's surface/);
+		assert.match(body, /taxonomy `class` \/ `classHint`/);
+		assert.match(body, /second, optional axis/);
+	}
+
+	it("teaches pr-review, pr-verify, and shakedown the same four-mode rubric", () => {
+		assertClosureRubric(expandSkill("pr-review"));
+		assertClosureRubric(expandSkill("pr-verify"));
+		assertClosureRubric(expandSkill("shakedown"));
+	});
+
+	it("keeps v1/v3 example (message, path, line) tuples aligned with SCHEMA_EXAMPLE_FINDINGS", () => {
+		const body = expandSkill("pr-review");
+		const v3 = body.match(/AUTHORING_REVIEW_FINDINGS\n(\{.*\})\nEND_AUTHORING_REVIEW_FINDINGS/);
+		const v1 = body.match(/REVIEW_FINDINGS\n(\{.*\})\nEND_REVIEW_FINDINGS/);
+		assert.ok(v3?.[1], "v3 example block");
+		assert.ok(v1?.[1], "v1 example block");
+		const v3Finding = (JSON.parse(v3[1]) as { findings: Array<{ message: string; path: string; line: number }> }).findings[0];
+		const v1Finding = (JSON.parse(v1[1]) as { findings: Array<{ message: string; path: string; line: number }> }).findings[0];
+		assert.deepEqual({ message: v3Finding?.message, path: v3Finding?.path, line: v3Finding?.line }, SCHEMA_EXAMPLE_FINDINGS[0]);
+		assert.deepEqual({ message: v1Finding?.message, path: v1Finding?.path, line: v1Finding?.line }, SCHEMA_EXAMPLE_FINDINGS[1]);
 	});
 });

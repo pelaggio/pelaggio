@@ -43,6 +43,7 @@ import {
 	parseReviewVerification,
 	type ReviewExhaustionReason,
 	type ReviewFinding,
+	type ReviewFindingClosure,
 	type ReviewFindingsReport,
 	reconcileReviewVerification,
 	reviewFindingFingerprint,
@@ -283,6 +284,25 @@ function driverLabel(driver: ReviewDriverIdentity): string {
 	return model ? `${driver.provider}/${model}` : driver.provider;
 }
 
+/** Harness-authored suffix for a confirmed non-patch survivor. Undefined for absent/`patch`. */
+export function renderFindingClosureGuidance(closure: ReviewFindingClosure | undefined): string | undefined {
+	switch (closure) {
+		case undefined:
+		case "patch":
+			return undefined;
+		case "construction":
+			return "instance patch predicts recurrence — close by construction or record a residual";
+		case "authority":
+			return "survivors recur in a class this item may not own — consider re-chartering";
+		case "policy":
+			return "routed decision required";
+		default: {
+			const exhaustive: never = closure;
+			throw new Error(`unknown finding closure: ${JSON.stringify(exhaustive)}`);
+		}
+	}
+}
+
 function renderPass(pass: ReviewPass): string {
 	const title = pass.label === "standard" ? "Standard Review" : "Adversarial Red-Team Review";
 	const heading = `## ${title} (Iteration ${pass.iteration} · ${escapeMarkdown(driverLabel(pass.driver))} · ${pass.effectiveVerdict})`;
@@ -292,7 +312,9 @@ function renderPass(pass: ReviewPass): string {
 			const disposition = pass.dispositions?.find((item) => item.finding === finding);
 			const verification = disposition ? ` — isolated verification: **${disposition.decision}** (${escapeMarkdown(disposition.id)}: ${escapeMarkdown(disposition.rationale)})` : "";
 			const retained = finding.severity === "must-fix" && pass.verificationDiagnostic ? ` — isolated verification failed; blocker retained (${escapeMarkdown(pass.verificationDiagnostic)})` : "";
-			return `- **${finding.severity}**${location}: ${escapeMarkdown(finding.message)}${verification}${retained}`;
+			const guidance = finding.severity === "must-fix" && disposition?.decision === "survives" ? renderFindingClosureGuidance(finding.closure) : undefined;
+			const closureSuffix = guidance ? ` — ${guidance}` : "";
+			return `- **${finding.severity}**${location}: ${escapeMarkdown(finding.message)}${verification}${retained}${closureSuffix}`;
 		});
 		return [heading, "", escapeMarkdown(pass.report.summary), "", ...(findings.length > 0 ? findings : ["No findings."])].join("\n");
 	}
@@ -852,6 +874,7 @@ function extractRecurrenceFindings(opts: {
 			fingerprintDigest: fingerprintDigestOf(fingerprint),
 			...(path && path.length <= PR_REVIEW_RECURRENCE_PATH_MAX ? { path } : {}),
 			findingClass: materialized.class,
+			...(finding.closure !== undefined ? { closure: finding.closure } : {}),
 		});
 		if (observations.length >= RECURRENCE_OBSERVATION_MAX) break;
 	}

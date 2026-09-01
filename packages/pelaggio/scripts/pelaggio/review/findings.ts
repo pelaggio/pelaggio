@@ -6,11 +6,16 @@ export { isSafetyClass, safetyClasses, tierOf } from "./taxonomy.js";
 
 export type ReviewFindingSeverity = "must-fix" | "nice" | "note";
 
+/** How a confirmed finding can be retired. Advisory evidence only — not identity, severity, or verdict. */
+export const REVIEW_FINDING_CLOSURES = ["patch", "construction", "authority", "policy"] as const;
+export type ReviewFindingClosure = (typeof REVIEW_FINDING_CLOSURES)[number];
+
 export interface ReviewFinding {
 	severity: ReviewFindingSeverity;
 	message: string;
 	path?: string;
 	line?: number;
+	closure?: ReviewFindingClosure;
 }
 
 export interface ReviewFindingsReport {
@@ -279,6 +284,7 @@ export function materializeAuthoringFinding(raw: RawAuthoringReviewFinding, base
 		...(raw.ruleId !== undefined ? { ruleId: raw.ruleId } : {}),
 		...(raw.cwe !== undefined ? { cwe: raw.cwe } : {}),
 		...(raw.classHint !== undefined ? { classHint: raw.classHint } : {}),
+		...(raw.closure !== undefined ? { closure: raw.closure } : {}),
 		class: classification.class,
 		classification,
 	};
@@ -347,6 +353,7 @@ export type ReviewFindingsParseErrorCode =
 	| "decisions-not-array"
 	| "invalid-schema"
 	| "invalid-severity"
+	| "invalid-closure"
 	| "invalid-field"
 	| "line-requires-path"
 	| "invalid-line"
@@ -415,7 +422,7 @@ const CWE_RE = /^CWE-\d{1,5}$/i;
 // required `assistantText` (see modelAuthoredText).
 const EXAMPLE_SUMMARY = "Concise single-line summary.";
 /** Exact (message, path, line) tuples from the packaged v3 and v1 schema examples. */
-const SCHEMA_EXAMPLE_FINDINGS = [
+export const SCHEMA_EXAMPLE_FINDINGS = [
 	{ message: "Concrete single-line finding.", path: "src/file.ts", line: 1 }, // v3 authoring
 	{ message: "Concise single-line finding.", path: "src/file.ts", line: 12 }, // v1 cold-gate
 ] as const;
@@ -531,7 +538,7 @@ export function normalizeCwe(value: string): string | null {
 function parseRawAuthoringFinding(value: unknown, index: number): RawAuthoringReviewFinding {
 	if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `review finding ${index + 1} must be a JSON object`);
 	// Wire contract: no `class` or `fingerprint` — harness owns both.
-	assertKeys(value, ["severity", "message", "path", "line", "ruleId", "cwe", "classHint"], ["severity", "message"], `review finding ${index + 1}`);
+	assertKeys(value, ["severity", "message", "path", "line", "ruleId", "cwe", "classHint", "closure"], ["severity", "message"], `review finding ${index + 1}`);
 	const finding = parseFindingFields(value, index);
 	const raw: RawAuthoringReviewFinding = { ...finding };
 	if (value.ruleId !== undefined) {
@@ -770,12 +777,18 @@ function parseFindingFields(value: Record<string, unknown>, index: number): Revi
 		if (!Number.isInteger(value.line) || (value.line as number) <= 0) throw new ReviewFindingsParseError("invalid-line", `review finding ${index + 1} line must be a positive integer`);
 		finding.line = value.line as number;
 	}
+	if (value.closure !== undefined) {
+		if (typeof value.closure !== "string" || !(REVIEW_FINDING_CLOSURES as readonly string[]).includes(value.closure)) {
+			throw new ReviewFindingsParseError("invalid-closure", `review finding ${index + 1} has an invalid closure`);
+		}
+		finding.closure = value.closure as ReviewFindingClosure;
+	}
 	return finding;
 }
 
 function parseFinding(value: unknown, index: number): ReviewFinding {
 	if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `review finding ${index + 1} must be a JSON object`);
-	assertKeys(value, ["severity", "message", "path", "line"], ["severity", "message"], `review finding ${index + 1}`);
+	assertKeys(value, ["severity", "message", "path", "line", "closure"], ["severity", "message"], `review finding ${index + 1}`);
 	return parseFindingFields(value, index);
 }
 
