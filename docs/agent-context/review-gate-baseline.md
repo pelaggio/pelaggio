@@ -100,6 +100,40 @@ Absence is compatibility state, not a fifth classification. Do not retrospective
 modes from historical prose. This is the honest pre-change baseline for A-1/A-2 rather
 than a fabricated classification of the frozen rolls.
 
+## Cycle-side view: what a gate outcome costs the pipeline (2026-08-26)
+
+The baseline above measures the gate from its own records. The **cycle log** measures the same loop
+from the other end, and `npx pelaggio stats` already reports it — park cause is a closed
+classification (`ParkClass`, see `classifyParkReason`) persisted on the record and rendered by
+cause. Read that command first; the figures below are one reading of it, frozen so this section's
+claims stay checkable.
+
+**Corpora frozen: cycle log `208:758e3652c593`, PR list `256:d5920706a550`.**
+
+| Measure | Value |
+|---|---|
+| cycles (2026-07-13 → 2026-08-24) | 208 — completed 97, failed 60, parked 51 |
+| parked by cause | `review-escalation` 13 · `review-blocked` 11 · `rate-limit` 5 · `unrecorded` 22 |
+| distinct items that ever parked | 33 |
+| parked items that completed a later cycle | 26 of 33 (median park → completion 0.9 h) |
+| **parked items whose PR merged** | **0 of 33** |
+| **cycles consumed by those 33 items** | **117 of 208** |
+
+The `unrecorded` 22 predate park classification; `stats` shows them as unknown rather than folding
+them into a real class, so they are not evidence for any cause. Their terminal step is
+`pr-review` or `pr-verify` in all 22 cases, which is suggestive and not a classification.
+
+Two reader's notes, because both produced wrong readings before they were found:
+
+- `CycleResult.error` carries the literal string `parked` on a parked cycle (its docstring says so).
+  A count of non-empty `error` therefore reports 111 failures where there are 60. `stats` already
+  separates the two; a hand-rolled parser will not.
+- Failure cause is **not stored** — `stats` derives "failed by cause" by prefixing the free-text
+  `error`, so it is as coarse as those strings. Park cause, by contrast, is stored and closed. The
+  asymmetry is the open half.
+
+Genuine failure rate by week, parks excluded: 26%, 29%, 27%, 28%, 46%.
+
 ## Known gap: wall-clock is not instrumented
 
 This document calls wall-clock the scarce resource and then does not measure it. That matters most

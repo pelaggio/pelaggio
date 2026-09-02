@@ -37,5 +37,16 @@ Review was historically a post-hoc gate on a raw first draft. The decision is to
 - (−) Provenance is a *record*, not a full attestation: #188 shipped effects-boundary receipts, but gate-assertion binding + trusted-runner identity remain residual — do not let the record become the "laundering" it warns against.
 - (−) **Wrong-if for the diversity assumption (added 2026-08-24, #624):** the fleet's incremental cost stops being justified if a single strong reviewer at equal token budget reproduces its must-fix set on a sampled set of gated PRs (#270/#291) and cross-provider disagreement contributes no landed fixes over that sample — measured through #627 before any gate change. The baseline to beat is 1.64 re-review rolls per landing (`review-gate-baseline.md`).
 
+- **Wrong-if for the escalation half (added 2026-08-26):** the loop's park-on-safety and
+  reviewer-split parks are stated above as a benefit — the human audits evidence rather than a raw
+  draft — with no bound on what that costs. That benefit stops being justified if escalation
+  consumes pipeline capacity without converting it into landings. Measured over cycle log
+  `208:758e3652c593` (`npx pelaggio stats`; detail in `review-gate-baseline.md`): 24 of 51 parks
+  classify as `review-escalation` or `review-blocked` against 5 for `rate-limit`, the 33 items that
+  parked consumed 117 of 208 cycles, and **none of them merged**. This is a *different* falsifier
+  from the diversity wrong-if above and does not substitute for it: it questions whether escalation
+  is rationed, not whether diversity pays. Both are read as questions against intent (ADR-0027), and
+  neither authorizes a gate change ahead of #627.
+
 Imports the taxonomy + safety floor from ADR-0016; conditions Dissent on the ADR-0015 tolerance policy; provenance rides the ADR-0018 / #186–189 attestation charters; review orchestration boundary is ADR-0022's; no model may launder uncertainty into a landed change per ADR-0014.
 
