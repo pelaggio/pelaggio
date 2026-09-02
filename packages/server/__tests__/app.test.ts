@@ -666,6 +666,12 @@ describe("createApp", () => {
 		assert.equal(res.status, 200);
 	});
 
+	it("unknown routes fall through to 404 without demanding authentication", async () => {
+		const { rawApp } = setup({ token: "secret" });
+		assert.equal((await rawApp.request("/not-an-api-route")).status, 404);
+		assert.equal((await rawApp.request("/runs")).status, 401);
+	});
+
 	it("static handler serves /ui/index.html when webDist is set", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "web-dist-"));
 		writeFileSync(join(dir, "index.html"), "<!doctype html><html><body>pelaggio ui</body></html>");
@@ -674,6 +680,11 @@ describe("createApp", () => {
 		assert.equal(res.status, 200);
 		const body = await res.text();
 		assert.match(body, /pelaggio ui/);
+		assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+		assert.match(res.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+		assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+		assert.equal(res.headers.get("x-frame-options"), "DENY");
+		assert.equal(res.headers.get("referrer-policy"), "no-referrer");
 	});
 
 	it("API routes still return JSON when webDist is set (no /ui collision)", async () => {
