@@ -21,3 +21,7 @@ The run journal is authoritative. Snapshots and metrics are derived. Resume is c
 ## Adapters
 
 v0: `fake` (deterministic, packed-tarball suite), `grok`, and `codex`. Codex auto mode uses its `--approve-for-me` review path with the `workspace-write` sandbox; Pelaggio still reports host execution because that provider-owned sandbox is not the v0 containment boundary. Pelaggio does not scrape harness prose for the public result.
+
+## CLI dispatch
+
+`bin/pelaggio.js` routes `run --file|--text|--stdin` plus `resume` / `show` / `doctor` to `local-autopilot-cli.ts`. Other `run` flags remain the dogfood pipeline. Prerelease publishes use a signed `v*-next*` tag and `npm publish --tag next --provenance`.

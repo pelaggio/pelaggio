@@ -53,6 +53,20 @@ npx pelaggio init
 2. Replace the roadmap example with your real backlog.
 3. Run `npx pelaggio run --cycles 1 --verbose`.
 
+### Local autopilot preview
+
+Install-free, local-first preview (no Pelaggio dependency in the consumer repo). Uncommitted
+`.pelaggio/pelaggio.yml` is enough. Successful work ends `ready_for_review` in an isolated
+worktree; nothing is pushed, opened as a PR, merged, released, or deployed.
+
+```bash
+npx -y pelaggio@next run --file ticket.md
+npx -y pelaggio@next run --file ticket.md --non-interactive --json
+```
+
+`resume`, `show`, and `doctor` inspect or continue the same `runId`. Dogfood pipeline flags
+(`--item`, `--cycles`, `--parallel`, …) still select the existing `pelaggio run` pipeline.
+
 ## Bring your own agent
 
 Pelaggio drives the harness; you choose it. Claude Code, Codex, Grok Build

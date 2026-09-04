@@ -1,18 +1,16 @@
-name: Publish to npm
+name: Publish next tag to npm
 
 on:
   push:
     tags:
-      - "v*"
-      - "!v*-next*"
+      - "v*-next*"
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  publish:
-    if: ${{ !contains(github.ref_name, '-next') }}
+  publish-next:
     runs-on: self-hosted
     steps:
       - name: Checkout at tag
@@ -41,8 +39,8 @@ jobs:
       - name: Run publish safeguards
         run: pnpm --filter pelaggio check:publish
 
-      - name: Publish
+      - name: Publish next
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: npm publish --tag next --provenance --access public
         working-directory: packages/pelaggio
