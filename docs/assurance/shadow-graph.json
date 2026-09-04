@@ -1613,6 +1613,76 @@
 					"path": "packages/pelaggio/scripts/pelaggio/__tests__/attempt-identity.test.ts"
 				}
 			]
+		},
+		{
+			"id": "CLM-0023",
+			"kind": "proposition",
+			"role": "invariant",
+			"visibility": "internal",
+			"slug": "local-autopilot-success-is-ready-for-review",
+			"statement": "A local-autopilot Run is the public durable object; successful autonomous work ends ready_for_review, never accepted or shipped, and external effects are denied by default.",
+			"sources": [
+				"ADR-0029"
+			]
+		},
+		{
+			"id": "CON-0031",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "local-autopilot-readiness-is-deterministic",
+			"statement": "Readiness and effects for a local-autopilot Run are deterministic: the model is not the gate, and a pause is not a protocol fault.",
+			"sources": [
+				"ADR-0029"
+			]
+		},
+		{
+			"id": "CON-0032",
+			"kind": "proposition",
+			"role": "constraint",
+			"visibility": "internal",
+			"slug": "metrics-cannot-carry-task-content",
+			"statement": "Share-safe metrics must not admit arbitrary strings that could hold repository names, paths, ticket text, prompts, diffs, commands, or model output.",
+			"sources": [
+				"ADR-0029"
+			]
+		},
+		{
+			"id": "DEC-0022",
+			"kind": "decision",
+			"slug": "local-autopilot-run-object",
+			"statement": "Publish a local-first autopilot preview whose durable object is a Run, whose transport-neutral operations are start/get/continue/cancel, and whose success disposition is ready_for_review with effects denied by default.",
+			"status": "proposed-construction-choice",
+			"sources": [
+				"ADR-0029"
+			]
+		},
+		{
+			"id": "CTR-0024",
+			"kind": "realization",
+			"slug": "local-autopilot-contract-v0",
+			"statement": "Local Autopilot Contract v0 schemas, fail-closed parsers, and lifecycle validator.",
+			"sources": [
+				"ADR-0029"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/local-autopilot/schemas/v0.schema.json",
+				"packages/pelaggio/scripts/pelaggio/local-autopilot/parse.ts",
+				"packages/pelaggio/scripts/pelaggio/local-autopilot/lifecycle.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/local-autopilot-contract.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "parses every valid fixture",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/local-autopilot-contract.test.ts"
+				},
+				{
+					"kind": "test",
+					"id": "allows the documented transitions and no others",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/local-autopilot-contract.test.ts"
+				}
+			]
 		}
 	],
 	"edges": [
@@ -1985,6 +2055,41 @@
 			"from": "CON-0030",
 			"relation": "constrains",
 			"to": "DEC-0020"
+		},
+		{
+			"from": "CON-0031",
+			"relation": "constrains",
+			"to": "DEC-0022"
+		},
+		{
+			"from": "CON-0032",
+			"relation": "constrains",
+			"to": "DEC-0022"
+		},
+		{
+			"from": "DEC-0022",
+			"relation": "implements",
+			"to": "CLM-0023"
+		},
+		{
+			"from": "CTR-0024",
+			"relation": "derived-from",
+			"to": "DEC-0022"
+		},
+		{
+			"from": "CTR-0024",
+			"relation": "implements",
+			"to": "CLM-0023"
+		},
+		{
+			"from": "CTR-0024",
+			"relation": "implements",
+			"to": "CON-0031"
+		},
+		{
+			"from": "CTR-0024",
+			"relation": "implements",
+			"to": "CON-0032"
 		},
 		{
 			"from": "CON-0003",
@@ -2622,6 +2727,13 @@
 			"CON-0029",
 			"CON-0030",
 			"DEC-0020"
+		],
+		"ADR-0029": [
+			"CLM-0023",
+			"CON-0031",
+			"CON-0032",
+			"CTR-0024",
+			"DEC-0022"
 		]
 	},
 	"sourceGrounding": [

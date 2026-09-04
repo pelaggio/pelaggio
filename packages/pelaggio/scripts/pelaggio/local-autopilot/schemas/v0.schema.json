@@ -1,0 +1,317 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://pelaggio/local-autopilot/v0/contract",
+	"title": "Pelaggio Local Autopilot Contract v0",
+	"$defs": {
+		"schemaVersion": { "const": 1 },
+		"opaqueId": {
+			"type": "string",
+			"minLength": 1,
+			"maxLength": 128,
+			"pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$"
+		},
+		"utcTimestamp": {
+			"type": "string",
+			"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$"
+		},
+		"durationMs": { "type": "integer", "minimum": 0 },
+		"digest": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["algorithm", "value"],
+			"properties": {
+				"algorithm": { "const": "sha256" },
+				"value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+			}
+		},
+		"runState": { "enum": ["queued", "running", "paused", "completed"] },
+		"pauseCode": {
+			"enum": ["decision_required", "verification_budget", "interrupted", "harness_unavailable"]
+		},
+		"disposition": {
+			"enum": ["ready_for_review", "cancelled", "failed", "blocked", "budget_exhausted"]
+		},
+		"problemType": {
+			"enum": ["config", "protocol", "decision", "verification", "harness", "conflict"]
+		},
+		"artifactKind": {
+			"type": "string",
+			"pattern": "^[a-z][a-z0-9-]*$",
+			"maxLength": 64
+		},
+		"eventType": {
+			"type": "string",
+			"pattern": "^pelaggio\\.local-autopilot\\.[a-z][a-z0-9.-]*$",
+			"maxLength": 96
+		},
+		"workContractSource": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind"],
+			"properties": {
+				"kind": { "enum": ["text", "file", "stdin"] },
+				"uri": { "type": "string", "minLength": 1, "maxLength": 4096 }
+			}
+		},
+		"workContract": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["schemaVersion", "workContractId", "title", "body", "source", "digest", "createdAt"],
+			"properties": {
+				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+				"workContractId": { "$ref": "#/$defs/opaqueId" },
+				"title": { "type": "string", "minLength": 1, "maxLength": 200 },
+				"body": { "type": "string" },
+				"source": { "$ref": "#/$defs/workContractSource" },
+				"digest": { "$ref": "#/$defs/digest" },
+				"createdAt": { "$ref": "#/$defs/utcTimestamp" }
+			}
+		},
+		"taskInput": {
+			"oneOf": [
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["text"],
+					"properties": { "text": { "type": "string", "minLength": 1 } }
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["file"],
+					"properties": { "file": { "type": "string", "minLength": 1, "maxLength": 4096 } }
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["stdin"],
+					"properties": { "stdin": { "const": true } }
+				}
+			]
+		},
+		"startRunRequest": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["schemaVersion", "task", "nonInteractive"],
+			"properties": {
+				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+				"requestId": { "$ref": "#/$defs/opaqueId" },
+				"task": { "$ref": "#/$defs/taskInput" },
+				"nonInteractive": { "type": "boolean" }
+			}
+		},
+		"problem": {
+			"type": "object",
+			"additionalProperties": true,
+			"required": ["schemaVersion", "type", "code", "message", "retryable"],
+			"properties": {
+				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+				"type": { "$ref": "#/$defs/problemType" },
+				"code": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9._-]*$" },
+				"message": { "type": "string", "minLength": 1, "maxLength": 2000 },
+				"retryable": { "type": "boolean" },
+				"runId": { "$ref": "#/$defs/opaqueId" }
+			}
+		},
+		"pauseReason": {
+			"type": "object",
+			"additionalProperties": true,
+			"required": ["code", "message"],
+			"properties": {
+				"code": { "$ref": "#/$defs/pauseCode" },
+				"message": { "type": "string", "minLength": 1, "maxLength": 2000 },
+				"problem": { "$ref": "#/$defs/problem" }
+			}
+		},
+		"artifact": {
+			"type": "object",
+			"additionalProperties": true,
+			"required": ["kind", "uri", "mediaType", "digest"],
+			"properties": {
+				"kind": { "$ref": "#/$defs/artifactKind" },
+				"uri": { "type": "string", "minLength": 1, "maxLength": 4096 },
+				"mediaType": { "type": "string", "minLength": 1, "maxLength": 128 },
+				"digest": { "$ref": "#/$defs/digest" }
+			}
+		},
+		"metricsUsage": {
+			"type": "object",
+			"additionalProperties": false,
+			"minProperties": 1,
+			"properties": {
+				"inputTokens": { "type": "integer", "minimum": 0 },
+				"outputTokens": { "type": "integer", "minimum": 0 },
+				"costUsd": { "type": "number", "minimum": 0 }
+			}
+		},
+		"metrics": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["schemaVersion", "durationMs"],
+			"properties": {
+				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+				"durationMs": { "$ref": "#/$defs/durationMs" },
+				"harnessCalls": { "type": "integer", "minimum": 0 },
+				"verificationPasses": { "type": "integer", "minimum": 0 },
+				"repairAttempts": { "type": "integer", "minimum": 0 },
+				"usage": { "$ref": "#/$defs/metricsUsage" }
+			}
+		},
+		"worktreeRef": {
+			"type": "object",
+			"additionalProperties": true,
+			"required": ["branch"],
+			"properties": {
+				"path": { "type": "string", "minLength": 1 },
+				"branch": { "type": "string", "minLength": 1, "maxLength": 255 }
+			}
+		},
+		"runSnapshot": {
+			"type": "object",
+			"additionalProperties": true,
+			"required": ["schemaVersion", "runId", "state", "workContract", "createdAt", "updatedAt", "artifacts", "problems"],
+			"properties": {
+				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+				"runId": { "$ref": "#/$defs/opaqueId" },
+				"requestId": { "$ref": "#/$defs/opaqueId" },
+				"state": { "$ref": "#/$defs/runState" },
+				"pauseReason": { "$ref": "#/$defs/pauseReason" },
+				"disposition": { "$ref": "#/$defs/disposition" },
+				"workContract": { "$ref": "#/$defs/workContract" },
+				"createdAt": { "$ref": "#/$defs/utcTimestamp" },
+				"updatedAt": { "$ref": "#/$defs/utcTimestamp" },
+				"durationMs": { "$ref": "#/$defs/durationMs" },
+				"worktree": { "$ref": "#/$defs/worktreeRef" },
+				"artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+				"problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } },
+				"metrics": { "$ref": "#/$defs/metrics" }
+			}
+		},
+		"event": {
+			"type": "object",
+			"additionalProperties": true,
+			"required": ["schemaVersion", "eventId", "runId", "seq", "type", "at"],
+			"properties": {
+				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+				"eventId": { "$ref": "#/$defs/opaqueId" },
+				"runId": { "$ref": "#/$defs/opaqueId" },
+				"seq": { "type": "integer", "minimum": 0 },
+				"type": { "$ref": "#/$defs/eventType" },
+				"at": { "$ref": "#/$defs/utcTimestamp" },
+				"payload": { "type": "object" }
+			}
+		},
+		"localConfig": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["harness"],
+			"properties": {
+				"project": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {}
+				},
+				"harness": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["adapter"],
+					"properties": {
+						"adapter": { "enum": ["fake", "grok"] },
+						"fake": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["script"],
+							"properties": {
+								"script": {
+									"type": "array",
+									"items": { "$ref": "#/$defs/fakeStep" }
+								}
+							}
+						},
+						"grok": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"bin": { "type": "string", "minLength": 1 },
+								"model": { "type": "string", "minLength": 1 }
+							}
+						}
+					}
+				},
+				"autopilot": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"maxRepairs": { "type": "integer", "minimum": 0, "maximum": 8 },
+						"verification": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"command": { "type": "string", "minLength": 1, "maxLength": 1024 }
+							}
+						}
+					}
+				},
+				"effects": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"allow": {
+							"type": "array",
+							"maxItems": 0,
+							"items": { "type": "string" }
+						}
+					}
+				}
+			}
+		},
+		"fakeStep": {
+			"oneOf": [
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["action", "path", "content"],
+					"properties": {
+						"action": { "const": "write" },
+						"path": { "type": "string", "minLength": 1, "maxLength": 512 },
+						"content": { "type": "string" }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["action"],
+					"properties": { "action": { "const": "complete" } }
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["action", "code", "message"],
+					"properties": {
+						"action": { "const": "decision" },
+						"code": { "type": "string", "minLength": 1, "maxLength": 64 },
+						"message": { "type": "string", "minLength": 1, "maxLength": 2000 }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["action", "message"],
+					"properties": {
+						"action": { "const": "verify-fail" },
+						"message": { "type": "string", "minLength": 1, "maxLength": 2000 }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["action", "message"],
+					"properties": {
+						"action": { "const": "crash" },
+						"message": { "type": "string", "minLength": 1, "maxLength": 2000 }
+					}
+				}
+			]
+		}
+	}
+}

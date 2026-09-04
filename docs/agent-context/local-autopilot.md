@@ -1,0 +1,23 @@
+# Local Autopilot Contract v0
+
+Construction home for [ADR-0029](../decisions/0029-local-autopilot-contract.md) (issue #776). The schemas and executable invariants under `packages/pelaggio/scripts/pelaggio/local-autopilot/` are normative; this file points at them.
+
+## Public object
+
+A `Run` is the durable object. Operations: `startRun`, `getRun`, `continueRun`, `cancelRun`. CLI `run | resume | show | doctor` are projections. JSON Schema 2020-12 lives in `local-autopilot/schemas/v0.schema.json`. Runtime parsing is fail-closed TypeScript (`parse.ts`); Ajv agreement is a CI test, not a published dependency.
+
+## Lifecycle
+
+`state`: `queued | running | paused | completed`. `pauseReason` iff paused. `disposition` iff completed. Success is `ready_for_review`. `accepted` and `shipped` are invalid. `lifecycle.ts` is the state machine.
+
+## Dispatch
+
+`pelaggio run --file|--text|--stdin …` starts a local-autopilot Run. `pelaggio run` with pipeline flags (`--item`, `--cycles`, `--parallel`, …) remains the dogfood pipeline. `resume` / `show` / `doctor` are local-autopilot only.
+
+## Authority
+
+The run journal is authoritative. Snapshots and metrics are derived. Resume is checkpoint-restart (ADR-0019). Effects are denied by default.
+
+## Adapters
+
+v0: `fake` (deterministic, packed-tarball suite) and `grok` (one real harness). Pelaggio does not scrape harness prose for the public result.

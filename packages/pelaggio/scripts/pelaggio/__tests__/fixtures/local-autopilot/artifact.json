@@ -1,0 +1,9 @@
+{
+	"kind": "work-contract",
+	"uri": "pelaggio:work-contract/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+	"mediaType": "application/json",
+	"digest": {
+		"algorithm": "sha256",
+		"value": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+	}
+}

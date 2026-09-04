@@ -1,0 +1,7 @@
+{
+	"schemaVersion": 1,
+	"type": "protocol",
+	"code": "unknown-field",
+	"message": "startRunRequest rejects unknown field \"foo\"",
+	"retryable": false
+}

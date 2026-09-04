@@ -1,0 +1,13 @@
+{
+	"harness": {
+		"adapter": "fake",
+		"fake": {
+			"script": [
+				{ "action": "write", "path": "src/hello.ts", "content": "export const hello = 1;\n" },
+				{ "action": "complete" }
+			]
+		}
+	},
+	"autopilot": { "maxRepairs": 1 },
+	"effects": { "allow": [] }
+}

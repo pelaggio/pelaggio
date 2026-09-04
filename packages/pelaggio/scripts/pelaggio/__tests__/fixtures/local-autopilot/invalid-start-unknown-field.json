@@ -1,0 +1,6 @@
+{
+	"schemaVersion": 1,
+	"task": { "text": "hello" },
+	"nonInteractive": true,
+	"unexpected": true
+}

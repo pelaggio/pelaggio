@@ -41,6 +41,7 @@ Numbered from the security audit's implicit-decision candidates.
 | [0026](./0026-stateful-guards-fence-reconcile-and-gate-disposition.md) | Stateful guards: fence-or-reconcile classification; gate disposition splits judgment from evidence (amends 0004) | proposed | `TC-003`, `TC-013` |
 | [0027](./0027-machine-readable-architectural-intent-graph.md) | Architectural intent converges on one machine-readable graph; prose remains narrative/history | proposed | — |
 | [0028](./0028-delivery-packet-claim-scoped-provenance.md) | Delivery unit is the claim; intent-only packet carried on the landing surface joins — never copies — its evaluative record | proposed | — |
+| [0029](./0029-local-autopilot-contract.md) | Local Autopilot Contract v0: Run is the public durable object; success is `ready_for_review`; effects denied by default | proposed | — |
 
 
 *Status vocabulary:* `proposed` (decided, not yet implemented) · `accepted` (implemented) · `superseded`.
