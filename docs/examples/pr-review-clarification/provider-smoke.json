@@ -1,0 +1,69 @@
+{
+  "kind": "attended real-provider smoke via runPrReviewGate/runStep; fixture code is scripted; no PR comment/status/merge requested",
+  "limitations": "Actual Codex clean review through the harness. No live-provider revision or operator-answer cycle was exercised; that path is covered by the simulated production-seam scenario. A blocked initial git command was followed by a successful inspection. No tests were requested in the review seat.",
+  "review": {
+    "assessment": {
+      "schemaVersion": 1,
+      "kind": "assessment",
+      "id": "7457ff8a64a389aadd9e4257f4c5eb0b80c19915eb7d8967775675906c7226ab",
+      "createdAt": "2026-09-05T20:21:18.217Z",
+      "input": {
+        "task": {
+          "itemId": "782",
+          "prNumber": 900,
+          "source": "attended-smoke-fixture",
+          "request": "For string input, trim whitespace and display Untitled when blank. Review the tiny label.mjs change. This is an attended isolated smoke fixture, not a live PR. Do not run tests or access GitHub. If useful, qualify a consequential finding; do not manufacture questions.",
+          "digest": "f621b92fcf3cfea5e30a7fd01cd6de7d0a8ec0a901f0503d9642cee5372fc830"
+        },
+        "originalTask": {
+          "itemId": "782",
+          "prNumber": 900,
+          "source": "attended-smoke-fixture",
+          "request": "For string input, trim whitespace and display Untitled when blank. Review the tiny label.mjs change. This is an attended isolated smoke fixture, not a live PR. Do not run tests or access GitHub. If useful, qualify a consequential finding; do not manufacture questions.",
+          "digest": "f621b92fcf3cfea5e30a7fd01cd6de7d0a8ec0a901f0503d9642cee5372fc830"
+        },
+        "headSha": "e7bafab273c7a71dc7a1673ad4496d0a0ad8fd51",
+        "answers": [],
+        "questions": [],
+        "checks": [],
+        "supersedes": [],
+        "diagnostics": []
+      },
+      "gate": "pass",
+      "seats": [
+        {
+          "actor": "codex",
+          "iteration": 1,
+          "report": {
+            "schemaVersion": 1,
+            "summary": "The change trims string input and returns Untitled when the trimmed result is empty, matching the stated requirement. No blocking problems found. Tests were not run, as instructed.",
+            "findings": []
+          },
+          "dispositions": []
+        }
+      ],
+      "questions": []
+    },
+    "gate": "pass",
+    "body": "<!-- pelaggio-pr-review -->\n\u2705 **Automated review: PASS**\n\nConvergence: converged \u00b7 agreement=consensus-pass \u00b7 iterations=1 \u00b7 survivors=0 \u00b7 providers=codex/claude \u00b7 carry=none \u00b7 aggregate cost=$0.21\n\n### Driver verdicts\n- **codex** \u00b7 standard \u00b7 pass\n\n## Standard Review (Iteration 1 \u00b7 codex \u00b7 pass)\n\nThe change trims string input and returns Untitled when the trimmed result is empty, matching the stated requirement\\. No blocking problems found\\. Tests were not run, as instructed\\.\n\nNo findings.\n\nAdversarial red-team pass: not triggered (no security-sensitive paths or diff signals).\n\n<sub>pelaggio pr-review \u00b7 success</sub>\n<!-- pr-review-metrics gate=pass ok=true subtype=success cost=0.21 turns=1 iterations=1 survivors=0 breaker=none providers=codex/claude agreement=consensus-pass carry=none -->\n\n## Review assessment\n\nPR #900 \u00b7 item 782 \u00b7 revision e7bafab273c7a71dc7a1673ad4496d0a0ad8fd51\nAssessment 7457ff8a64a389aadd9e4257f4c5eb0b80c19915eb7d8967775675906c7226ab \u00b7 gate pass (existing finding/verification policy)\n\n### Requested\n\nFor string input, trim whitespace and display Untitled when blank\\. Review the tiny label\\.mjs change\\. This is an attended isolated smoke fixture, not a live PR\\. Do not run tests or access GitHub\\. If useful, qualify a consequential finding; do not manufacture questions\\.\n\n### codex \u00b7 iteration 1\n\nThe change trims string input and returns Untitled when the trimmed result is empty, matching the stated requirement\\. No blocking problems found\\. Tests were not run, as instructed\\.\n\n\n### Operator choices and residuals\n\nNo material questions were recorded. This does not establish complete coverage.",
+    "cost": 0.20960199999999998,
+    "costEstimated": true,
+    "turns": 1,
+    "ok": true,
+    "subtype": "success",
+    "agreement": "consensus-pass",
+    "iterations": 1,
+    "survivorCount": 0,
+    "dispositionDraft": {
+      "prNumber": 900,
+      "itemId": "782",
+      "headSha": "e7bafab273c7a71dc7a1673ad4496d0a0ad8fd51",
+      "gate": "pass",
+      "agreement": "consensus-pass",
+      "ok": true,
+      "survived": [],
+      "refuted": []
+    },
+    "recurrenceFindings": []
+  }
+}

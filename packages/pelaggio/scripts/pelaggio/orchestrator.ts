@@ -24,6 +24,8 @@ import { gateRecordsDir, listPrReviewGateRecords, type NewPrReviewGateRecord, wr
 import { detectUnattendedSignals, resolveAuthoringReviewExecution } from "./provider-routing.js";
 import { ensureDevRoot, registerFamilyPath, registerFamilyRelativePath } from "./registers.js";
 import { adjudicationSourcesDir, fleetRecordDigestOf, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import type { AssessmentInput } from "./review/assessment.js";
+import { prepareAssessmentInput } from "./review/assessment-context.js";
 import { prFindingDispositionsDir, writePrFindingDispositionRecord } from "./review/carry.js";
 import { claimReviewRequest, completeReviewRequest, listReviewRequests, type ReviewRequestRecord, reclaimStaleReviewClaims, reviewDrainLockPath, reviewRequestsDir, unclaimReviewRequest } from "./review-request-queue.js";
 import { cleanupReviewHead, findReviewCandidates, postLocalModeWorkflowComment, postReviewStatus, prepareReviewHead, type ReviewCandidate, reviewStatusForSha, upsertReviewComment } from "./review-sweep.js";
@@ -81,6 +83,7 @@ export interface OrchestratorDeps {
 		gh: GhRunner;
 		statuslessAfter: string;
 		runReviewGate: typeof runPrReviewGate;
+		prepareAssessmentInput: typeof prepareAssessmentInput;
 		now: () => number;
 		prepareReviewHead: typeof prepareReviewHead;
 		cleanupReviewHead: typeof cleanupReviewHead;
@@ -1011,6 +1014,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 			ghRepo: ROADMAP_SOURCE === "github-issues" ? ROADMAP_GITHUB.ghRepo : "",
 			gh: hermeticDefault("review.gh", defaultGhRun),
 			runReviewGate: hermeticDefault("review.runReviewGate", runPrReviewGate),
+			prepareAssessmentInput: hermeticDefault("review.prepareAssessmentInput", prepareAssessmentInput),
 			now: () => Date.now(),
 			prepareReviewHead: hermeticDefault("review.prepareReviewHead", prepareReviewHead),
 			cleanupReviewHead: hermeticDefault("review.cleanupReviewHead", cleanupReviewHead),
@@ -1188,10 +1192,18 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 								warn: (msg) => console.warn(`review ${pr.itemId}#${pr.prNumber} — ${msg}`),
 							})
 						: undefined;
+
+					let assessmentInput: AssessmentInput | undefined;
+					try {
+						assessmentInput = await review.prepareAssessmentInput(prepared.diffCwd, pr.prNumber, pr.itemId, pr.headSha);
+					} catch {
+						console.warn("Review assessment task context unavailable; records preserved.");
+					}
 					gateStartedAt = review.now();
 					const priorGateRecords = review.listGateRecords(review.gateRecordsRoot);
 					const result = await review.runReviewGate({
 						pr: String(pr.prNumber),
+						...(assessmentInput ? { assessmentInput, assessmentMainRepo: mainWorktree(REPO) } : {}),
 						itemId: pr.itemId,
 						profile: "standard",
 						cwd: REPO,

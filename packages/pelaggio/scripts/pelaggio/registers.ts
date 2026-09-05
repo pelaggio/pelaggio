@@ -57,6 +57,7 @@ export interface RegisterSpec {
 export const REGISTERS = [
 	// ── harness evidence stores (Bash mention + Write/Edit denied) ──
 	{ name: "sessions", kind: "harness", shape: "dir" },
+	{ name: "pr-review-assessments", kind: "harness", shape: "dir" },
 	{ name: "pr-review-gate-records", kind: "harness", shape: "dir" },
 	{ name: "pr-review-adjudication-sources", kind: "harness", shape: "dir" },
 	{ name: "pr-review-finding-dispositions", kind: "harness", shape: "dir" },

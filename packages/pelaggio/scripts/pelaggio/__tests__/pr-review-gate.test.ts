@@ -211,6 +211,9 @@ async function runCli(
 		return next;
 	};
 	const restoreDeps = setPrReviewDepsForTests({
+		prepareAssessmentInput: async () => {
+			throw new Error("not configured in legacy gate fixture");
+		},
 		// Hermetic pool: a single claude reviewer + claude verifier. Without this the gate
 		// resolves drivers from the host repo's .pelaggio.yml, so editing pelaggio's own
 		// review config silently changes fan-out width and breaks every queued-result test.

@@ -492,6 +492,22 @@ describe("isWorktreePath", () => {
 });
 
 describe("blockForeignRootWrite (#369 / #269 nested seats)", () => {
+	it("denies ordinary operator-assessment mutations at both review and implement roots, preserving read-only controls", () => {
+		for (const cwd of ["/repo", "/repo-782"]) {
+			for (const prefix of [
+				"npx pelaggio review-assessment",
+				"pnpm exec pelaggio review-assessment",
+				"env MODE=local npx plg review-assessment",
+				"node /repo/bin/pelaggio.js review-assessment",
+				"node --import tsx /repo/review-assessment-cli.ts",
+			]) {
+				for (const operation of ["answer", "check"]) assert.equal(blockForeignRootWrite(bash(`${prefix} ${operation} --pr 782`), cwd, "/repo", ["/repo", "/repo-782"], cwd).decision, "block");
+				for (const operation of ["show", "sarif"]) assert.deepEqual(blockForeignRootWrite(bash(`${prefix} ${operation} --file /tmp/capture.json`), cwd, "/repo", ["/repo", "/repo-782"], cwd), {});
+			}
+			assert.deepEqual(blockForeignRootWrite(bash("pnpm test"), cwd, "/repo", ["/repo", "/repo-782"], cwd), {});
+		}
+	});
+
 	const main = "/home/user/my-repo";
 	const sibling = "/home/user/my-repo-269";
 	const other = "/home/user/my-repo-other";

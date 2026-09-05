@@ -214,8 +214,8 @@ REVIEW_FINDINGS
 END_REVIEW_FINDINGS
 ```
 
-The JSON object has exactly `schemaVersion`, `summary`, and `findings`. Each finding has
-exactly `severity`, `message`, optional `path` and `line`, and optional `closure`; `line`
+The JSON object has `schemaVersion`, `summary`, `findings`, and optional `questions`. Each finding has
+`severity`, `message`, optional `path` and `line`, optional `closure`, and optional `qualification`; `line`
 requires `path` and is a positive integer. All strings are non-empty and single-line. Use
 these severities:
 
@@ -228,3 +228,28 @@ Use an empty `findings` array for a clean review. Do not duplicate a PASS/BLOCK 
 prose. If you genuinely cannot complete the review, do not emit a clean report: explain
 the failure as a `must-fix` finding. Missing, malformed, ambiguous, or aborted output is
 rejected and blocks by default.
+
+
+### Optional assessment contents (ordinary PR review only)
+
+Qualify consequential findings with `qualification`: `basis` is `code`, `contract`,
+`judgment`, or `check`; `reference` names the source location, requirement, policy,
+or captured-check ID; `conclusion` states your attributed interpretation;
+`limitation` states what this basis does not establish; optional `recommendation`
+explains the next action. All text fields are single-line. Do not supply numeric
+confidence or claim execution from your own prose. A check basis references only a
+harness-provided captured check; stale, missing and unavailable checks are not passes.
+A passing check establishes only what its command exercised, not broad correctness.
+
+For a material product question, add `questions: [{"question":"...","context":"...","paths":["requirements.md"]}]`.
+Declare the repository-relative paths needed to keep its answer applicable; use an
+empty list when the question must remain bound to this exact revision. Questions are
+independent of finding severity and are not automatically blockers. Do not require a
+question, positive finding or fixed number of checks. Stable question IDs and revision
+bindings are assigned by the harness, not by your output.
+
+When the harness supplies task and operator clarification, evaluate the current
+artifact against those requirements independently. A clarification supplies context;
+it never proves the implementation complies, permits execution or shipping, waives
+policy, or removes a retained blocker. Explain what the choice requires and what the
+current evidence actually establishes. Ordinary PR comments are not this protocol.

@@ -1,0 +1,134 @@
+{
+  "digest": "7c03478222402982e5c83199fe2da22a4228e179860dd994141583f565be03b7",
+  "record": {
+    "schemaVersion": 1,
+    "kind": "assessment",
+    "id": "203ea77c9f947f7873fa2bf405335fa47ecc02a215561d6fa3f9532ade8dce0c",
+    "createdAt": "2026-09-05T00:00:00.000Z",
+    "input": {
+      "task": {
+        "itemId": "782",
+        "prNumber": 900,
+        "source": "simulated:roadmap/782",
+        "request": "Usable labels\n\nReturn a usable display label. Clarify blank-input behavior.",
+        "digest": "6256d840fe7935f76325b5f61a625f3f7db0c8c0104506e75b60f19f17acff74"
+      },
+      "originalTask": {
+        "itemId": "782",
+        "prNumber": 900,
+        "source": "simulated:roadmap/782",
+        "request": "Usable labels\n\nReturn a usable display label. Clarify blank-input behavior.",
+        "digest": "6256d840fe7935f76325b5f61a625f3f7db0c8c0104506e75b60f19f17acff74"
+      },
+      "headSha": "2909b2dd08cf53355a8f16a581a4c54b735497d1",
+      "answers": [
+        {
+          "answer": {
+            "schemaVersion": 1,
+            "kind": "answer",
+            "assessmentId": "797c8b55d6d81a0b3b4aef668445a34f99b2659f0fbb6a80390c646ae70a69eb",
+            "task": {
+              "itemId": "782",
+              "prNumber": 900,
+              "source": "simulated:roadmap/782",
+              "request": "Usable labels\n\nReturn a usable display label. Clarify blank-input behavior.",
+              "digest": "6256d840fe7935f76325b5f61a625f3f7db0c8c0104506e75b60f19f17acff74"
+            },
+            "question": {
+              "question": "Which label should blank input display?",
+              "context": "The request requires a usable label but does not name a fallback.",
+              "paths": [
+                "requirements.md"
+              ],
+              "id": "3e6d88a9fbb27ce8ae0ea960735c1577269548ecc1161b16fb5a03526d625104",
+              "assessmentId": "797c8b55d6d81a0b3b4aef668445a34f99b2659f0fbb6a80390c646ae70a69eb",
+              "headSha": "f49735f7362ff592eebfa137f2d183ab532c8ccb"
+            },
+            "headSha": "f49735f7362ff592eebfa137f2d183ab532c8ccb",
+            "pathObjects": {
+              "requirements.md": "32e38053395240ee25678e35aafbff5499744aa8"
+            },
+            "actor": "simulated operator",
+            "response": "Blank input must display Untitled.",
+            "scope": "work-item",
+            "supersedes": [],
+            "createdAt": "2026-09-05T00:00:00.000Z",
+            "id": "574bde9be3092eb768b977d97d7883522f8c52a3512e16d467ba6685bc106f46"
+          },
+          "state": "applicable",
+          "reason": "Task and declared relevant context match; no semantic-completeness claim."
+        }
+      ],
+      "questions": [
+        {
+          "question": "Which label should blank input display?",
+          "context": "The request requires a usable label but does not name a fallback.",
+          "paths": [
+            "requirements.md"
+          ],
+          "id": "3e6d88a9fbb27ce8ae0ea960735c1577269548ecc1161b16fb5a03526d625104",
+          "assessmentId": "797c8b55d6d81a0b3b4aef668445a34f99b2659f0fbb6a80390c646ae70a69eb",
+          "headSha": "f49735f7362ff592eebfa137f2d183ab532c8ccb"
+        }
+      ],
+      "checks": [
+        {
+          "id": "80127faf95ab3334f5c1a09f68351a419bcfb0488f3bc90c944f3c2af0a4a331",
+          "headSha": "2909b2dd08cf53355a8f16a581a4c54b735497d1",
+          "command": [
+            "pnpm",
+            "--silent",
+            "run",
+            "check:label"
+          ],
+          "scope": "blank-input fallback only",
+          "exitCode": 0,
+          "output": "blank-input fallback checked\n"
+        }
+      ],
+      "supersedes": [
+        "797c8b55d6d81a0b3b4aef668445a34f99b2659f0fbb6a80390c646ae70a69eb"
+      ],
+      "diagnostics": []
+    },
+    "gate": "pass",
+    "seats": [
+      {
+        "actor": "claude",
+        "iteration": 1,
+        "report": {
+          "schemaVersion": 1,
+          "summary": "Simulated reviewer: the chosen fallback is implemented; a narrow check passed.",
+          "findings": [
+            {
+              "severity": "note",
+              "message": "Blank input now displays Untitled.",
+              "path": "label.mjs",
+              "line": 1,
+              "qualification": {
+                "basis": "check",
+                "reference": "80127faf95ab3334f5c1a09f68351a419bcfb0488f3bc90c944f3c2af0a4a331",
+                "conclusion": "The fallback matches the operator's choice for blank input.",
+                "limitation": "Only blank input was executed; other values remain outside this check."
+              }
+            }
+          ],
+          "questions": []
+        },
+        "dispositions": []
+      }
+    ],
+    "questions": [
+      {
+        "question": "Which label should blank input display?",
+        "context": "The request requires a usable label but does not name a fallback.",
+        "paths": [
+          "requirements.md"
+        ],
+        "id": "3e6d88a9fbb27ce8ae0ea960735c1577269548ecc1161b16fb5a03526d625104",
+        "assessmentId": "797c8b55d6d81a0b3b4aef668445a34f99b2659f0fbb6a80390c646ae70a69eb",
+        "headSha": "f49735f7362ff592eebfa137f2d183ab532c8ccb"
+      }
+    ]
+  }
+}

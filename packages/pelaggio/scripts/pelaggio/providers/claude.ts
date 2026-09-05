@@ -231,6 +231,15 @@ export function blockForeignRootWrite(input: HookInput, cwd: string, mainRepo: s
 	if (tn === "Bash") {
 		const ti = ("tool_input" in input ? input.tool_input : {}) as Record<string, unknown>;
 		const cmd = String(ti.command ?? "");
+		// Like protected-register mentions below, deny the ordinary operator CLI spellings.
+		// This does not parse arbitrary shell programs or close the unjailed-script residual (#419).
+		if (/(^|[\s/"'])review-assessment(?:-cli\.(?:ts|js))?["']?\s+["']?(?:answer|check)(?=$|[\s"';&|])/.test(cmd)) {
+			return {
+				decision: "block" as const,
+				reason: "Operator clarification and captured checks are harness-owned input. Ask the operator to run review-assessment outside the worker. Existing answers and work are preserved; continue the current task without inventing an answer.",
+			};
+		}
+
 		// Residual (#510 1a, documented): this denial covers pipeline seats reached through this
 		// hook seam only. Host processes and un-jailed Bash outside the hook system can still
 		// write these registers until the chartered ADR-0018/#419 harness-attested-evidence and
