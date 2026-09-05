@@ -106,3 +106,24 @@ test("resume exposes and forwards fresh CLI host consent", () => {
 	assert.match(resume, /"allow-host-execution": \{ type: "boolean", default: false \}/);
 	assert.match(resume, /continueRun\(process\.cwd\(\), runId, \{ signal: controller\.signal, allowHostExecution: !!parsed\.values\["allow-host-execution"\] \}\)/);
 });
+
+test("repository gitlink ancestors confer ownership but unrelated tracked siblings do not", () => {
+	const cwd = fixture();
+	const git = (...args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8" });
+	try {
+		writeFileSync(join(cwd, ".pelaggio", "other"), "tracked sibling");
+		git("add", ".pelaggio/other");
+		git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "sibling");
+		assert.equal(resolveExecutionAssurance(cwd, config, false).ok, true);
+		const head = git("rev-parse", "HEAD").trim();
+		git("rm", "--cached", ".pelaggio/other");
+		git("update-index", "--add", "--cacheinfo", `160000,${head},.pelaggio`);
+		assert.equal(resolveExecutionAssurance(cwd, config, false).ok, false);
+		assert.equal(resolveExecutionAssurance(cwd, config, true).ok, true);
+		git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "gitlink");
+		git("update-index", "--force-remove", ".pelaggio");
+		assert.equal(resolveExecutionAssurance(cwd, config, false).ok, false);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});

@@ -27,7 +27,8 @@ export function createGrokAdapter(run: GrokRunner = runGrok): HarnessAdapter {
 				...(ctx.verificationFailure ? ["", "The previous verification failed. Repair this exact failure:", ctx.verificationFailure] : []),
 			].join("\n");
 			const model = ctx.config.harness.grok?.model;
-			const args = ["agent", "--always-approve", ...(model ? ["-m", model] : []), "-p", prompt];
+			// Keep execution in this process group so cancellation cannot leave a shared leader running.
+			const args = ["--no-leader", "--always-approve", ...(model ? ["-m", model] : []), "-p", prompt];
 			const result = await run(bin, args, ctx.worktree, ctx.signal);
 			const cursor = ctx.cursor + 1;
 			if (!result.ok) return { action: { kind: "crash", message: result.output.slice(0, 2000) || "grok harness failed" }, cursor };

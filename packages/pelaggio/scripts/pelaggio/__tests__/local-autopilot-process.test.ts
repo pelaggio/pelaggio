@@ -59,6 +59,30 @@ it("interrupt stops descendants with independent stdio before returning", { skip
 	}
 });
 
+for (const stdio of ["inherit", "ignore"] as const) {
+	it(`normal exit stops descendants with ${stdio} stdio before returning`, { skip: process.platform === "win32", timeout: 10_000 }, async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "pelaggio-process-exit-"));
+		const marker = join(cwd, "writes");
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), 3000);
+		const grandchild = `const fs=require("node:fs");setInterval(()=>fs.appendFileSync(${JSON.stringify(marker)},"x"),10);`;
+		const parent = `const fs=require("node:fs");require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],{stdio:${JSON.stringify(stdio)}});setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){console.log("parent finished");process.exit(0);}},10);`;
+		try {
+			const result = await runLocalProcess(process.execPath, ["-e", parent], cwd, controller.signal);
+			assert.equal(controller.signal.aborted, false, "normal exit must not wait for a descendant to close inherited pipes");
+			assert.equal(result.ok, true);
+			assert.match(result.output, /parent finished/);
+			const stopped = readFileSync(marker, "utf8");
+			await delay(100);
+			assert.equal(readFileSync(marker, "utf8"), stopped, "no descendant writes after normal completion");
+		} finally {
+			clearTimeout(timer);
+			controller.abort();
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+}
+
 it("interrupt escalates when the direct child ignores SIGINT", { skip: process.platform === "win32", timeout: 10_000 }, async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pelaggio-process-stubborn-"));
 	const marker = join(cwd, "ready");

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 import { configPath, policyDir } from "./paths.js";
 import { configProblem } from "./transport.js";
 import type { ExecutionAssurance, LocalConfig, ParseResult } from "./types.js";
@@ -16,11 +17,16 @@ export function resolveExecutionAssurance(cwd: string, config: LocalConfig, allo
 			return { ok: false, problem: configProblem("host-consent-required", "symlink policy cannot authorize host execution; pass --allow-host-execution; run state is unchanged") };
 		}
 		const git = (args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-		const path = ".pelaggio/pelaggio.yml";
-		const indexed = git(["ls-files", "--cached", "-z", "--", path]);
-		// Include a tracked policy staged for deletion and then recreated as an untracked file.
-		const deleted = git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z", "--", path]);
-		if (indexed || deleted) {
+		const root = git(["rev-parse", "--show-toplevel"]).trim();
+		const path = relative(root, resolve(configPath(cwd)))
+			.split(sep)
+			.join("/");
+		if (path.startsWith("../") || path === "..") throw new Error("policy outside repository");
+		const ancestors = path.split("/").map((_, i, parts) => parts.slice(0, i + 1).join("/"));
+		// Exact entries include gitlinks and staged deletions; sibling tracked files confer no authority.
+		const indexed = git(["-C", root, "ls-files", "--cached", "--full-name", "-z", "--", ...ancestors.map((entry) => `:(top,literal)${entry}`)]).split("\0");
+		const deleted = git(["-C", root, "diff", "--no-relative", "--cached", "--name-only", "--diff-filter=D", "-z", "--", ...ancestors.map((entry) => `:(top,literal)${entry}`)]).split("\0");
+		if ([...indexed, ...deleted].some((entry) => ancestors.includes(entry))) {
 			return { ok: false, problem: configProblem("host-consent-required", "repository-owned policy cannot authorize host execution; pass --allow-host-execution; run state is unchanged") };
 		}
 		return host;

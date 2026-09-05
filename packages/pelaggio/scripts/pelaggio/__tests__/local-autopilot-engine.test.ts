@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -37,6 +37,27 @@ function consumer(script: string, maxRepairs = 1): { cwd: string; ticket: string
 const SUCCESS_SCRIPT = `      - { action: write, path: src/hello.ts, content: "export const hello = 1;" }\n      - { action: complete }\n`;
 
 describe("local autopilot engine", () => {
+	it("resume rejects a substituted worktree before changing the journal and can retry after restoration", async () => {
+		const { cwd } = consumer(`      - { action: decision, code: choose, message: Choose }\n      - { action: complete }\n`);
+		const result = await startRun(cwd, { task: { text: "Task" }, nonInteractive: true });
+		assert.ok(result.ok);
+		if (!result.ok || !result.value.worktree?.path) return;
+		const runId = result.value.runId;
+		const worktree = result.value.worktree.path;
+		const before = readFileSync(eventsPath(cwd, runId), "utf8");
+		renameSync(worktree, `${worktree}-preserved`);
+		symlinkSync(`${worktree}-preserved`, worktree, "dir");
+		const refused = await continueRun(cwd, runId);
+		assert.equal(refused.ok, false);
+		if (!refused.ok) assert.match(refused.problem.message, /symlink/);
+		assert.equal(readFileSync(eventsPath(cwd, runId), "utf8"), before);
+		rmSync(worktree);
+		renameSync(`${worktree}-preserved`, worktree);
+		const resumed = await continueRun(cwd, runId);
+		assert.ok(resumed.ok);
+		if (resumed.ok) assert.equal(resumed.value.disposition, "ready_for_review");
+	});
+
 	it("successful run produces ready_for_review, a local branch/worktree, and success", async () => {
 		const { cwd, ticket } = consumer(SUCCESS_SCRIPT);
 		const result = await startRun(cwd, { task: { file: ticket }, nonInteractive: true });
@@ -502,7 +523,7 @@ it("holds the run lease before publishing its first journal record", async () =>
 
 for (const boundary of ["harness-finished", "verification-finished"]) {
 	it(`resumes after ${boundary} without replaying acknowledged work`, async () => {
-		const { cwd } = consumer(`      - { action: complete }\n`);
+		const { cwd } = consumer(`      - { action: complete }\n`, 0);
 		const initial = await startRun(cwd, { task: { text: "task" }, nonInteractive: true });
 		assert.ok(initial.ok);
 		if (!initial.ok) return;
@@ -533,7 +554,10 @@ for (const boundary of ["harness-finished", "verification-finished"]) {
 		});
 		assert.ok(resumed.ok, JSON.stringify(resumed));
 		if (resumed.ok) {
-			assert.equal(resumed.value.disposition, "ready_for_review");
+			if (boundary === "verification-finished") {
+				assert.equal(resumed.value.state, "paused");
+				assert.equal(resumed.value.pauseReason?.code, "verification_budget");
+			} else assert.equal(resumed.value.disposition, "ready_for_review");
 			assert.equal(resumed.value.metrics?.harnessCalls, 1);
 			assert.equal(resumed.value.metrics?.verificationPasses, 1);
 		}
@@ -633,4 +657,90 @@ it("reauthorizes current policy on resume instead of inheriting earlier host con
 	const resumed = await continueRun(cwd, paused.value.runId, { allowHostExecution: true });
 	assert.ok(resumed.ok, JSON.stringify(resumed));
 	if (resumed.ok) assert.equal(resumed.value.disposition, "ready_for_review");
+});
+
+for (const action of [
+	{ action: "decision", code: "choose", message: "Choose explicitly" },
+	{ action: "crash", message: "provider crashed" },
+	{ action: "verify-fail", message: "forced verification failure" },
+	{ action: "complete" },
+] as const) {
+	it(`recovers the acknowledged ${action.action} outcome without replaying the provider`, async () => {
+		const { cwd } = consumer(`      - ${JSON.stringify(action)}\n      - { action: complete }\n`, 0);
+		const initial = await startRun(cwd, { task: { text: "task" }, nonInteractive: true });
+		assert.ok(initial.ok, JSON.stringify(initial));
+		if (!initial.ok) return;
+		const events = readRunEvents(cwd, initial.value.runId);
+		const index = events.findIndex((event) => event.type.endsWith(".fake-progress"));
+		assert.ok(index >= 0);
+		assert.equal((events[index]?.payload?.action as { kind?: string })?.kind, action.action);
+		writeFileSync(
+			eventsPath(cwd, initial.value.runId),
+			`${events
+				.slice(0, index + 1)
+				.map((event) => JSON.stringify(event))
+				.join("\n")}\n`,
+		);
+		const resumed = await continueRun(cwd, initial.value.runId, {
+			adapters: {
+				fake: {
+					name: "fake",
+					async next() {
+						throw new Error("acknowledged provider call replayed");
+					},
+				},
+			},
+		});
+		assert.ok(resumed.ok, JSON.stringify(resumed));
+		if (!resumed.ok) return;
+		if (action.action === "decision") {
+			assert.equal(resumed.value.pauseReason?.code, "decision_required");
+			assert.equal(resumed.value.pauseReason?.message, action.message);
+			const resolved = await continueRun(cwd, initial.value.runId);
+			assert.ok(resolved.ok, JSON.stringify(resolved));
+			if (resolved.ok) assert.equal(resolved.value.disposition, "ready_for_review");
+		} else if (action.action === "crash") {
+			assert.equal(resumed.value.disposition, "failed");
+			assert.equal(resumed.value.problems[0]?.message, action.message);
+		} else if (action.action === "verify-fail") {
+			assert.equal(resumed.value.pauseReason?.code, "verification_budget");
+			assert.equal(resumed.value.pauseReason?.message, action.message);
+		} else assert.equal(resumed.value.disposition, "ready_for_review");
+	});
+}
+
+it("re-verifies changed worktree contents after recovering a successful verification", async () => {
+	const { cwd } = consumer(`      - { action: complete }\n`, 0);
+	const policy = join(cwd, ".pelaggio", "pelaggio.yml");
+	writeFileSync(policy, readFileSync(policy, "utf8").replace("git diff --check HEAD", "git diff --quiet HEAD"));
+	const initial = await startRun(cwd, { task: { text: "task" }, nonInteractive: true });
+	assert.ok(initial.ok);
+	if (!initial.ok) return;
+	const events = readRunEvents(cwd, initial.value.runId);
+	const index = events.findIndex((event) => event.type.endsWith(".verification-finished"));
+	assert.ok(index >= 0);
+	writeFileSync(
+		eventsPath(cwd, initial.value.runId),
+		`${events
+			.slice(0, index + 1)
+			.map((event) => JSON.stringify(event))
+			.join("\n")}\n`,
+	);
+	assert.ok(initial.value.worktree?.path);
+	writeFileSync(join(initial.value.worktree.path, "README.md"), "changed since verification");
+	const resumed = await continueRun(cwd, initial.value.runId, {
+		adapters: {
+			fake: {
+				name: "fake",
+				async next() {
+					throw new Error("provider replayed");
+				},
+			},
+		},
+	});
+	assert.ok(resumed.ok, JSON.stringify(resumed));
+	if (resumed.ok) {
+		assert.equal(resumed.value.state, "paused");
+		assert.equal(resumed.value.pauseReason?.code, "verification_budget");
+	}
 });

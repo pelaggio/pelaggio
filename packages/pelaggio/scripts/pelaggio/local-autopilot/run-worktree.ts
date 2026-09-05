@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, relative as relativePath, resolve, sep } from "node:path";
-import { policyDir } from "./paths.js";
+import { checkedStatePath } from "./paths.js";
+import { isOpaqueId } from "./transport.js";
 
 export function worktreePathFor(cwd: string, runId: string): string {
-	return resolve(policyDir(cwd), "worktrees", runId);
+	if (!isOpaqueId(runId)) throw new Error("runId is not an opaque id");
+	return checkedStatePath(cwd, "worktrees", runId);
 }
 
 export function branchFor(runId: string): string {

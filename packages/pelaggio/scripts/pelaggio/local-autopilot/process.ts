@@ -33,10 +33,12 @@ export function runLocalProcess(bin: string, args: string[], cwd: string, signal
 		child.on("error", (error) => {
 			failure = error.message;
 		});
-		child.on("close", (code) => {
-			// A child can exit while grandchildren with independent stdio still run.
-			// Kill the owned group before releasing run ownership, including on normal exit.
+		child.on("exit", () => {
+			// Descendants can keep inherited output pipes open after the direct child exits.
+			// Stop the owned group now so close can drain those pipes and release ownership.
 			if (grouped || signal?.aborted) stop(true);
+		});
+		child.on("close", (code) => {
 			if (escalation) clearTimeout(escalation);
 			signal?.removeEventListener("abort", onAbort);
 			resolve({ ok: code === 0 && !signal?.aborted && !failure, output: failure ?? output });

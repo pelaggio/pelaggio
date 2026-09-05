@@ -1,8 +1,11 @@
+import type { HarnessAction } from "./harness.js";
 import { parseArtifact, parsePauseReason, parseWorkContract } from "./parse.js";
 import { protocolProblem } from "./transport.js";
 import type { Artifact, Disposition, ExecutionAssurance, PauseReason, Problem, RunEvent, RunSnapshot, RunState, WorkContract, WorktreeRef } from "./types.js";
 
-export type ExecutionPhase = { kind: "harness" } | { kind: "verification"; forcedFailure?: string } | { kind: "verification-result"; ok: boolean; message: string };
+type AcknowledgedAction = Exclude<HarnessAction, { kind: "write" }>;
+
+export type ExecutionPhase = { kind: "action"; action: AcknowledgedAction } | { kind: "harness" } | { kind: "verification"; forcedFailure?: string } | { kind: "verification-result"; ok: boolean; message: string; forcedFailure?: string };
 
 export interface FoldedRun {
 	phase: ExecutionPhase;
@@ -10,6 +13,15 @@ export interface FoldedRun {
 	snapshot: RunSnapshot;
 	nextFakeIndex: number;
 	acknowledgedSeq: number;
+}
+
+function acknowledgedAction(value: unknown): AcknowledgedAction {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid acknowledged harness action");
+	const candidate = value as Record<string, unknown>;
+	if (candidate.kind === "complete") return { kind: "complete" };
+	if ((candidate.kind === "crash" || candidate.kind === "verify-fail") && typeof candidate.message === "string") return { kind: candidate.kind, message: candidate.message };
+	if (candidate.kind === "decision" && typeof candidate.code === "string" && typeof candidate.message === "string") return { kind: "decision", code: candidate.code, message: candidate.message };
+	throw new Error("invalid acknowledged harness action");
 }
 
 function asWorktree(value: unknown): WorktreeRef | undefined {
@@ -61,13 +73,14 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			state = "running";
 		} else if (event.type === "pelaggio.local-autopilot.fake-progress") {
 			if (typeof p.nextIndex === "number") nextFakeIndex = p.nextIndex;
+			if (p.action !== undefined) phase = { kind: "action", action: acknowledgedAction(p.action) };
 		} else if (event.type === "pelaggio.local-autopilot.harness-finished") {
 			harnessCalls += 1;
 			phase = { kind: "verification", ...(typeof p.forcedFailure === "string" ? { forcedFailure: p.forcedFailure } : {}) };
 		} else if (event.type === "pelaggio.local-autopilot.verification-finished") {
 			if (typeof p.ok !== "boolean") throw new Error("verification-finished missing result");
 			const message = typeof p.message === "string" ? p.message : p.ok ? "verification passed" : "verification failed";
-			phase = { kind: "verification-result", ok: p.ok, message };
+			phase = { kind: "verification-result", ok: p.ok, message, ...(typeof p.forcedFailure === "string" ? { forcedFailure: p.forcedFailure } : {}) };
 			if (!p.ok) verificationFailure = message;
 			if (p.ok === true) verificationPasses += 1;
 			if (p.artifact !== undefined) {
@@ -81,7 +94,7 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			if (typeof p.message === "string") verificationFailure = p.message;
 		} else if (event.type === "pelaggio.local-autopilot.run-resumed") {
 			if (state !== "paused") throw new Error(`cannot resume a ${state} run`);
-			if (pauseReason?.code === "verification_budget") phase = { kind: "harness" };
+			if (pauseReason?.code === "verification_budget" || pauseReason?.code === "decision_required") phase = { kind: "harness" };
 			state = "running";
 			pauseReason = undefined;
 		} else if (event.type === "pelaggio.local-autopilot.run-paused") {
