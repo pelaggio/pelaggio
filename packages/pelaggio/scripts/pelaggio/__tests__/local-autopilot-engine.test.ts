@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { cancelRun, continueRun, getRun, startRun } from "../local-autopilot/engine.js";
 import type { HarnessContext } from "../local-autopilot/harness.js";
 import { eventsPath } from "../local-autopilot/paths.js";
 import { presentHuman, presentJson } from "../local-autopilot/present.js";
 import { looksLikeAnsi } from "../local-autopilot/transport.js";
+import { digestOf } from "../local-autopilot/work-contract.js";
 
 const temps: string[] = [];
 after(() => {
@@ -46,6 +48,48 @@ describe("local autopilot engine", () => {
 		assert.equal(readFileSync(join(cwd, "README.md"), "utf8"), "consumer\n");
 	});
 
+	it("rejects symlink writes without acknowledging them, then resumes the same action", async () => {
+		const { cwd } = consumer(`      - { action: write, path: escape/victim, content: "new" }\n      - { action: complete }\n`);
+		const outside = mkdtempSync(join(tmpdir(), "pelaggio-outside-"));
+		temps.push(outside);
+		writeFileSync(join(outside, "victim"), "original");
+		symlinkSync(outside, join(cwd, "escape"), "dir");
+		execFileSync("git", ["add", "escape"], { cwd });
+		execFileSync("git", ["commit", "-m", "tracked symlink"], { cwd });
+		const failed = await startRun(cwd, { task: { text: "Write victim" }, nonInteractive: true });
+		assert.equal(failed.ok, false);
+		if (failed.ok) return;
+		assert.match(failed.problem.message, /symlink/);
+		assert.equal(readFileSync(join(outside, "victim"), "utf8"), "original");
+		assert.ok(failed.problem.runId);
+		const shown = getRun(cwd, failed.problem.runId);
+		assert.ok(shown.ok);
+		assert.ok(shown.value.worktree?.path);
+		const worktree = shown.value.worktree.path;
+		rmSync(join(worktree, "escape"));
+		const resumed = await continueRun(cwd, failed.problem.runId);
+		assert.ok(resumed.ok);
+		assert.equal(resumed.value.disposition, "ready_for_review");
+		assert.equal(readFileSync(join(worktree, "escape", "victim"), "utf8"), "new");
+	});
+
+	it("persists independently retrievable verification attempts with matching digests", async () => {
+		const { cwd } = consumer(`      - { action: verify-fail, message: "tests red" }\n${SUCCESS_SCRIPT}`);
+		const result = await startRun(cwd, { task: { text: "Add hello" }, nonInteractive: true });
+		assert.ok(result.ok);
+		const artifacts = result.value.artifacts.filter((artifact) => artifact.kind === "verification");
+		assert.equal(artifacts.length, 2);
+		assert.notEqual(artifacts[0]?.uri, artifacts[1]?.uri);
+		for (const [index, artifact] of artifacts.entries()) {
+			const content = readFileSync(fileURLToPath(artifact.uri), "utf8");
+			assert.deepEqual(digestOf(content), artifact.digest);
+			const evidence = JSON.parse(content) as { ok: boolean; command: string; revision: string };
+			assert.equal(evidence.ok, index === 1);
+			assert.equal(evidence.command, "git diff --check HEAD");
+			assert.match(evidence.revision, /^[a-f0-9]{40}$/);
+		}
+	});
+
 	it("invalid config fails before repository mutation", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "pelaggio-la-"));
 		temps.push(cwd);
@@ -76,6 +120,139 @@ describe("local autopilot engine", () => {
 		assert.equal(shown.ok, true);
 		if (!shown.ok) return;
 		assert.equal(shown.value.runId, result.value.runId);
+	});
+
+	it("decision pause then resume yields a valid ready_for_review snapshot", async () => {
+		const { cwd } = consumer(`      - { action: decision, code: choose-export, message: "Choose the public export name." }\n${SUCCESS_SCRIPT}`);
+		const paused = await startRun(cwd, { task: { text: "Add hello" }, nonInteractive: true });
+		assert.equal(paused.ok, true);
+		if (!paused.ok) return;
+		assert.equal(paused.value.state, "paused");
+		assert.equal(paused.value.pauseReason?.code, "decision_required");
+		assert.equal(
+			paused.value.problems.some((problem) => problem.type === "decision"),
+			true,
+		);
+		const resumed = await continueRun(cwd, paused.value.runId);
+		assert.equal(resumed.ok, true);
+		if (!resumed.ok) return;
+		assert.equal(resumed.value.disposition, "ready_for_review");
+		assert.equal(
+			resumed.value.problems.some((problem) => problem.type === "decision"),
+			false,
+		);
+		const shown = getRun(cwd, resumed.value.runId);
+		assert.equal(shown.ok, true);
+		if (!shown.ok) return;
+		assert.equal(shown.value.disposition, "ready_for_review");
+		assert.equal(shown.value.state, "completed");
+	});
+
+	it("verification-budget pause then passing resume yields a valid ready_for_review snapshot", async () => {
+		const { cwd } = consumer(`      - { action: verify-fail, message: "tests red" }\n${SUCCESS_SCRIPT}`, 0);
+		const paused = await startRun(cwd, { task: { text: "Add hello" }, nonInteractive: true });
+		assert.equal(paused.ok, true);
+		if (!paused.ok) return;
+		assert.equal(paused.value.state, "paused");
+		assert.equal(paused.value.pauseReason?.code, "verification_budget");
+		assert.equal(
+			paused.value.problems.some((problem) => problem.type === "verification"),
+			true,
+		);
+		const resumed = await continueRun(cwd, paused.value.runId);
+		assert.equal(resumed.ok, true);
+		if (!resumed.ok) return;
+		assert.equal(resumed.value.disposition, "ready_for_review");
+		assert.equal(
+			resumed.value.problems.some((problem) => problem.type === "verification"),
+			false,
+		);
+		const shown = getRun(cwd, resumed.value.runId);
+		assert.equal(shown.ok, true);
+		if (!shown.ok) return;
+		assert.equal(shown.value.disposition, "ready_for_review");
+		assert.equal(
+			shown.value.artifacts.some((artifact) => artifact.kind === "verification"),
+			true,
+		);
+	});
+
+	it("repeated decision pauses drop only the live pause problem and keep separately emitted ones", async () => {
+		const { cwd } = consumer(`      - { action: decision, code: choose-export, message: "Choose the public export name." }\n      - { action: decision, code: choose-style, message: "Choose a style." }\n${SUCCESS_SCRIPT}`);
+		const first = await startRun(cwd, { task: { text: "Add hello" }, nonInteractive: true });
+		assert.equal(first.ok, true);
+		if (!first.ok) return;
+		assert.equal(first.value.pauseReason?.code, "decision_required");
+		const lastSeq = JSON.parse(readFileSync(eventsPath(cwd, first.value.runId), "utf8").trim().split("\n").at(-1) ?? "{}") as { seq?: number };
+		appendFileSync(
+			eventsPath(cwd, first.value.runId),
+			`${JSON.stringify({
+				schemaVersion: 1,
+				eventId: "01ARZ3NDEKTSV4RRFFQ69G5FAZ",
+				runId: first.value.runId,
+				seq: (lastSeq.seq ?? 0) + 1,
+				type: "pelaggio.local-autopilot.problem",
+				at: "2026-09-04T12:00:06.000Z",
+				payload: {
+					problem: {
+						schemaVersion: 1,
+						type: "protocol",
+						code: "note",
+						message: "operator note",
+						retryable: false,
+						runId: first.value.runId,
+					},
+				},
+			})}\n`,
+		);
+		const noted = getRun(cwd, first.value.runId);
+		assert.equal(noted.ok, true);
+		if (!noted.ok) return;
+		assert.equal(
+			noted.value.problems.some((problem) => problem.type === "decision"),
+			true,
+		);
+		assert.equal(
+			noted.value.problems.some((problem) => problem.code === "note"),
+			true,
+		);
+		const second = await continueRun(cwd, first.value.runId);
+		assert.equal(second.ok, true);
+		if (!second.ok) return;
+		assert.equal(second.value.state, "paused");
+		assert.equal(second.value.pauseReason?.code, "decision_required");
+		assert.equal(
+			second.value.problems.some((problem) => problem.code === "choose-style"),
+			true,
+		);
+		assert.equal(
+			second.value.problems.some((problem) => problem.code === "choose-export"),
+			false,
+		);
+		assert.equal(
+			second.value.problems.some((problem) => problem.code === "note"),
+			true,
+		);
+		const completed = await continueRun(cwd, second.value.runId);
+		assert.equal(completed.ok, true);
+		if (!completed.ok) return;
+		assert.equal(completed.value.disposition, "ready_for_review");
+		assert.equal(
+			completed.value.problems.some((problem) => problem.type === "decision"),
+			false,
+		);
+		assert.equal(
+			completed.value.problems.some((problem) => problem.code === "note"),
+			true,
+		);
+		const shown = getRun(cwd, completed.value.runId);
+		assert.equal(shown.ok, true);
+		if (!shown.ok) return;
+		assert.equal(shown.value.disposition, "ready_for_review");
+		assert.equal(
+			shown.value.problems.some((problem) => problem.code === "note"),
+			true,
+		);
 	});
 
 	it("failed verification repairs within the bound or pauses for budget exhaustion", async () => {
@@ -162,7 +339,7 @@ describe("local autopilot engine", () => {
 		assert.equal(paused.value.pauseReason?.code, "interrupted");
 	});
 
-	it("refuses cancellation while the run lease is active instead of racing completion", async () => {
+	it("refuses cancellation and resume even after the live run lease deadline", async (t) => {
 		const { cwd } = consumer(SUCCESS_SCRIPT);
 		const controller = new AbortController();
 		let entered!: () => void;
@@ -180,11 +357,20 @@ describe("local autopilot engine", () => {
 		const pending = startRun(cwd, { task: { text: "Add hello" }, nonInteractive: true, requestId: "active-run" }, { signal: controller.signal, adapters: { fake: adapter, grok: adapter as never } });
 		await active;
 		const index = JSON.parse(readFileSync(join(cwd, ".pelaggio", "runs", "by-request", "active-run"), "utf8")) as { runId: string };
-		const cancelled = await cancelRun(cwd, index.runId);
-		assert.equal(cancelled.ok, false);
-		if (!cancelled.ok) assert.equal(cancelled.problem.code, "run-active");
-		controller.abort();
-		await pending;
+		const later = Date.now() + 31 * 60_000;
+		t.mock.method(Date, "now", () => later);
+		try {
+			const cancelled = await cancelRun(cwd, index.runId);
+			assert.equal(cancelled.ok, false);
+			if (!cancelled.ok) assert.equal(cancelled.problem.code, "run-active");
+			const resumed = await continueRun(cwd, index.runId);
+			assert.equal(resumed.ok, false);
+			if (!resumed.ok) assert.equal(resumed.problem.code, "run-active");
+		} finally {
+			t.mock.restoreAll();
+			controller.abort();
+			await pending;
+		}
 	});
 
 	it("turns a truncated journal tail into an inspectable protocol problem", async () => {

@@ -179,3 +179,13 @@ test("serializes across real processes (multi-process race)", async () => {
 	assert.deepEqual(codes, [0, 0, 0, 0], "all contender processes must exit clean");
 	assert.equal(readFileSync(counterPath(dir), "utf-8"), "20", "4 procs × 5 locked increments, none lost");
 });
+
+test("execution locks retain expired owners until explicit recovery", async () => {
+	const dir = seedDir();
+	mkdirSync(resolve(dir, "lock"), { recursive: true });
+	const token = `${Date.now() - 1_000}:${process.pid}-execution`;
+	writeFileSync(lockPath(dir), token);
+	const result = await tryWithFileLock(lockPath(dir), () => assert.fail("must not steal execution"), { ...TRY_OPTS, reclaimStale: false });
+	assert.deepEqual(result, { ran: false });
+	assert.equal(readFileSync(lockPath(dir), "utf8"), token);
+});

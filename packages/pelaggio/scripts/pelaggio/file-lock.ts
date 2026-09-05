@@ -149,9 +149,10 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T> | T, op
  * run `fn` under the lock or report contention without waiting. Used by the per-worker
  * post-cycle review drain (#387), whose caller decides whether contention can safely skip or
  * must wait and re-list. Returns `{ ran: true, value }` when it held the lock, `{ ran: false }`
- * when a live holder owns it.
+ * when a live holder owns it. Set reclaimStale:false for long executions: even a dead
+ * parent can leave mutating children, so their orphan recovery must be manual.
  */
-export async function tryWithFileLock<T>(path: string, fn: () => Promise<T> | T, opts: { label: string; staleMs: number }): Promise<{ ran: true; value: T } | { ran: false }> {
+export async function tryWithFileLock<T>(path: string, fn: () => Promise<T> | T, opts: { label: string; staleMs: number; reclaimStale?: boolean }): Promise<{ ran: true; value: T } | { ran: false }> {
 	const { staleMs } = opts;
 	mkdirSync(dirname(path), { recursive: true });
 	const token = `${Date.now() + staleMs}:${process.pid}-${randomBytes(8).toString("hex")}`;
@@ -160,7 +161,7 @@ export async function tryWithFileLock<T>(path: string, fn: () => Promise<T> | T,
 			writeFileSync(path, token, { flag: "wx" }); // O_EXCL: acquire + identity + expiry
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-			if (attempt === 0) {
+			if (attempt === 0 && opts.reclaimStale !== false) {
 				stealIfStale(path); // reclaim an orphaned (crashed-holder) lock, then retry once
 				continue;
 			}

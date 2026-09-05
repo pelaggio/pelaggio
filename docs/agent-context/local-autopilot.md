@@ -25,3 +25,5 @@ v0: `fake` (deterministic, packed-tarball suite), `grok`, and `codex`. Codex aut
 ## CLI dispatch
 
 `bin/pelaggio.js` routes `run --file|--text|--stdin` plus `resume` / `show` / `cancel` / `doctor` to `local-autopilot-cli.ts`. Other `run` flags remain the dogfood pipeline. Prerelease publishes use a signed `v*-next*` tag and `npm publish --tag next --provenance`.
+
+Run mutations share a non-stealable execution lease. Normal completion and interruption release it; after a crash the refusal names the preserved run/worktree and lease file. Verify the old provider processes have stopped before removing that lease and resuming. Verification attempts are immutable local JSON artifacts addressed by their digest; snapshot artifact URIs resolve to the stored result, command, revision, and dirty-state disclosure.

@@ -76,7 +76,6 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			const parsed = parsePauseReason(p.pauseReason);
 			if (!parsed.ok) throw new Error(parsed.problem.message);
 			pauseReason = parsed.value;
-			if (parsed.value.problem) problems.push(parsed.value.problem);
 		} else if (event.type === "pelaggio.local-autopilot.run-completed") {
 			state = "completed";
 			pauseReason = undefined;
@@ -95,6 +94,8 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 
 	const last = events[events.length - 1];
 	if (!last) throw new Error("journal is empty");
+	// Pause-reason problems are live only while paused; separately emitted problem events persist.
+	const liveProblems = pauseReason?.problem ? [...problems, pauseReason.problem] : problems;
 	const snapshot: RunSnapshot = {
 		schemaVersion: 1,
 		runId: started.runId,
@@ -104,7 +105,7 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 		updatedAt: last.at,
 		execution,
 		artifacts,
-		problems,
+		problems: liveProblems,
 		...(requestId ? { requestId } : {}),
 		...(pauseReason ? { pauseReason } : {}),
 		...(disposition ? { disposition } : {}),

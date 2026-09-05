@@ -11,7 +11,7 @@ export type GrokRunner = (bin: string, args: string[], cwd: string, signal?: Abo
 
 const runGrok: GrokRunner = (bin, args, cwd, signal) => {
 	return new Promise((resolve) => {
-		const child = spawn(bin, args, { cwd, env: process.env });
+		const child = spawn(bin, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
 		let output = "";
 		const onAbort = (): void => {
 			child.kill("SIGINT");

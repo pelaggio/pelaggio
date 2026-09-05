@@ -5,7 +5,7 @@ export type CodexRunner = (bin: string, args: string[], cwd: string, signal?: Ab
 
 const runCodex: CodexRunner = (bin, args, cwd, signal) =>
 	new Promise((resolve) => {
-		const child = spawn(bin, args, { cwd, env: process.env });
+		const child = spawn(bin, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
 		let output = "";
 		const onAbort = (): void => {
 			child.kill("SIGINT");
