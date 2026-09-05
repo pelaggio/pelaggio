@@ -985,7 +985,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 					parkSignal: payload.child,
 					foreignRootDenial: seatDenial,
 				}),
-			shouldStop: ({ payload }) => payload.child.parked,
+			shouldStop: ({ payload }, result) => payload.child.parked || (result.status === "fulfilled" && result.value.result.subtype === "error_rate_limit"),
 		});
 		mergeChildParkSignals(
 			signal,
