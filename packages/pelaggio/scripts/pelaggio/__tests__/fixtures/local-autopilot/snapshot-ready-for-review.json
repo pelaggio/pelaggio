@@ -1,0 +1,52 @@
+{
+	"schemaVersion": 1,
+	"runId": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+	"state": "completed",
+	"disposition": "ready_for_review",
+	"workContract": {
+		"schemaVersion": 1,
+		"workContractId": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		"title": "Add a hello export",
+		"body": "Create src/hello.ts that exports hello = 1.",
+		"source": { "kind": "stdin" },
+		"digest": {
+			"algorithm": "sha256",
+			"value": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+		},
+		"createdAt": "2026-09-04T12:00:00.000Z"
+	},
+	"createdAt": "2026-09-04T12:00:00.000Z",
+	"updatedAt": "2026-09-04T12:01:00.000Z",
+	"execution": { "mode": "host", "contained": false, "effectsEnforced": false },
+	"durationMs": 60000,
+	"worktree": { "branch": "pelaggio/01ARZ3NDEKTSV4RRFFQ69G5FAV" },
+	"artifacts": [
+		{
+			"kind": "verification",
+			"uri": "file:.pelaggio/verification.json",
+			"mediaType": "application/json",
+			"digest": {
+				"algorithm": "sha256",
+				"value": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+			}
+		},
+		{
+			"kind": "diff",
+			"uri": "file:src/hello.ts",
+			"mediaType": "text/plain",
+			"digest": {
+				"algorithm": "sha256",
+				"value": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+			}
+		}
+	],
+	"problems": [],
+	"metrics": {
+		"schemaVersion": 1,
+		"durationMs": 60000,
+		"harnessCalls": 1,
+		"verificationPasses": 1,
+		"repairAttempts": 0,
+		"usage": { "inputTokens": 10, "outputTokens": 20 }
+	}
+}

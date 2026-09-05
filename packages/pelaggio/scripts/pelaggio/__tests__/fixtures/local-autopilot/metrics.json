@@ -1,0 +1,8 @@
+{
+	"schemaVersion": 1,
+	"durationMs": 1200,
+	"harnessCalls": 2,
+	"verificationPasses": 1,
+	"repairAttempts": 1,
+	"usage": { "costUsd": 0.01 }
+}

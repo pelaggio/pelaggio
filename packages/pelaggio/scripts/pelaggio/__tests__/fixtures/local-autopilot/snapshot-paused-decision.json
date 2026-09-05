@@ -1,0 +1,43 @@
+{
+	"schemaVersion": 1,
+	"runId": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+	"state": "paused",
+	"pauseReason": {
+		"code": "decision_required",
+		"message": "Choose the public export name.",
+		"problem": {
+			"schemaVersion": 1,
+			"type": "decision",
+			"code": "choose-export",
+			"message": "Choose the public export name.",
+			"retryable": true,
+			"runId": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+		}
+	},
+	"workContract": {
+		"schemaVersion": 1,
+		"workContractId": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		"title": "Add a hello export",
+		"body": "Create src/hello.ts that exports hello = 1.",
+		"source": { "kind": "text" },
+		"digest": {
+			"algorithm": "sha256",
+			"value": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+		},
+		"createdAt": "2026-09-04T12:00:00.000Z"
+	},
+	"createdAt": "2026-09-04T12:00:00.000Z",
+	"updatedAt": "2026-09-04T12:00:05.000Z",
+	"execution": { "mode": "host", "contained": false, "effectsEnforced": false },
+	"artifacts": [],
+	"problems": [
+		{
+			"schemaVersion": 1,
+			"type": "decision",
+			"code": "choose-export",
+			"message": "Choose the public export name.",
+			"retryable": true,
+			"runId": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+		}
+	]
+}

@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"eventId": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+	"runId": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+	"seq": 0,
+	"type": "pelaggio.local-autopilot.run-started",
+	"at": "2026-09-04T12:00:00.000Z",
+	"payload": {}
+}

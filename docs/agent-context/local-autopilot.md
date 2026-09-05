@@ -1,0 +1,23 @@
+# Local Autopilot Contract v0
+
+Construction home for [ADR-0029](../decisions/0029-local-autopilot-contract.md) (issue #776). The schemas and executable invariants under `packages/pelaggio/scripts/pelaggio/local-autopilot/` are normative; this file points at them.
+
+## Public object
+
+A `Run` is the durable object. Operations: `startRun`, `getRun`, `continueRun`, `cancelRun`. CLI `run | resume | show | doctor` are projections. JSON Schema 2020-12 lives in `local-autopilot/schemas/v0.schema.json`. Runtime parsing is fail-closed TypeScript (`parse.ts`); Ajv agreement is a CI test, not a published dependency.
+
+## Lifecycle
+
+`state`: `queued | running | paused | completed`. `pauseReason` iff paused. `disposition` iff completed. Success is `ready_for_review`. `accepted` and `shipped` are invalid. `lifecycle.ts` is the state machine.
+
+## Dispatch
+
+`pelaggio run --file|--text|--stdin …` starts a local-autopilot Run. `pelaggio run` with pipeline flags (`--item`, `--cycles`, `--parallel`, …) remains the dogfood pipeline. `resume` / `show` / `doctor` are local-autopilot only.
+
+## Authority
+
+The run journal is authoritative. Snapshots and metrics are derived. Resume is checkpoint-restart (ADR-0019). `ready_for_review` requires configured verification evidence. Pelaggio performs no push/PR/merge/release/deploy effect. Uncontained host harness execution requires explicit CLI or uncommitted-policy consent and reports `effectsEnforced: false`.
+
+## Adapters
+
+v0: `fake` (deterministic, packed-tarball suite), `grok`, and `codex`. Codex auto mode uses its `--approve-for-me` review path with the `workspace-write` sandbox; Pelaggio still reports host execution because that provider-owned sandbox is not the v0 containment boundary. Pelaggio does not scrape harness prose for the public result.

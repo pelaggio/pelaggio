@@ -27,6 +27,7 @@ flowchart TB
   CLM_0020["architectural-intent-single-source"]
   CLM_0021["no-undeclared-egress"]
   CLM_0022["value-and-negotiability-are-human"]
+  CLM_0023["local-autopilot-success-is-ready-for-review"]
   CLM_0007 -->|specializes| CLM_0006
   CLM_0009 -->|specializes| CLM_0019
   CLM_0010 -->|specializes| CLM_0019
