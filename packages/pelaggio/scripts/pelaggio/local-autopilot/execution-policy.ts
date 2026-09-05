@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
+import { localGit } from "./git.js";
 import { configPath, policyDir } from "./paths.js";
 import { configProblem } from "./transport.js";
 import type { ExecutionAssurance, LocalConfig, ParseResult } from "./types.js";
@@ -16,7 +16,7 @@ export function resolveExecutionAssurance(cwd: string, config: LocalConfig, allo
 		if (lstatSync(policyDir(cwd)).isSymbolicLink() || lstatSync(configPath(cwd)).isSymbolicLink()) {
 			return { ok: false, problem: configProblem("host-consent-required", "symlink policy cannot authorize host execution; pass --allow-host-execution; run state is unchanged") };
 		}
-		const git = (args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+		const git = (args: string[]): string => localGit(cwd, args);
 		const root = git(["rev-parse", "--show-toplevel"]).trim();
 		const path = relative(root, resolve(configPath(cwd)))
 			.split(sep)

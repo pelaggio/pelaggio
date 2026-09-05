@@ -1,9 +1,11 @@
-import { encodeJsonStdout } from "./transport.js";
+import { parseProblem, parseRunSnapshot } from "./parse.js";
+import { encodeJsonStdout, protocolProblem } from "./transport.js";
 import type { Problem, RunSnapshot } from "./types.js";
 import { PROTOCOL_PROBLEM_TYPES } from "./types.js";
 
 export function presentJson(value: RunSnapshot | Problem): string {
-	return encodeJsonStdout(value);
+	const parsed = "state" in value ? parseRunSnapshot(value) : parseProblem(value);
+	return encodeJsonStdout(parsed.ok ? parsed.value : protocolProblem("invalid-output", parsed.problem.message));
 }
 
 export function presentHuman(snapshot: RunSnapshot): string {

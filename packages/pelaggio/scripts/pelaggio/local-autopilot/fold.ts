@@ -1,5 +1,6 @@
 import type { HarnessAction } from "./harness.js";
-import { parseArtifact, parsePauseReason, parseWorkContract } from "./parse.js";
+import { isBlockingProblem } from "./lifecycle.js";
+import { parseArtifact, parsePauseReason, parseProblem, parseWorkContract } from "./parse.js";
 import { protocolProblem } from "./transport.js";
 import type { Artifact, Disposition, ExecutionAssurance, PauseReason, Problem, RunEvent, RunSnapshot, RunState, WorkContract, WorktreeRef } from "./types.js";
 
@@ -51,6 +52,7 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 	const workContract: WorkContract = contract.value;
 	let phase: ExecutionPhase = { kind: "harness" };
 	let verificationFailure: string | undefined;
+	let currentVerificationArtifact = false;
 	let state: RunState = "queued";
 	let pauseReason: PauseReason | undefined;
 	let disposition: Disposition | undefined;
@@ -72,13 +74,20 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			if (index !== 0) throw new Error("journal repeats run-started");
 			state = "running";
 		} else if (event.type === "pelaggio.local-autopilot.fake-progress") {
+			if (state !== "running" || phase.kind !== "harness") throw new Error("harness progress outside the running harness phase");
+			currentVerificationArtifact = false;
 			if (typeof p.nextIndex === "number") nextFakeIndex = p.nextIndex;
 			if (p.action !== undefined) phase = { kind: "action", action: acknowledgedAction(p.action) };
 		} else if (event.type === "pelaggio.local-autopilot.harness-finished") {
+			if (state !== "running" || !(phase.kind === "harness" || (phase.kind === "action" && (phase.action.kind === "complete" || phase.action.kind === "verify-fail")))) throw new Error("harness-finished outside the running harness phase");
+			currentVerificationArtifact = false;
 			harnessCalls += 1;
 			phase = { kind: "verification", ...(typeof p.forcedFailure === "string" ? { forcedFailure: p.forcedFailure } : {}) };
 		} else if (event.type === "pelaggio.local-autopilot.verification-finished") {
+			if (state !== "running" || (phase.kind !== "verification" && phase.kind !== "verification-result")) throw new Error("verification-finished outside the running verification phase");
 			if (typeof p.ok !== "boolean") throw new Error("verification-finished missing result");
+			if (p.ok && (phase.forcedFailure !== undefined || p.forcedFailure !== undefined)) throw new Error("forced verification failure cannot become success");
+			currentVerificationArtifact = false;
 			const message = typeof p.message === "string" ? p.message : p.ok ? "verification passed" : "verification failed";
 			phase = { kind: "verification-result", ok: p.ok, message, ...(typeof p.forcedFailure === "string" ? { forcedFailure: p.forcedFailure } : {}) };
 			if (!p.ok) verificationFailure = message;
@@ -87,14 +96,20 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 				const parsed = parseArtifact(p.artifact);
 				if (!parsed.ok) throw new Error(parsed.problem.message);
 				artifacts.push(parsed.value);
+				currentVerificationArtifact = parsed.value.kind === "verification";
 			}
 		} else if (event.type === "pelaggio.local-autopilot.repair-attempted") {
+			if (state !== "running" || phase.kind !== "verification-result" || phase.ok) throw new Error("repair-attempted without a running failed verification");
+			currentVerificationArtifact = false;
 			repairAttempts += 1;
 			phase = { kind: "harness" };
 			if (typeof p.message === "string") verificationFailure = p.message;
 		} else if (event.type === "pelaggio.local-autopilot.run-resumed") {
 			if (state !== "paused") throw new Error(`cannot resume a ${state} run`);
-			if (pauseReason?.code === "verification_budget" || pauseReason?.code === "decision_required") phase = { kind: "harness" };
+			if (pauseReason?.code === "verification_budget" || pauseReason?.code === "decision_required") {
+				phase = { kind: "harness" };
+				currentVerificationArtifact = false;
+			}
 			state = "running";
 			pauseReason = undefined;
 		} else if (event.type === "pelaggio.local-autopilot.run-paused") {
@@ -104,6 +119,9 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			if (!parsed.ok) throw new Error(parsed.problem.message);
 			pauseReason = parsed.value;
 		} else if (event.type === "pelaggio.local-autopilot.run-completed") {
+			if (state !== "running" && !(state === "paused" && p.disposition === "cancelled")) throw new Error(`cannot complete a ${state} run without resuming it`);
+			if (p.disposition === "ready_for_review" && (phase.kind !== "verification-result" || !phase.ok || !currentVerificationArtifact || isBlockingProblem({ problems })))
+				throw new Error("ready_for_review requires successful current verification evidence and no unresolved blocking problems");
 			state = "completed";
 			pauseReason = undefined;
 			if (p.disposition === "ready_for_review" || p.disposition === "cancelled" || p.disposition === "failed" || p.disposition === "blocked" || p.disposition === "budget_exhausted") {
@@ -112,7 +130,9 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 				throw new Error("completed event missing disposition");
 			}
 		} else if (event.type === "pelaggio.local-autopilot.problem") {
-			if (p.problem && typeof p.problem === "object") problems.push(p.problem as Problem);
+			const parsed = parseProblem(p.problem);
+			if (!parsed.ok) throw new Error(parsed.problem.message);
+			problems.push(parsed.value);
 		}
 		if (typeof p.durationMs === "number") durationMs = p.durationMs;
 		if (p.worktree) worktree = asWorktree(p.worktree) ?? worktree;

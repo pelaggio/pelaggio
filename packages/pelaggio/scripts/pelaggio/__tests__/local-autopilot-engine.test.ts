@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { cancelRun, continueRun, getRun, startRun } from "../local-autopilot/engine.js";
 import type { HarnessContext } from "../local-autopilot/harness.js";
 import { readRunEvents } from "../local-autopilot/journal.js";
-import { eventsPath } from "../local-autopilot/paths.js";
+import { eventsPath, requestLockPath } from "../local-autopilot/paths.js";
 import { presentHuman, presentJson } from "../local-autopilot/present.js";
 import { looksLikeAnsi } from "../local-autopilot/transport.js";
 import { digestOf } from "../local-autopilot/work-contract.js";
@@ -35,6 +35,23 @@ function consumer(script: string, maxRepairs = 1): { cwd: string; ticket: string
 }
 
 const SUCCESS_SCRIPT = `      - { action: write, path: src/hello.ts, content: "export const hello = 1;" }\n      - { action: complete }\n`;
+
+it("request preparation never steals an expired claim and a later retry succeeds", { timeout: 15_000 }, async () => {
+	const { cwd } = consumer(SUCCESS_SCRIPT);
+	const requestId = "slow-checkout";
+	const lock = requestLockPath(cwd, digestOf(requestId).value);
+	mkdirSync(join(cwd, ".pelaggio", "runs", "request-locks"), { recursive: true });
+	const owner = `${Date.now() - 60_000}:checkout-still-running`;
+	writeFileSync(lock, owner);
+	await assert.rejects(startRun(cwd, { task: { text: "Task" }, requestId, nonInteractive: true }), /state preserved/);
+	assert.equal(readFileSync(lock, "utf8"), owner);
+	assert.equal(existsSync(join(cwd, ".pelaggio", "runs", "by-request", requestId)), false);
+	assert.equal(existsSync(join(cwd, ".pelaggio", "worktrees")), false);
+	rmSync(lock);
+	const result = await startRun(cwd, { task: { text: "Task" }, requestId, nonInteractive: true });
+	assert.ok(result.ok);
+	if (result.ok) assert.equal(result.value.disposition, "ready_for_review");
+});
 
 describe("local autopilot engine", () => {
 	it("resume rejects a substituted worktree before changing the journal and can retry after restoration", async () => {

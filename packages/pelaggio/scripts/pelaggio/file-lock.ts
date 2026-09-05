@@ -89,6 +89,8 @@ export interface FileLockOptions {
 	staleMs: number;
 	/** How long a waiter blocks before giving up (subject to the stale-steal extension below). */
 	acquireTimeoutMs: number;
+	/** False when expiry cannot prove that the owner and its children stopped mutating. */
+	reclaimStale?: boolean;
 }
 
 /**
@@ -116,6 +118,11 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T> | T, op
 			break;
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+			if (opts.reclaimStale === false) {
+				if (Date.now() > deadline) throw new Error(`${label}: still owned at ${path}; state preserved; retry after the owner finishes. Remove an orphaned lock only after confirming its processes have stopped.`);
+				await sleep(BACKOFF_MS + Math.floor(Math.random() * BACKOFF_MS));
+				continue;
+			}
 			if (Date.now() > deadline && Date.now() > hardCap) {
 				throw new Error(`${label}: timed out waiting on ${path} — if no other process is holding it, delete the lock file`);
 			}

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -6,6 +5,7 @@ import { parseArgs } from "node:util";
 import { loadLocalConfig } from "./local-autopilot/config-load.js";
 import { cancelRun, continueRun, getRun, startRun } from "./local-autopilot/engine.js";
 import { resolveExecutionAssurance } from "./local-autopilot/execution-policy.js";
+import { localGit } from "./local-autopilot/git.js";
 import { configPath } from "./local-autopilot/paths.js";
 import { exitCodeFor, exitCodeForProblem, presentHuman, presentJson, presentProblemHuman } from "./local-autopilot/present.js";
 import { protocolProblem } from "./local-autopilot/transport.js";
@@ -111,7 +111,7 @@ function doctorCommand(argv: string[]): number {
 	const json = !!parsed.values.json;
 	const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
 	try {
-		execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd(), encoding: "utf8" });
+		localGit(process.cwd(), ["rev-parse", "--show-toplevel"]);
 		checks.push({ name: "git", ok: true, detail: "repository" });
 	} catch {
 		checks.push({ name: "git", ok: false, detail: "not a git repository" });

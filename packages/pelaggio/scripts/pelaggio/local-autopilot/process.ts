@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
+import { localGitEnv } from "./git.js";
 
 /** One cancellation boundary for provider and verification children owned by a local run. */
 export function runLocalProcess(bin: string, args: string[], cwd: string, signal?: AbortSignal, options: { shell?: boolean } = {}): Promise<{ ok: boolean; output: string }> {
 	if (signal?.aborted) return Promise.resolve({ ok: false, output: "interrupted" });
 	return new Promise((resolve) => {
 		const grouped = process.platform !== "win32";
-		const child = spawn(bin, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached: grouped, shell: options.shell ?? false });
+		const child = spawn(bin, args, { cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"], detached: grouped, shell: options.shell ?? false });
 		let output = "";
 		let failure: string | undefined;
 		let escalation: ReturnType<typeof setTimeout> | undefined;

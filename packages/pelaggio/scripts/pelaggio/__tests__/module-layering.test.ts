@@ -31,6 +31,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"local-autopilot/parse.ts": 0,
 	"local-autopilot/lifecycle.ts": 0,
 	"local-autopilot/paths.ts": 0,
+	"local-autopilot/git.ts": 0,
 	"local-autopilot/present.ts": 0,
 	"local-autopilot/harness.ts": 2,
 	"local-autopilot/work-contract.ts": 1,

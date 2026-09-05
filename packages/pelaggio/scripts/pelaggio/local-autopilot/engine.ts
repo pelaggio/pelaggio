@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,9 +15,9 @@ import { applyTransition } from "./lifecycle.js";
 import { parseRunIdRequest, parseRunSnapshot, parseStartRunRequest } from "./parse.js";
 import { checkedStatePath, leasePath, requestIndexPath, requestLockPath, runDir } from "./paths.js";
 import { runLocalProcess } from "./process.js";
-import { containedPath, createRunWorktree, worktreePathFor } from "./run-worktree.js";
-import { configProblem, conflictProblem, protocolProblem } from "./transport.js";
-import type { Artifact, ExecutionAssurance, LocalConfig, ParseResult, PauseReason, Problem, RunEvent, RunSnapshot, WorkContract } from "./types.js";
+import { containedPath, createRunWorktree, runWorktreeGit, validateRunWorktree } from "./run-worktree.js";
+import { configProblem, conflictProblem, makeProblem, protocolProblem } from "./transport.js";
+import type { Artifact, ExecutionAssurance, LocalConfig, ParseResult, PauseReason, RunEvent, RunSnapshot, WorkContract } from "./types.js";
 import { buildWorkContract, digestOf } from "./work-contract.js";
 
 export interface EngineDeps {
@@ -72,21 +71,21 @@ export function getRun(cwd: string, runId: string): ParseResult<RunSnapshot> {
 	return request.ok ? snapshotOf(cwd, request.value.runId) : request;
 }
 
-function commitWorktree(worktree: string, message: string): void {
-	execFileSync("git", ["add", "-A"], { cwd: worktree, encoding: "utf8" });
-	const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: worktree, encoding: "utf8" }).trim();
+function commitWorktree(state: DriveState, message: string): void {
+	runWorktreeGit(state.cwd, state.runId, ["add", "-A"]);
+	const dirty = runWorktreeGit(state.cwd, state.runId, ["status", "--porcelain"]).trim();
 	if (!dirty) return;
-	execFileSync("git", ["commit", "-m", message, "--no-verify"], { cwd: worktree, encoding: "utf8" });
+	runWorktreeGit(state.cwd, state.runId, ["commit", "-m", message, "--no-verify"]);
 }
 
-async function runVerification(worktree: string, command: string, signal?: AbortSignal): Promise<{ ok: boolean; message: string }> {
-	const result = await runLocalProcess(command, [], worktree, signal, { shell: true });
+async function runVerification(state: DriveState, command: string, signal?: AbortSignal): Promise<{ ok: boolean; message: string }> {
+	const result = await runLocalProcess(command, [], validateRunWorktree(state.cwd, state.runId), signal, { shell: true });
 	return { ok: result.ok, message: result.ok ? "verification passed" : result.output.slice(0, 2000) || "verification failed" };
 }
 
 function verificationArtifact(state: DriveState, ok: boolean, message: string): Artifact {
-	const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: state.worktree, encoding: "utf8" }).trim();
-	const dirty = execFileSync("git", ["status", "--porcelain"], { cwd: state.worktree, encoding: "utf8" }).length > 0;
+	const revision = runWorktreeGit(state.cwd, state.runId, ["rev-parse", "HEAD"]).trim();
+	const dirty = runWorktreeGit(state.cwd, state.runId, ["status", "--porcelain"]).length > 0;
 	const content = JSON.stringify({ schemaVersion: 1, runId: state.runId, ok, message, command: state.config.autopilot?.verification?.command, revision, dirty, at: nowIso(state.deps) });
 	const digest = digestOf(content);
 	const directory = checkedStatePath(state.cwd, "runs", state.runId, "artifacts");
@@ -138,9 +137,10 @@ async function driveSteps(state: DriveState): Promise<ParseResult<RunSnapshot>> 
 	const maxRepairs = state.config.autopilot?.maxRepairs ?? 1;
 	const verifyCommand = state.config.autopilot?.verification?.command as string;
 	while (!state.deps.signal?.aborted) {
+		validateRunWorktree(state.cwd, state.runId);
 		if (state.phase.kind === "verification") {
 			const forcedFailure = state.phase.forcedFailure;
-			const verification = forcedFailure === undefined ? await runVerification(state.worktree, verifyCommand, state.deps.signal) : { ok: false, message: forcedFailure };
+			const verification = forcedFailure === undefined ? await runVerification(state, verifyCommand, state.deps.signal) : { ok: false, message: forcedFailure };
 			if (state.deps.signal?.aborted) break;
 			const artifact = verificationArtifact(state, verification.ok, verification.message);
 			emit(state, "pelaggio.local-autopilot.verification-finished", { ...verification, artifact, ...(forcedFailure === undefined ? {} : { forcedFailure }) });
@@ -159,21 +159,21 @@ async function driveSteps(state: DriveState): Promise<ParseResult<RunSnapshot>> 
 				state.phase = { kind: "harness" };
 				continue;
 			}
-			const problem: Problem = { schemaVersion: 1, type: "verification", code: "verification-budget", message: verification.message, retryable: true, runId: state.runId };
-			const pauseReason: PauseReason = { code: "verification_budget", message: verification.message, problem };
+			const problem = makeProblem({ type: "verification", code: "verification-budget", message: verification.message, retryable: true, runId: state.runId });
+			const pauseReason: PauseReason = { code: "verification_budget", message: problem.message, problem };
 			emit(state, "pelaggio.local-autopilot.run-paused", { pauseReason, durationMs: Date.now() - state.startedAt });
 			return snapshotOf(state.cwd, state.runId);
 		}
 		if (state.phase.kind === "action") {
 			const action = state.phase.action;
 			if (action.kind === "decision") {
-				const problem: Problem = { schemaVersion: 1, type: "decision", code: action.code, message: action.message, retryable: true, runId: state.runId };
-				const pauseReason: PauseReason = { code: "decision_required", message: action.message, problem };
+				const problem = makeProblem({ type: "decision", code: action.code, message: action.message, retryable: true, runId: state.runId });
+				const pauseReason: PauseReason = { code: "decision_required", message: problem.message, problem };
 				emit(state, "pelaggio.local-autopilot.run-paused", { pauseReason, durationMs: Date.now() - state.startedAt });
 				return snapshotOf(state.cwd, state.runId);
 			}
 			if (action.kind === "crash") {
-				const problem: Problem = { schemaVersion: 1, type: "harness", code: "harness-failed", message: action.message, retryable: false, runId: state.runId };
+				const problem = makeProblem({ type: "harness", code: "harness-failed", message: action.message, retryable: false, runId: state.runId });
 				emit(state, "pelaggio.local-autopilot.problem", { problem });
 				emit(state, "pelaggio.local-autopilot.run-completed", { disposition: "failed", durationMs: Date.now() - state.startedAt });
 				return snapshotOf(state.cwd, state.runId);
@@ -195,19 +195,20 @@ async function driveSteps(state: DriveState): Promise<ParseResult<RunSnapshot>> 
 			cursor: state.cursor,
 		});
 		if (state.deps.signal?.aborted) break;
+		validateRunWorktree(state.cwd, state.runId);
 		state.cursor = cursor;
 		if (action.kind === "write") {
 			const target = containedPath(state.worktree, action.path);
 			mkdirSync(dirname(target), { recursive: true });
 			writeFileSync(target, action.content);
-			commitWorktree(state.worktree, `pelaggio: ${action.path}`);
+			commitWorktree(state, `pelaggio: ${action.path}`);
 			emit(state, "pelaggio.local-autopilot.fake-progress", { nextIndex: cursor });
 			continue;
 		}
 		emit(state, "pelaggio.local-autopilot.fake-progress", { nextIndex: cursor, action });
 		state.phase = { kind: "action", action };
 	}
-	const problem: Problem = { schemaVersion: 1, type: "protocol", code: "interrupted", message: "run interrupted", retryable: true, runId: state.runId };
+	const problem = makeProblem({ type: "protocol", code: "interrupted", message: "run interrupted", retryable: true, runId: state.runId });
 	const pauseReason: PauseReason = { code: "interrupted", message: "run interrupted", problem };
 	emit(state, "pelaggio.local-autopilot.checkpointed", {});
 	emit(state, "pelaggio.local-autopilot.run-paused", { pauseReason, durationMs: Date.now() - state.startedAt });
@@ -279,7 +280,9 @@ export async function startRun(
 				},
 			};
 		};
-		const prepared = request.value.requestId ? await withFileLock(requestLockPath(cwd, digestOf(request.value.requestId).value), prepare, { label: "local-autopilot request claim", staleMs: 30_000, acquireTimeoutMs: 5_000 }) : prepare();
+		const prepared = request.value.requestId
+			? await withFileLock(requestLockPath(cwd, digestOf(request.value.requestId).value), prepare, { label: "local-autopilot request claim", staleMs: 30_000, acquireTimeoutMs: 5_000, reclaimStale: false })
+			: prepare();
 		if (prepared.kind === "existing") return prepared.result;
 		return drive(prepared.state);
 	});
@@ -299,7 +302,7 @@ export async function continueRun(cwd: string, runId: string, deps: EngineDeps =
 		if (!config.value.autopilot?.verification?.command) return { ok: false, problem: configProblem("missing-verification", "autopilot.verification.command is required to resume") };
 		let worktree: string;
 		try {
-			worktree = worktreePathFor(cwd, runId);
+			worktree = validateRunWorktree(cwd, runId);
 			if (!current.value.worktree?.path || resolve(current.value.worktree.path) !== worktree) throw new Error("journal worktree does not match this run's worktree");
 		} catch (error) {
 			return { ok: false, problem: protocolProblem("worktree", `${String(error)}; journal preserved; restore the run worktree before resuming`) };
