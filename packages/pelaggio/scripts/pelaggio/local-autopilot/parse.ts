@@ -22,6 +22,7 @@ import {
 	type ProblemType,
 	RUN_STATES,
 	type RunEvent,
+	type RunIdRequest,
 	type RunSnapshot,
 	type RunState,
 	type StartRunRequest,
@@ -177,6 +178,18 @@ export function parseStartRunRequest(value: unknown): ParseResult<StartRunReques
 		requestId = value.requestId;
 	}
 	return { ok: true, value: { schemaVersion: 1, task: task.value, nonInteractive: value.nonInteractive, ...(requestId ? { requestId } : {}) } };
+}
+
+export function parseRunIdRequest(value: unknown): ParseResult<RunIdRequest> {
+	if (!isObject(value)) return fail(protocolProblem("type", "runIdRequest must be an object"));
+	const camel = requireCamelCaseKeys(value, "runIdRequest");
+	if (!camel.ok) return camel;
+	const unknown = rejectUnknownKeys(value, new Set(["schemaVersion", "runId"]), "runIdRequest");
+	if (!unknown.ok) return unknown;
+	const version = requireSchemaVersion(value, "runIdRequest");
+	if (!version.ok) return version;
+	if (!isOpaqueId(value.runId)) return fail(protocolProblem("opaque-id", "runIdRequest.runId is not an opaque id"));
+	return { ok: true, value: { schemaVersion: 1, runId: value.runId } };
 }
 
 export function parseProblem(value: unknown, label = "problem", extraOk = true): ParseResult<Problem> {

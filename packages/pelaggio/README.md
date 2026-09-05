@@ -53,6 +53,43 @@ npx pelaggio init
 2. Replace the roadmap example with your real backlog.
 3. Run `npx pelaggio run --cycles 1 --verbose`.
 
+### Local autopilot preview
+
+Install-free, local-first preview (no Pelaggio dependency in the consumer repo). This is
+prerelease software: start with `doctor`, then explicitly opt in to host execution. Host mode
+runs the agent with your ambient user permissions; worktree isolation is not process
+containment. Pelaggio itself does not push, open a PR, merge, release, or deploy.
+
+```bash
+mkdir -p .pelaggio
+cat > .pelaggio/pelaggio.yml <<'YAML'
+harness:
+  adapter: codex
+execution:
+  mode: host
+autopilot:
+  verification:
+    command: pnpm check
+YAML
+
+npx -y pelaggio@next doctor
+npx -y pelaggio@next run --file ticket.md --non-interactive
+```
+
+Use `--text "…"` or `--stdin` instead of `--file`. A successful run ends
+`ready_for_review` only after the configured verification passes and leaves the changes in
+the reported worktree for review. `show <runId>` inspects it, `resume <runId>` continues a
+paused run, and `cancel <runId>` cancels one. Add `--json` for one machine-readable result;
+`--non-interactive` never prompts. As a one-run alternative to committed policy, omit
+`execution.mode` and pass `--allow-host-execution`.
+
+The Codex adapter uses Codex's approval-review auto mode with its `workspace-write`
+sandbox. Select Grok with `harness.adapter: grok`. Both remain host execution in the
+preview's reported assurance: provider sandboxing is not Pelaggio-contained execution.
+
+Dogfood pipeline flags (`--item`, `--cycles`, `--parallel`, …) still select the existing
+`pelaggio run` pipeline.
+
 ## Bring your own agent
 
 Pelaggio drives the harness; you choose it. Claude Code, Codex, Grok Build

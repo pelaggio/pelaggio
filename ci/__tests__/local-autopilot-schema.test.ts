@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
-import { parseArtifact, parseLocalConfig, parseMetrics, parseProblem, parseRunEvent, parseRunSnapshot, parseStartRunRequest, parseWorkContract } from "../../packages/pelaggio/scripts/pelaggio/local-autopilot/parse.ts";
+import { parseArtifact, parseLocalConfig, parseMetrics, parseProblem, parseRunEvent, parseRunIdRequest, parseRunSnapshot, parseStartRunRequest, parseWorkContract } from "../../packages/pelaggio/scripts/pelaggio/local-autopilot/parse.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const schema = JSON.parse(readFileSync(join(root, "packages/pelaggio/scripts/pelaggio/local-autopilot/schemas/v0.schema.json"), "utf8"));
@@ -73,9 +73,11 @@ describe("local autopilot JSON Schema 2020-12", () => {
 	it("validates the run-id operation request schemas", () => {
 		for (const name of ["getRunRequest", "continueRunRequest", "cancelRunRequest"]) {
 			const validate = ref(name);
-			assert.equal(validate({ schemaVersion: 1, runId: "run-1" }), true);
-			assert.equal(validate({ schemaVersion: 1 }), false);
-			assert.equal(validate({ schemaVersion: 1, runId: "run-1", extra: true }), false);
+			const inputs = [{ schemaVersion: 1, runId: "run-1" }, { schemaVersion: 1 }, { schemaVersion: 1, runId: "run-1", extra: true }, { schemaVersion: 1, runId: "../escape" }, { schemaVersion: 2, runId: "run-1" }];
+			for (const [index, input] of inputs.entries()) {
+				assert.equal(validate(input), index === 0, `${name} schema case ${index}`);
+				assert.equal(parseRunIdRequest(input).ok, index === 0, `${name} parser case ${index}`);
+			}
 		}
 	});
 

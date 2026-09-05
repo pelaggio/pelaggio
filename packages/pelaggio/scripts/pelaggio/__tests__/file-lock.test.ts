@@ -24,6 +24,40 @@ async function bumpCounter(dir: string): Promise<void> {
 
 const TRY_OPTS = { label: "try lock", staleMs: 2_000 };
 
+test("non-reclaiming wait preserves an expired owner and times out without executing", async () => {
+	const dir = seedDir();
+	mkdirSync(resolve(dir, "lock"), { recursive: true });
+	const owner = `${Date.now() - 60_000}:still-checking-out`;
+	writeFileSync(lockPath(dir), owner);
+	let called = false;
+	await assert.rejects(
+		withFileLock(
+			lockPath(dir),
+			() => {
+				called = true;
+			},
+			{ label: "request claim", staleMs: 30_000, acquireTimeoutMs: 1, reclaimStale: false },
+		),
+		/state preserved/,
+	);
+	assert.equal(called, false);
+	assert.equal(readFileSync(lockPath(dir), "utf8"), owner);
+});
+
+test("non-reclaiming wait acquires after the current owner releases", async () => {
+	const dir = seedDir();
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const owner = withFileLock(lockPath(dir), () => held, OPTS);
+	const waiter = withFileLock(lockPath(dir), () => "acquired", { ...OPTS, reclaimStale: false });
+	release();
+	await owner;
+	assert.equal(await waiter, "acquired");
+	assert.equal(existsSync(lockPath(dir)), false);
+});
+
 test("tryWithFileLock runs fn when the lock is free", async () => {
 	const dir = seedDir();
 	const res = await tryWithFileLock(lockPath(dir), () => 7, TRY_OPTS);
@@ -178,4 +212,14 @@ test("serializes across real processes (multi-process race)", async () => {
 	const codes = await Promise.all(procs);
 	assert.deepEqual(codes, [0, 0, 0, 0], "all contender processes must exit clean");
 	assert.equal(readFileSync(counterPath(dir), "utf-8"), "20", "4 procs × 5 locked increments, none lost");
+});
+
+test("execution locks retain expired owners until explicit recovery", async () => {
+	const dir = seedDir();
+	mkdirSync(resolve(dir, "lock"), { recursive: true });
+	const token = `${Date.now() - 1_000}:${process.pid}-execution`;
+	writeFileSync(lockPath(dir), token);
+	const result = await tryWithFileLock(lockPath(dir), () => assert.fail("must not steal execution"), { ...TRY_OPTS, reclaimStale: false });
+	assert.deepEqual(result, { ran: false });
+	assert.equal(readFileSync(lockPath(dir), "utf8"), token);
 });

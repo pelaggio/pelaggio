@@ -44,16 +44,33 @@ export function isNonNegativeNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+/** Runtime diagnostics enter the frozen Problem grammar here; input parsers still reject malformed wire data. */
+export function makeProblem(input: Omit<Problem, "schemaVersion">): Problem {
+	const mapped = input.code
+		.replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/^[^a-z]+/, "")
+		.slice(0, 64);
+	let message = "";
+	let length = 0;
+	for (const point of input.message) {
+		if (length++ === 2000) break;
+		message += point;
+	}
+	return { schemaVersion: 1, type: input.type, code: mapped || "runtime-problem", message: message || "No diagnostic message was supplied", retryable: input.retryable, ...(isOpaqueId(input.runId) ? { runId: input.runId } : {}) };
+}
+
 export function protocolProblem(code: string, message: string): Problem {
-	return { schemaVersion: 1, type: "protocol", code, message, retryable: false };
+	return makeProblem({ type: "protocol", code, message, retryable: false });
 }
 
 export function configProblem(code: string, message: string): Problem {
-	return { schemaVersion: 1, type: "config", code, message, retryable: false };
+	return makeProblem({ type: "config", code, message, retryable: false });
 }
 
 export function conflictProblem(code: string, message: string): Problem {
-	return { schemaVersion: 1, type: "conflict", code, message, retryable: false };
+	return makeProblem({ type: "conflict", code, message, retryable: false });
 }
 
 /** Inputs reject unknown fields. Every own key must be in `allowed`. */

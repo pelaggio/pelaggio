@@ -1,0 +1,54 @@
+import { spawn, spawnSync } from "node:child_process";
+import { localGitEnv } from "./git.js";
+
+/** One cancellation boundary for provider and verification children owned by a local run. */
+export function runLocalProcess(bin: string, args: string[], cwd: string, signal?: AbortSignal, options: { shell?: boolean; input?: string } = {}): Promise<{ ok: boolean; output: string }> {
+	if (signal?.aborted) return Promise.resolve({ ok: false, output: "interrupted" });
+	return new Promise((resolve) => {
+		const grouped = process.platform !== "win32";
+		const child = spawn(bin, args, { cwd, env: localGitEnv(), stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"], detached: grouped, shell: options.shell ?? false });
+		let output = "";
+		let failure: string | undefined;
+		let escalation: ReturnType<typeof setTimeout> | undefined;
+		const stop = (hard: boolean): void => {
+			if (!child.pid) return;
+			if (!grouped) {
+				spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+				return;
+			}
+			try {
+				process.kill(-child.pid, hard ? "SIGKILL" : "SIGINT");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") failure = "could not stop run process group";
+			}
+		};
+		const onAbort = (): void => {
+			stop(false);
+			escalation = setTimeout(() => stop(true), 1000);
+		};
+		const capture = (chunk: Buffer): void => {
+			output = (output + chunk.toString()).slice(-16_384);
+		};
+		child.stdout?.on("data", capture);
+		child.stderr?.on("data", capture);
+		if (options.input !== undefined) child.stdin?.end(options.input);
+		child.on("error", (error) => {
+			failure = error.message;
+		});
+		child.stdin?.on("error", (error) => {
+			failure ??= error.message;
+		});
+		child.on("exit", () => {
+			// Descendants can keep inherited output pipes open after the direct child exits.
+			// Stop the owned group now so close can drain those pipes and release ownership.
+			if (grouped || signal?.aborted) stop(true);
+		});
+		child.on("close", (code) => {
+			if (escalation) clearTimeout(escalation);
+			signal?.removeEventListener("abort", onAbort);
+			resolve({ ok: code === 0 && !signal?.aborted && !failure, output: failure ?? output });
+		});
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) onAbort();
+	});
+}

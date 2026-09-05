@@ -22,7 +22,7 @@ export function nextState(from: RunState, event: LifecycleEvent): ParseResult<Ru
 	return { ok: true, value: to };
 }
 
-export function isBlockingProblem(snapshot: RunSnapshot): boolean {
+export function isBlockingProblem(snapshot: Pick<RunSnapshot, "problems">): boolean {
 	return snapshot.problems.some((problem) => problem.type === "decision" || problem.type === "verification" || problem.type === "harness" || problem.type === "config");
 }
 
