@@ -29,20 +29,26 @@ const HELP: Record<string, string> = {
 	doctor: "Usage: pelaggio doctor [--json]\n",
 };
 
-function writeResult(json: boolean, result: ParseResult<RunSnapshot>): number {
+function writeOutput(stream: NodeJS.WriteStream, value: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		stream.write(value, (error) => (error ? reject(error) : resolve()));
+	});
+}
+
+async function writeResult(json: boolean, result: ParseResult<RunSnapshot>): Promise<number> {
 	if (!result.ok) {
-		if (json) process.stdout.write(presentJson(result.problem));
-		else process.stderr.write(presentProblemHuman(result.problem));
+		if (json) await writeOutput(process.stdout, presentJson(result.problem));
+		else await writeOutput(process.stderr, presentProblemHuman(result.problem));
 		return exitCodeForProblem(result.problem);
 	}
-	if (json) process.stdout.write(presentJson(result.value));
-	else process.stdout.write(presentHuman(result.value));
+	if (json) await writeOutput(process.stdout, presentJson(result.value));
+	else await writeOutput(process.stdout, presentHuman(result.value));
 	return exitCodeFor(result.value);
 }
 
-function writeProblem(json: boolean, problem: Problem): number {
-	if (json) process.stdout.write(presentJson(problem));
-	else process.stderr.write(presentProblemHuman(problem));
+async function writeProblem(json: boolean, problem: Problem): Promise<number> {
+	if (json) await writeOutput(process.stdout, presentJson(problem));
+	else await writeOutput(process.stderr, presentProblemHuman(problem));
 	return exitCodeForProblem(problem);
 }
 
@@ -62,10 +68,10 @@ async function runCommand(argv: string[]): Promise<number> {
 	if (!task.ok) return writeProblem(json, task.problem);
 	const controller = new AbortController();
 	const onInterrupt = (): void => controller.abort();
-	process.once("SIGINT", onInterrupt);
+	process.on("SIGINT", onInterrupt);
 	try {
 		const result = await startRun(process.cwd(), { task: task.value, nonInteractive: !!values["non-interactive"], requestId: values["request-id"], allowHostExecution: !!values["allow-host-execution"] }, { signal: controller.signal });
-		return writeResult(json, result);
+		return await writeResult(json, result);
 	} finally {
 		process.removeListener("SIGINT", onInterrupt);
 	}
@@ -78,9 +84,9 @@ async function resumeCommand(argv: string[]): Promise<number> {
 	if (!runId || parsed.positionals.length !== 1) return writeProblem(json, protocolProblem("run-id", "resume requires exactly one runId"));
 	const controller = new AbortController();
 	const onInterrupt = (): void => controller.abort();
-	process.once("SIGINT", onInterrupt);
+	process.on("SIGINT", onInterrupt);
 	try {
-		return writeResult(json, await continueRun(process.cwd(), runId, { signal: controller.signal, allowHostExecution: !!parsed.values["allow-host-execution"] }));
+		return await writeResult(json, await continueRun(process.cwd(), runId, { signal: controller.signal, allowHostExecution: !!parsed.values["allow-host-execution"] }));
 	} finally {
 		process.removeListener("SIGINT", onInterrupt);
 	}
@@ -106,7 +112,7 @@ function executableAvailable(bin: string): boolean {
 	});
 }
 
-function doctorCommand(argv: string[]): number {
+async function doctorCommand(argv: string[]): Promise<number> {
 	const parsed = parseArgs({ args: argv, options: { json: { type: "boolean", default: false } }, allowPositionals: false });
 	const json = !!parsed.values.json;
 	const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
@@ -136,9 +142,9 @@ function doctorCommand(argv: string[]): number {
 	}
 	const ok = checks.every((check) => check.ok);
 	const body = { schemaVersion: 1, ok, checks };
-	if (json) process.stdout.write(`${JSON.stringify(body)}\n`);
+	if (json) await writeOutput(process.stdout, `${JSON.stringify(body)}\n`);
 	else {
-		for (const check of checks) process.stdout.write(`${check.ok ? "ok" : "fail"} ${check.name}: ${check.detail}\n`);
+		await writeOutput(process.stdout, checks.map((check) => `${check.ok ? "ok" : "fail"} ${check.name}: ${check.detail}`).join("\n") + "\n");
 	}
 	return ok ? 0 : 1;
 }
@@ -147,7 +153,7 @@ async function dispatch(argv: string[]): Promise<number> {
 	const command = argv[0] ?? "run";
 	const rest = argv.slice(1);
 	if (rest.includes("--help") || rest.includes("-h")) {
-		process.stdout.write(HELP[command] ?? "Unknown local-autopilot command.\n");
+		await writeOutput(process.stdout, HELP[command] ?? "Unknown local-autopilot command.\n");
 		return HELP[command] ? 0 : 2;
 	}
 	if (command === "run") return runCommand(rest);
@@ -168,17 +174,19 @@ export async function main(argv: string[]): Promise<number> {
 	try {
 		return await dispatch(argv);
 	} catch (error) {
-		return writeProblem(argv.includes("--json"), protocolProblem("arguments", error instanceof Error ? error.message : String(error)));
+		return await writeProblem(argv.includes("--json"), protocolProblem("arguments", error instanceof Error ? error.message : String(error)));
 	}
 }
 
 const isMain = process.argv[1] && (process.argv[1].endsWith("local-autopilot-cli.ts") || process.argv[1].endsWith("local-autopilot-cli.js"));
 if (isMain) {
 	main(process.argv.slice(2)).then(
-		(code) => process.exit(code),
-		(err) => {
-			process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-			process.exit(1);
+		(code) => {
+			process.exitCode = code;
+		},
+		async (err) => {
+			await writeOutput(process.stderr, `${err instanceof Error ? err.message : String(err)}\n`);
+			process.exitCode = 1;
 		},
 	);
 }

@@ -127,3 +127,69 @@ test("repository gitlink ancestors confer ownership but unrelated tracked siblin
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
+
+for (const ignoreCase of ["true", "false"]) {
+	test(`differently cased indexed policy and staged deletion require consent with core.ignorecase=${ignoreCase}`, () => {
+		const cwd = fixture();
+		const git = (...args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8" });
+		try {
+			git("config", "core.ignorecase", ignoreCase);
+			const blob = git("hash-object", "-w", policy).trim();
+			git("update-index", "--add", "--cacheinfo", `100644,${blob},.PELAGGIO/PELagGIO.YmL`);
+			const denied = resolveExecutionAssurance(cwd, config, false);
+			assert.equal(denied.ok, false);
+			if (!denied.ok) assert.match(denied.problem.message, /repository-owned policy/);
+			assert.equal(resolveExecutionAssurance(cwd, config, true).ok, true);
+			git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "case variant policy");
+			git("update-index", "--force-remove", ".PELAGGIO/PELagGIO.YmL");
+			const deleted = resolveExecutionAssurance(cwd, config, false);
+			assert.equal(deleted.ok, false);
+			if (!deleted.ok) assert.match(deleted.problem.message, /repository-owned policy/);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+}
+
+test("case-folded gitlink ancestors are owned while case-folded siblings remain unrelated", () => {
+	const cwd = fixture();
+	const git = (...args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8" });
+	try {
+		const blob = git("hash-object", "-w", policy).trim();
+		git("update-index", "--add", "--cacheinfo", `100644,${blob},.PELAGGIO/other.yml`);
+		git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "case variant sibling");
+		assert.equal(resolveExecutionAssurance(cwd, config, false).ok, true);
+		const head = git("rev-parse", "HEAD").trim();
+		git("update-index", "--force-remove", ".PELAGGIO/other.yml");
+		git("update-index", "--add", "--cacheinfo", `160000,${head},.PELAGGIO`);
+		const denied = resolveExecutionAssurance(cwd, config, false);
+		assert.equal(denied.ok, false);
+		if (!denied.ok) assert.match(denied.problem.message, /repository-owned policy/);
+		assert.equal(resolveExecutionAssurance(cwd, config, true).ok, true);
+		git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "case variant gitlink");
+		git("update-index", "--force-remove", ".PELAGGIO");
+		assert.equal(resolveExecutionAssurance(cwd, config, false).ok, false);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("case-insensitive literal policy queries exclude a large unrelated index", () => {
+	const cwd = fixture();
+	const git = (...args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8" });
+	try {
+		const blob = git("hash-object", "-w", policy).trim();
+		const unrelated = Array.from({ length: 6000 }, (_, index) => `unrelated/${index}-${"x".repeat(180)}`);
+		assert.ok(Buffer.byteLength(unrelated.join("\0")) > 1024 * 1024);
+		execFileSync("git", ["update-index", "--index-info"], { cwd, input: unrelated.map((path) => `100644 ${blob}\t${path}\n`).join(""), encoding: "utf8" });
+		assert.equal(resolveExecutionAssurance(cwd, config, false).ok, true, "unrelated index entries do not exhaust diagnostic capture");
+		git("update-index", "--add", "--cacheinfo", `100644,${blob},.PELAGGIO/PELagGIO.YmL`);
+		const matched = git("ls-files", "--cached", "--full-name", "-z", "--", ":(top,icase,literal).pelaggio/pelaggio.yml");
+		assert.equal(matched, ".PELAGGIO/PELagGIO.YmL\0", "Git combines top, icase, and literal pathspec magic");
+		const denied = resolveExecutionAssurance(cwd, config, false);
+		assert.equal(denied.ok, false);
+		if (!denied.ok) assert.match(denied.problem.message, /repository-owned policy/);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
