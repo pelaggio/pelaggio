@@ -1,0 +1,81 @@
+{
+  "kind": "site-model-execution-capture",
+  "harnessSha": "3d4154a15e37a71df47ce086d423477897263159",
+  "shippingMode": "direct-push to local bare repositories; no GitHub PR",
+  "operatorInterventions": [
+    "Changed the initial single-provider configuration to use a distinct review provider after preflight refusal.",
+    "Changed coordination from Codex to Claude after Codex pick refused prohibited mutations.",
+    "Claude subscription access was disabled; claimed both local items through the roadmap CLI and resumed at plan.",
+    "The user authorized Codex/Grok-only supervised execution with Grok unsandboxed fallback; configuration changes are committed in both local repos."
+  ],
+  "artifacts": [
+    {
+      "path": "capture.json",
+      "sha256": "794184c83798ccd5492914513b5a5a6fd4d1339c442d911928bf2b4bfdc4c857"
+    },
+    {
+      "path": "csv/charter-input.md",
+      "sha256": "da2c1be7ec3319f8dde2e0690e6f18c9a9db37053eb5206dda3a5d8813d0929e"
+    },
+    {
+      "path": "csv/charter.md",
+      "sha256": "9e1d215a959dca54efa4e81f454160754f2726a87b6f877ee054777e61d45c13"
+    },
+    {
+      "path": "csv/plan.md",
+      "sha256": "01ae8a161ee13f733844260a2fc5b0bce7b4d2a4b5ee0035e7a836f79082c688"
+    },
+    {
+      "path": "csv/decisions.md",
+      "sha256": "884fc270ad2f624a107fd9ae79dc358beb1c8d7daf3c5bc8496165dab762e047"
+    },
+    {
+      "path": "csv/baseline-checks.json",
+      "sha256": "59650ac8e5d38f0eb326eec5d69f37e34e6b7a591da8edb6f03a30b9c5b58c59"
+    },
+    {
+      "path": "csv/attempts.json",
+      "sha256": "c6831f273ae6c21b690c21caa080dab4a5b27f0354053b895475bfe4164a013c"
+    },
+    {
+      "path": "csv/candidate-checks.json",
+      "sha256": "d083927cce37cc3c71561907071bc86a0a252d4d007ae461f8fdf50c3cf50058"
+    },
+    {
+      "path": "csv/change.diff",
+      "sha256": "a785dc0ac66c7a8fa89491a08bf53f88185f6c6b6409f7d3dd5dd18ae0876a05"
+    },
+    {
+      "path": "import/charter-input.md",
+      "sha256": "100cc351e66b80d942581db3835ef6286a2fa14f53c93cb6b9e5dcb4414549ad"
+    },
+    {
+      "path": "import/charter.md",
+      "sha256": "100cc351e66b80d942581db3835ef6286a2fa14f53c93cb6b9e5dcb4414549ad"
+    },
+    {
+      "path": "import/plan.md",
+      "sha256": "ad3b8c6d5166817c5e80767444f74f0c6a8cf2bb57e9f1ca3bbcfe621bcd26fd"
+    },
+    {
+      "path": "import/decisions.md",
+      "sha256": "aa41a200cc702650717d29b2caab95dd5e13da858b34f8aa24328db8f7afceb6"
+    },
+    {
+      "path": "import/baseline-checks.json",
+      "sha256": "db9a0254e875b2be23e840a7f8e6957429cfdad8eaabf887f5157eec86969512"
+    },
+    {
+      "path": "import/attempts.json",
+      "sha256": "ec32f95e1a35d8ef4dd9e15386430a677d4d67c7d7f0a1f6bed22af90fe82edc"
+    },
+    {
+      "path": "import/candidate-checks.json",
+      "sha256": "9a02708eff25703d24fa9b63b4e62faeb3dcfaf2e9c70c4f0604585a812d8847"
+    },
+    {
+      "path": "import/change.diff",
+      "sha256": "4145182552c3e8abd2cee7b109fe113e9987e1b6c48f3c5858b739be777beacd"
+    }
+  ]
+}

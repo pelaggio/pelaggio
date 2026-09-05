@@ -1,0 +1,83 @@
+<!DOCTYPE html><html lang="en" class="antialiased"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#0A6E60"><meta name="description" content="What Pelaggio does today, where its protections end, and what to check before your first run."><link rel="canonical" href="https://pelaggio.github.io/pelaggio/limitations"><link rel="icon" type="image/svg+xml" href="/pelaggio/favicon.svg"><link rel="apple-touch-icon" href="/pelaggio/apple-touch-icon.png"><meta property="og:type" content="website"><meta property="og:title" content="Limitations — Pelaggio"><meta property="og:description" content="What Pelaggio does today, where its protections end, and what to check before your first run."><meta property="og:url" content="https://pelaggio.github.io/pelaggio/limitations"><meta property="og:image" content="https://pelaggio.github.io/pelaggio/og.png"><meta property="og:image:alt" content="Let the work run."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Limitations — Pelaggio"><meta name="twitter:description" content="What Pelaggio does today, where its protections end, and what to check before your first run."><meta name="twitter:image" content="https://pelaggio.github.io/pelaggio/og.png"><title>Limitations — Pelaggio</title><link rel="stylesheet" href="/pelaggio/_astro/Base.Cxvtc0dR.css"></head><body class="min-h-dvh bg-bg font-sans text-ink"><a class="skip-link" href="#main">Skip to content</a><header class="site-header wrap"><a class="wordmark" href="/pelaggio/"><svg viewBox="0 0 100 100" fill="currentColor" class="text-accent size-9" role="img" aria-label="Pelaggio"><title>Pelaggio</title><rect x="14" y="58" width="11" height="30" rx="5.5" opacity="0.45"></rect><rect x="31" y="42" width="11" height="46" rx="5.5" opacity="0.7"></rect><rect x="48" y="26" width="11" height="62" rx="5.5"></rect><path d="M59 30c9-6 18-8 27-6 -6 5 -9 11 -9 18 -7-4 -13-8 -18-12z"></path><circle cx="72" cy="34" r="3" fill="var(--color-bg)"></circle></svg>Pelaggio</a><nav aria-label="Main"><a href="/pelaggio/#example">An example</a><a href="/pelaggio/#install">Get started</a></nav></header><main id="main" class="prose wrap"><h1 id="before-you-let-the-work-run">Before you let the work run</h1>
+<p>Pelaggio is an open-source CLI for running development work with coding agents.
+Start with a small change in a repository you know well. Review the result yourself.
+This page is the starting point for the marketing site’s behavior and trust claims;
+the linked technical documents explain their scope and evidence.</p>
+<h2 id="before-a-run">Before a run</h2>
+<p>Commit or back up work you want to preserve. Read the generated configuration and
+setup diff, choose a work item you can evaluate, and stay nearby for the first cycle.
+An agent CLI needs its own authentication and setup. Some provider paths need Linux
+and additional confinement tools; installing Pelaggio alone does not configure them.
+See the <a href="https://github.com/pelaggio/pelaggio#quickstart">setup guide</a>.</p>
+<p>Pelaggio opens a pull request by default. Configuration can opt into other shipping
+behavior, including direct pushes. Check the shipping target before starting. A PR
+is a place for review; its existence does not establish that anyone reviewed it.
+See <a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/permission-model.md">permissions and shipping defaults</a>
+(TC-003, TC-012, TC-013).</p>
+<h2 id="where-an-agent-can-reach">Where an agent can reach</h2>
+<p>A git worktree gives each item its own working files and branch. That is not a
+complete machine sandbox. Protection varies by provider and execution mode. An agent
+may still reach host files, credentials, networks, or tools outside the change you
+intended. Worktree checks cannot establish that nothing else happened on the host.</p>
+<p>Prompt injection remains a threat. Repository files, tool output, and remote content
+can contain instructions that redirect an agent. Do not treat a successful run as
+proof that those instructions were harmless or ignored.
+See <a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/sandboxing.md">sandbox scope</a>
+and the <a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/threat-model.md">threat model</a>
+(TC-011, TC-014, TC-015, TC-018).</p>
+<h2 id="data-and-credentials">Data and credentials</h2>
+<p>Running on your machine does not mean offline. Your configured model providers and
+integrations receive the data needed for their work, under their own retention and
+account policies. Pelaggio has no analytics channel, but that does not describe the
+telemetry behavior of every agent CLI you install.</p>
+<p>Credential filtering and log scrubbing have limits. They are not a promise that
+secrets can never enter a prompt, appear in a file, or leave through a tool. Novel
+credential formats and host credential files remain relevant. Avoid using sensitive
+data in a trial run and inspect what your chosen providers can access.
+See <a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/egress.md">data destinations and credential handling</a>
+(TC-001, TC-002, TC-006, TC-014).</p>
+<h2 id="reviews-and-checks">Reviews and checks</h2>
+<p>An agent can write a plausible implementation and still misunderstand the task.
+Another agent can miss the same problem. Passing checks establish only what those
+checks exercise. They do not establish product fit, security, or completeness.</p>
+<p>Read the diff, inspect the evidence, and exercise the change in the context where it
+will be used. Decisions about policy, acceptable risk, and whether a change should
+land remain yours. See the
+<a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/overview.md">trust overview</a>
+(TC-003, TC-012, TC-013, TC-015).</p>
+<h2 id="interruptions-and-recovery">Interruptions and recovery</h2>
+<p>Provider limits, unavailable tools, failed checks, and process failures can interrupt
+work. Some paths checkpoint and park it; recovery depends on the failure and on which
+state was persisted. Do not assume a partial run was rolled back, or restart it
+without inspecting the branch and run state. Provider calls may already have incurred
+charges.</p>
+<p>Keep a backup and a way to inspect local changes independently of Pelaggio.
+See <a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/uninstall-and-rollback.md">stopping, recovery, and rollback</a>
+(TC-003, TC-012, TC-013).</p>
+<h2 id="delivery-records">Delivery records</h2>
+<p>The landing page compares two deliberately authored medium work items on the same
+small application: CSV export and interrupted import. The short requests and charter
+choices were supplied by the supervising assistant as scenario design. The plans and
+execution records come from actual model sessions. The page distinguishes repository
+context, charter choices, planning decisions, and observed test outcomes.</p>
+<p>These supervised local demonstrations use Codex and Grok. The operator explicitly
+authorized Grok’s unsandboxed fallback after the host’s missing Landlock support stopped
+review. Environmental containment is not established by these runs. Earlier failed
+attempts and the operator’s claim/resume intervention remain in the captured history.
+The demos use local bare git remotes; they do not establish a GitHub PR or hosted CI
+outcome. Their execution settings do not change the product’s defaults.</p>
+<p>Independent evaluation runs outside the candidate repository. Baseline results show
+missing behavior before implementation; they are never substituted for candidate
+verification. Candidate results identify the checked revision. CSV probes exercise
+HTTP responses and browser downloads. Import probes exercise process termination and
+restart, not power-loss durability or concurrent writers. Passing cases establish only
+what was exercised; plan self-assessments and model reviews remain attributed judgments.</p>
+<p>The site displays a captured state, including a failed or incomplete outcome when that
+is what the records establish. Builds validate source digests and regenerate both views
+offline. They do not call models or rerun the original application checks. Updating a
+capture is deliberate; a rerunnable demonstration is not a reliability measurement.</p>
+<p>The downloadable manifest is site capture metadata, not the production delivery
+envelope or an attestation. Digests support byte comparison, not authorship or
+correctness. Producing and signing a record for every delivery remains separate work.
+See the <a href="https://github.com/pelaggio/pelaggio/blob/main/docs/ai-delivery/v0.1/spec.md">delivery format and its status</a>.</p>
+</main><footer class="site-footer wrap"><a href="/pelaggio/">← Back to Pelaggio</a><a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/limitations.md">Read this document in the repository ↗</a></footer></body></html>

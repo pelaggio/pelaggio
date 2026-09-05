@@ -1,0 +1,309 @@
+{
+  "capturedAt": "2026-09-05T21:16:57.671Z",
+  "harnessSha": "3d4154a15e37a71df47ce086d423477897263159",
+  "shippingMode": "direct-push to local bare repositories; no GitHub PR",
+  "operatorInterventions": [
+    "Changed the initial single-provider configuration to use a distinct review provider after preflight refusal.",
+    "Changed coordination from Codex to Claude after Codex pick refused prohibited mutations.",
+    "Claude subscription access was disabled; claimed both local items through the roadmap CLI and resumed at plan.",
+    "The user authorized Codex/Grok-only supervised execution with Grok unsandboxed fallback; configuration changes are committed in both local repos."
+  ],
+  "scenarios": {
+    "csv": {
+      "sourceRefs": {
+        "charter.md": {
+          "path": "docs/charter.md",
+          "revision": "a48777f8ba7c599f83465c2e8af2bec4060105b8"
+        },
+        "plan.md": {
+          "path": "docs/plans/item-1.md",
+          "revision": "44f334801414aeab0b3d29362f9543d2d07cb995"
+        },
+        "decisions.md": {
+          "path": "docs/decision-log/ITEM-1.md",
+          "revision": "a48777f8ba7c599f83465c2e8af2bec4060105b8"
+        },
+        "charter-input.md": {
+          "path": "docs/charter.md",
+          "revision": "37ff9d3298f8d1a9925bd0c066c1c331f3d977aa"
+        }
+      },
+      "candidateRevision": "a48777f8ba7c599f83465c2e8af2bec4060105b8",
+      "gitStatus": "",
+      "applicationTrees": {
+        "src": {
+          "baseline": "d1ab613b72dd99d45c99db20f53fe9b644ffc502",
+          "candidate": "2e30a600399e1c67a06ca316bb7b70e1eb087109"
+        },
+        "public": {
+          "baseline": "618f56e6f751543bb2fc6315ddb1b56b5e6b22cc",
+          "candidate": "c159e3a985814e38f8d8ebf92c4532ce3708fa3d"
+        },
+        "test": {
+          "baseline": "4cb8a1462ef564a502f7840ebb0668b077d05f93",
+          "candidate": "faeeb3596477c63b6e45f1f15de0f6917219ce1f"
+        }
+      },
+      "latestOutcome": {
+        "at": "2026-09-05T21:08:38.568Z",
+        "outcome": "completed",
+        "revision": "44f334801414aeab0b3d29362f9543d2d07cb995",
+        "steps": [
+          {
+            "name": "shakedown-plan",
+            "provider": "grok",
+            "model": "default",
+            "ok": true,
+            "outputTail": "ering contract\n\nDECISION: CSV field quoting | chose: quote every data field; leave the header unquoted | alternatives: quote a field only when it contains comma, quote, or line break\n\nVerdict: APPROVE",
+            "decisions": [
+              {
+                "id": "a5c8d73b-4cd2-4838-9fcf-e2a10fa7d15a",
+                "contentFingerprint": "ae8fde63f0fcf56336b97cecfb85ca7d0ffdc638dd94b72bd1d07c302b3b567e",
+                "decision": {
+                  "fork": "CSV status-query semantics",
+                  "chosen": "preserve the list endpoint's exact-match semantics: missing or empty selects all, unknown values match nothing and produce a header-only 200 response",
+                  "alternatives": "reject unknown statuses with 400, which would introduce a different filtering contract"
+                }
+              },
+              {
+                "id": "4821dfb3-6467-40c2-8ae2-4b2cf61bf0da",
+                "contentFingerprint": "0fc844da3241a1317184978fb9970e6ac0fa8be4e24de6bdc09a804b7b49bc6c",
+                "decision": {
+                  "fork": "CSV field quoting",
+                  "chosen": "quote every data field; leave the header unquoted",
+                  "alternatives": "quote a field only when it contains comma, quote, or line break"
+                }
+              }
+            ]
+          },
+          {
+            "name": "implement",
+            "provider": "codex",
+            "model": "default",
+            "ok": true,
+            "outputTail": "gle-writer UTF-8 interchange; spreadsheet formula handling is unassessed.\n\nThe plan was left untouched. Implementation files await the harness-owned commit, so they do not yet appear in `main...HEAD`.",
+            "executionReceipt": {
+              "path": ".dev/execution-receipts/cycle-1-ITEM-1-a2/implement-1.json",
+              "sha256": "93be00bffc5a5e06328efddbf8324ddb927d0d3b5f29c1311fa928b60da532aa"
+            }
+          },
+          {
+            "name": "shakedown-code",
+            "provider": "grok",
+            "model": "default",
+            "ok": true,
+            "outputTail": "SMOKE_OK`: served `Export CSV` control, open export is 23 rows with the fixture punctuation/newline title, `page=3` does not change CSV, done=7, all=30, JSON pagination still 10/10/3\n\nVerdict: APPROVE"
+          },
+          {
+            "name": "ship",
+            "provider": "grok",
+            "model": "default",
+            "ok": true,
+            "outputTail": "** (from MAIN_REPO on `main`):\n- `npm test` — 9 passed, 0 failed\n- `npm run check` — exit 0\n\nPipeline hand-off: mark-done, archive, push, and worktree/branch cleanup were not run.\n\nship-merged: ITEM-1"
+          }
+        ]
+      },
+      "artifacts": [
+        {
+          "path": "csv/charter-input.md",
+          "sha256": "da2c1be7ec3319f8dde2e0690e6f18c9a9db37053eb5206dda3a5d8813d0929e"
+        },
+        {
+          "path": "csv/charter.md",
+          "sha256": "9e1d215a959dca54efa4e81f454160754f2726a87b6f877ee054777e61d45c13"
+        },
+        {
+          "path": "csv/plan.md",
+          "sha256": "01ae8a161ee13f733844260a2fc5b0bce7b4d2a4b5ee0035e7a836f79082c688"
+        },
+        {
+          "path": "csv/decisions.md",
+          "sha256": "884fc270ad2f624a107fd9ae79dc358beb1c8d7daf3c5bc8496165dab762e047"
+        },
+        {
+          "path": "csv/baseline-checks.json",
+          "sha256": "59650ac8e5d38f0eb326eec5d69f37e34e6b7a591da8edb6f03a30b9c5b58c59"
+        },
+        {
+          "path": "csv/attempts.json",
+          "sha256": "c6831f273ae6c21b690c21caa080dab4a5b27f0354053b895475bfe4164a013c"
+        },
+        {
+          "path": "csv/candidate-checks.json",
+          "sha256": "d083927cce37cc3c71561907071bc86a0a252d4d007ae461f8fdf50c3cf50058"
+        },
+        {
+          "path": "csv/change.diff",
+          "sha256": "a785dc0ac66c7a8fa89491a08bf53f88185f6c6b6409f7d3dd5dd18ae0876a05"
+        }
+      ]
+    },
+    "import": {
+      "sourceRefs": {
+        "charter.md": {
+          "path": "docs/charter.md",
+          "revision": "b90f5d0f8420e819e6cda4be58ef0389659379bf"
+        },
+        "plan.md": {
+          "path": "docs/plans/item-1.md",
+          "revision": "6d9fbe6dda1dd8717af3e3ae68beff8f13ede878"
+        },
+        "decisions.md": {
+          "path": "docs/decision-log/ITEM-1.md",
+          "revision": "b90f5d0f8420e819e6cda4be58ef0389659379bf"
+        },
+        "charter-input.md": {
+          "path": "docs/charter.md",
+          "revision": "32eceb87cb228aac0a373145d4aef3f1700745c9"
+        }
+      },
+      "candidateRevision": "b90f5d0f8420e819e6cda4be58ef0389659379bf",
+      "gitStatus": "",
+      "applicationTrees": {
+        "src": {
+          "baseline": "d1ab613b72dd99d45c99db20f53fe9b644ffc502",
+          "candidate": "da6fd497a874405c6d42af5f63513b2ec23ba406"
+        },
+        "public": {
+          "baseline": "618f56e6f751543bb2fc6315ddb1b56b5e6b22cc",
+          "candidate": "618f56e6f751543bb2fc6315ddb1b56b5e6b22cc"
+        },
+        "test": {
+          "baseline": "4cb8a1462ef564a502f7840ebb0668b077d05f93",
+          "candidate": "ffcde88c1bfc17cf445ca90b6ec86fff9bf55eb6"
+        }
+      },
+      "latestOutcome": {
+        "at": "2026-09-05T21:10:12.845Z",
+        "outcome": "completed",
+        "revision": "6d9fbe6dda1dd8717af3e3ae68beff8f13ede878",
+        "steps": [
+          {
+            "name": "shakedown-plan",
+            "provider": "grok",
+            "model": "default",
+            "ok": true,
+            "outputTail": "s\nDECISION: pre-existing duplicate ids | chose: fail visibly before writes and preserve the store for manual repair | alternatives: collapse equal duplicates or migrate existing data\n\nVerdict: APPROVE",
+            "decisions": [
+              {
+                "id": "84eae70a-345c-4f0d-86ab-68ba61a42e7a",
+                "contentFingerprint": "c4cd2808fa3115f64abe008234a51cd5b95a4f855f20bd49ee3fc6209ab2a1f0",
+                "decision": {
+                  "fork": "restart identity and progress",
+                  "chosen": "persisted records indexed by stable id, with complete record equality",
+                  "alternatives": "source hash and separate checkpoint journal"
+                }
+              },
+              {
+                "id": "a7c88980-96de-414e-b472-a5e39ff04eb9",
+                "contentFingerprint": "6c86b6980d93ad8eaa847d89420cdc4eb6aa5ba05c951ebe732402c82710c6cd",
+                "decision": {
+                  "fork": "conflict timing",
+                  "chosen": "preflight all source and store conflicts before writing",
+                  "alternatives": "stop at the first conflict during incremental commits"
+                }
+              },
+              {
+                "id": "8a0c9a79-b53f-4682-82cd-41793ed85a18",
+                "contentFingerprint": "358b6f88ca0f13a03013845388a7976ad6bcfdf64ff7ef215a408b4dde782023",
+                "decision": {
+                  "fork": "pre-existing duplicate ids",
+                  "chosen": "fail visibly before writes and preserve the store for manual repair",
+                  "alternatives": "collapse equal duplicates or migrate existing data"
+                }
+              }
+            ]
+          },
+          {
+            "name": "implement",
+            "provider": "codex",
+            "model": "default",
+            "ok": true,
+            "outputTail": "wait the harness commit, so `main...HEAD` does not yet include them.\n\nCoverage is local, single-writer process termination. Power loss, concurrency, and interactive browser behavior remain unverified.",
+            "executionReceipt": {
+              "path": ".dev/execution-receipts/cycle-1-ITEM-1-a2/implement-1.json",
+              "sha256": "13c5aaeaea5fcc4d5fc4a11fc086ff08f52f5266cd1431d31e58f230a5b188d4"
+            }
+          },
+          {
+            "name": "shakedown-code",
+            "provider": "grok",
+            "model": "default",
+            "ok": true,
+            "outputTail": "cised here.\n\nLimits that remain true: single-writer local JSON; kill-after-rename is the durability bound; a conflict reports the first id/row and commits nothing in that invocation.\n\nVerdict: APPROVE",
+            "decisions": [
+              {
+                "id": "72b4acc8-42b1-4750-a3c0-4d056d0d6ad7",
+                "contentFingerprint": "c4cd2808fa3115f64abe008234a51cd5b95a4f855f20bd49ee3fc6209ab2a1f0",
+                "decision": {
+                  "fork": "restart identity and progress",
+                  "chosen": "persisted records indexed by stable id, with complete record equality",
+                  "alternatives": "source hash and separate checkpoint journal"
+                }
+              },
+              {
+                "id": "d40484af-26d0-4d54-b8a0-46a12b63c030",
+                "contentFingerprint": "6c86b6980d93ad8eaa847d89420cdc4eb6aa5ba05c951ebe732402c82710c6cd",
+                "decision": {
+                  "fork": "conflict timing",
+                  "chosen": "preflight all source and store conflicts before writing",
+                  "alternatives": "stop at the first conflict during incremental commits"
+                }
+              },
+              {
+                "id": "45e93d9e-3529-4977-b2f3-d03305031327",
+                "contentFingerprint": "358b6f88ca0f13a03013845388a7976ad6bcfdf64ff7ef215a408b4dde782023",
+                "decision": {
+                  "fork": "pre-existing duplicate ids",
+                  "chosen": "fail visibly before writes and preserve the store for manual repair",
+                  "alternatives": "collapse equal duplicates or migrate existing data"
+                }
+              }
+            ]
+          },
+          {
+            "name": "ship",
+            "provider": "grok",
+            "model": "default",
+            "ok": true,
+            "outputTail": "N_REPO`: `npm test` 23/23 pass; `npm run check` exit 0. No lockfile change.\n\nStopped after step 5a. Mark-done, archive, push, and worktree/branch cleanup are left to the pipeline.\n\nship-merged: ITEM-1"
+          }
+        ]
+      },
+      "artifacts": [
+        {
+          "path": "import/charter-input.md",
+          "sha256": "100cc351e66b80d942581db3835ef6286a2fa14f53c93cb6b9e5dcb4414549ad"
+        },
+        {
+          "path": "import/charter.md",
+          "sha256": "100cc351e66b80d942581db3835ef6286a2fa14f53c93cb6b9e5dcb4414549ad"
+        },
+        {
+          "path": "import/plan.md",
+          "sha256": "ad3b8c6d5166817c5e80767444f74f0c6a8cf2bb57e9f1ca3bbcfe621bcd26fd"
+        },
+        {
+          "path": "import/decisions.md",
+          "sha256": "aa41a200cc702650717d29b2caab95dd5e13da858b34f8aa24328db8f7afceb6"
+        },
+        {
+          "path": "import/baseline-checks.json",
+          "sha256": "db9a0254e875b2be23e840a7f8e6957429cfdad8eaabf887f5157eec86969512"
+        },
+        {
+          "path": "import/attempts.json",
+          "sha256": "ec32f95e1a35d8ef4dd9e15386430a677d4d67c7d7f0a1f6bed22af90fe82edc"
+        },
+        {
+          "path": "import/candidate-checks.json",
+          "sha256": "9a02708eff25703d24fa9b63b4e62faeb3dcfaf2e9c70c4f0604585a812d8847"
+        },
+        {
+          "path": "import/change.diff",
+          "sha256": "4145182552c3e8abd2cee7b109fe113e9987e1b6c48f3c5858b739be777beacd"
+        }
+      ]
+    }
+  }
+}

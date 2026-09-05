@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pelaggio.dev/ai-delivery/v0.1/predicate.schema.json",
+  "title": "Pelaggio AI delivery predicate v0.1",
+  "description": "The predicate body of a Pelaggio AI delivery in-toto Statement.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deliveryDefinition", "runDetails", "trustModel"],
+  "properties": {
+    "deliveryDefinition": { "$ref": "#/$defs/deliveryDefinition" },
+    "runDetails": { "$ref": "#/$defs/runDetails" },
+    "trustModel": { "$ref": "#/$defs/trustModel" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+    "identifier": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9._:/-]{0,63}$" },
+    "version": { "type": "string", "maxLength": 64, "pattern": "^v?[0-9]+(?:\\.[0-9]+){0,2}(?:-[0-9a-z.-]+)?$" },
+    "provider": { "enum": ["claude", "codex", "grok"] },
+    "runId": { "type": "string", "maxLength": 64, "pattern": "^(?:cycle-[1-9][0-9]*|[a-z0-9]+(?:[._][a-z0-9]+)*)$" },
+    "evidenceRef": { "type": "string", "maxLength": 64, "pattern": "^(?:test|verification|review|effects|other)-[a-z0-9][a-z0-9._]{0,47}$" },
+    "filePath": { "type": "string", "pattern": "^[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*$" },
+    "digest": {
+      "type": "object", "additionalProperties": false, "required": ["sha256"],
+      "properties": { "sha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "identity": {
+      "type": "object", "additionalProperties": false, "required": ["provider", "model"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" }, "model": { "$ref": "#/$defs/identifier" },
+        "sessionId": { "$ref": "#/$defs/identifier" }, "seatId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "usage": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "gen_ai.usage.input_tokens": { "type": "integer", "minimum": 0 },
+        "gen_ai.usage.output_tokens": { "type": "integer", "minimum": 0 },
+        "pelaggio.usage.cache_creation_tokens": { "type": "integer", "minimum": 0 },
+        "pelaggio.usage.cache_read_tokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "deliveryDefinition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["change", "policy", "standards"],
+      "properties": {
+        "change": {
+          "type": "object", "additionalProperties": false, "required": ["itemId"],
+          "properties": { "itemId": { "$ref": "#/$defs/identifier" }, "roadmapUrl": { "type": "string", "format": "uri" } }
+        },
+        "policy": {
+          "type": "object", "additionalProperties": false, "required": ["id", "version", "configDigest"],
+          "properties": { "id": { "$ref": "#/$defs/identifier" }, "version": { "$ref": "#/$defs/version" }, "configDigest": { "$ref": "#/$defs/digest" } }
+        },
+        "standards": {
+          "type": "object", "additionalProperties": false, "required": ["inTotoStatement", "slsaProvenance", "otelGenAI", "owaspAISVS"],
+          "properties": {
+            "inTotoStatement": { "const": "v1" }, "slsaProvenance": { "const": "v1.0" },
+            "otelGenAI": { "const": "1.37.0" },
+            "owaspAISVS": {
+              "type": "object", "additionalProperties": false, "required": ["version", "controlIds"],
+              "properties": {
+                "version": { "const": "1.0.0" },
+                "controlIds": { "const": ["AC.9.1", "AC.9.2", "AC.9.3", "AC.10.1", "AC.10.2", "AC.10.3"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "authorship": {
+      "type": "object", "additionalProperties": false,
+      "required": ["step", "attempt", "identity", "gen_ai.system", "gen_ai.request.model", "status", "filesChanged"],
+      "properties": {
+        "step": { "enum": ["pick", "plan", "shakedown-plan", "implement", "shakedown-code", "ship"] },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "identity": { "$ref": "#/$defs/identity" }, "gen_ai.system": { "$ref": "#/$defs/identifier" },
+        "gen_ai.request.model": { "$ref": "#/$defs/identifier" }, "usage": { "$ref": "#/$defs/usage" },
+        "costUsd": { "type": "number", "minimum": 0 }, "costEstimated": { "type": "boolean" }, "turns": { "type": "integer", "minimum": 0 },
+        "status": { "enum": ["succeeded", "failed"] },
+        "subtype": { "enum": ["success", "blocked", "edit_loop", "error", "error_confinement", "error_max_turns", "error_rate_limit", "error_refusal"] },
+        "filesChanged": { "type": "array", "items": { "$ref": "#/$defs/filePath" }, "uniqueItems": true }
+      }
+    },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "identity", "reviewedDigest", "independence", "verdict", "blockingThreshold", "findingRefs"],
+      "properties": {
+        "role": { "enum": ["reviewer", "judge"] }, "identity": { "$ref": "#/$defs/identity" }, "reviewedDigest": { "$ref": "#/$defs/digest" },
+        "independence": {
+          "type": "object", "additionalProperties": false, "required": ["provider", "model", "session", "requirement"],
+          "properties": { "provider": { "enum": ["independent", "same", "unknown"] }, "model": { "enum": ["independent", "same", "unknown"] }, "session": { "enum": ["independent", "same", "unknown"] }, "requirement": { "enum": ["met", "softened", "unknown"] } }
+        },
+        "verdict": { "enum": ["pass", "block", "invalid"] }, "blockingThreshold": { "enum": ["must-fix"] },
+        "findingRefs": { "type": "array", "items": { "$ref": "#/$defs/evidenceRef" }, "uniqueItems": true },
+        "resolution": {
+          "type": "object", "additionalProperties": false, "required": ["disposition", "actor", "rationaleCode", "evidenceRefs"],
+          "properties": {
+            "disposition": { "enum": ["proceed", "block"] }, "actor": { "enum": ["harness", "judge", "operator"] },
+            "rationaleCode": { "enum": ["accepted-risk", "confirmed-blocker", "no-blockers", "verification-failed", "verified-non-blocker"] },
+            "evidenceRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidenceRef" }, "uniqueItems": true }
+          }
+        }
+      }
+    },
+    "assertion": {
+      "type": "object", "additionalProperties": false, "required": ["name", "result", "evidenceRefs"],
+      "properties": {
+        "name": { "enum": ["safety_survivors", "ci", "containment"] }, "result": { "enum": ["pass", "fail", "unavailable"] },
+        "evidenceRefs": { "type": "array", "items": { "$ref": "#/$defs/evidenceRef" }, "uniqueItems": true },
+        "reasonCode": { "enum": ["evidence-missing", "gate-failed", "not-collected", "not-implemented", "producer-error"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "result": { "const": "pass" } }, "required": ["result"] }, "then": { "properties": { "evidenceRefs": { "type": "array", "minItems": 1 } } } },
+        { "if": { "properties": { "result": { "enum": ["fail", "unavailable"] } }, "required": ["result"] }, "then": { "properties": { "reasonCode": true }, "required": ["reasonCode"] } }
+      ]
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false, "required": ["id", "kind", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/evidenceRef" }, "kind": { "enum": ["test", "verification-report", "review-record", "effects-manifest", "other"] },
+        "digest": { "$ref": "#/$defs/digest" }, "uri": { "type": "string", "format": "uri" }
+      }
+    },
+    "outcomeBase": {
+      "type": "object", "required": ["state", "gateSummary"],
+      "properties": {
+        "state": { "enum": ["shipped", "completed", "blocked", "parked", "shipwrecked"] },
+        "reasonCode": { "enum": ["gate-failed", "operator-blocked", "rate-limited", "ship-failed", "work-incomplete"] },
+        "gateSummary": { "enum": ["passed", "failed", "unavailable"] }
+      }
+    },
+    "outcome": {
+      "oneOf": [
+        { "type": "object", "$ref": "#/$defs/outcomeBase", "properties": { "state": { "enum": ["shipped", "completed"] }, "gateSummary": { "const": "passed" } }, "required": ["state", "gateSummary"], "unevaluatedProperties": false },
+        { "type": "object", "$ref": "#/$defs/outcomeBase", "properties": { "state": { "enum": ["blocked", "parked", "shipwrecked"] }, "gateSummary": { "enum": ["failed", "unavailable"] } }, "required": ["state", "reasonCode", "gateSummary"], "unevaluatedProperties": false }
+      ]
+    },
+    "metadata": {
+      "type": "object", "additionalProperties": false, "required": ["runId", "startedAt", "finishedAt", "versions", "unavailable"],
+      "properties": {
+        "runId": { "$ref": "#/$defs/runId" }, "cycle": { "type": "integer", "minimum": 1 },
+        "startedAt": { "type": "string", "format": "date-time" }, "finishedAt": { "type": "string", "format": "date-time" },
+        "versions": {
+          "type": "object", "additionalProperties": false, "required": ["pelaggio", "node", "drivers"],
+          "properties": {
+            "pelaggio": { "$ref": "#/$defs/version" }, "node": { "$ref": "#/$defs/version" },
+            "drivers": { "type": "object", "propertyNames": { "$ref": "#/$defs/provider" }, "additionalProperties": { "$ref": "#/$defs/version" } }
+          }
+        },
+        "unavailable": { "type": "array", "items": { "enum": ["cryptographic-reviewer-identity", "landed-subject-digest", "per-step-duration", "provider-request-identity", "stable-evidence-digest"] }, "uniqueItems": true }
+      }
+    },
+    "runDetails": {
+      "type": "object", "additionalProperties": false, "required": ["authorship", "review", "policy", "evidence", "outcome", "metadata"],
+      "properties": {
+        "authorship": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/authorship" } },
+        "review": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/review" } },
+        "policy": { "type": "object", "additionalProperties": false, "required": ["assertions"], "properties": { "assertions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/assertion" } } } },
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
+        "outcome": { "$ref": "#/$defs/outcome" }, "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "trustModel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["independence", "reviewVerdict", "authorshipStatus", "outcome"],
+      "properties": {
+        "independence": { "const": "self-reported" }, "reviewVerdict": { "const": "self-reported" },
+        "authorshipStatus": { "const": "self-reported" }, "outcome": { "const": "derived" }
+      }
+    }
+  }
+}
