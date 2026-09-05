@@ -2,10 +2,20 @@
 
 ## Product posture
 
-Pelaggio is led publicly by its **user benefit** — *extend how much one developer
-can ship* — and supported by its technical category, **a control plane for coding
-agents**. Lead with the benefit; use the category to orient technical evaluators
-and readers comparing Pelaggio with adjacent tooling.
+Pelaggio leads with **Let the work run.** The supporting category is **a control
+plane for coding agents**. Describe the work a user can delegate and what comes
+back for them to inspect. Use the category to orient technical evaluators and
+readers comparing Pelaggio with adjacent tooling.
+
+The public story follows a charter through delivery: the intended outcome, the
+change, the checks and review, and the decision to land. Review contributes evidence
+to that journey. Keep concrete operating behavior beside its limits; “guarantees”
+must name the property and conditions. Use real deliveries with attributed records
+and visible gaps. Richer handoffs that are still being built belong in the roadmap.
+
+Public behavior and trust claims lead to
+[`../docs/trust/limitations.md`](../docs/trust/limitations.md), where defaults,
+partial safeguards, and unavailable evidence are explained in context.
 
 Observability is a **core capability and trust mechanism**, not the whole product
 category. Pelaggio scopes work, launches it, supervises it, isolates it, reviews

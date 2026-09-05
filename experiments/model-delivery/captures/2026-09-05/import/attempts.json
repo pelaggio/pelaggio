@@ -1,0 +1,89 @@
+[
+  {
+    "at": "2026-09-05T20:32:07.031Z",
+    "outcome": "blocked",
+    "reason": "ITEM-1 lookup and claim require prohibited roadmap CLI and git mutations.",
+    "revision": null,
+    "steps": [
+      {
+        "name": "pick",
+        "provider": "codex",
+        "model": "default",
+        "ok": false,
+        "subtype": "blocked",
+        "detail": "ITEM-1 lookup and claim require prohibited roadmap CLI and git mutations."
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T20:34:02.405Z",
+    "outcome": "failed",
+    "reason": "pick failed",
+    "revision": null,
+    "steps": [
+      {
+        "name": "pick",
+        "provider": "claude",
+        "model": "claude-sonnet-5",
+        "ok": false,
+        "subtype": "error_sdk",
+        "detail": "Claude Code returned an error result: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access"
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T20:37:26.666Z",
+    "outcome": "failed",
+    "reason": "shakedown-plan failed: confinement violation",
+    "revision": "0e39f85acd0b83df205f159e30cb6d67cd471955",
+    "steps": [
+      {
+        "name": "plan",
+        "provider": "codex",
+        "model": "default",
+        "ok": true,
+        "decisions": [
+          {
+            "id": "7fc6df5e-8986-4b20-a03c-b53f61ae743a",
+            "contentFingerprint": "c4cd2808fa3115f64abe008234a51cd5b95a4f855f20bd49ee3fc6209ab2a1f0",
+            "decision": {
+              "fork": "restart identity and progress",
+              "chosen": "persisted records indexed by stable id, with complete record equality",
+              "alternatives": "source hash and separate checkpoint journal"
+            }
+          },
+          {
+            "id": "33ca8fce-465a-4334-9947-0b193600ca86",
+            "contentFingerprint": "6c86b6980d93ad8eaa847d89420cdc4eb6aa5ba05c951ebe732402c82710c6cd",
+            "decision": {
+              "fork": "conflict timing",
+              "chosen": "preflight all source and store conflicts before writing",
+              "alternatives": "stop at the first conflict during incremental commits"
+            }
+          },
+          {
+            "id": "53fe9755-b8dd-43bb-abf3-02f3fba0d998",
+            "contentFingerprint": "358b6f88ca0f13a03013845388a7976ad6bcfdf64ff7ef215a408b4dde782023",
+            "decision": {
+              "fork": "pre-existing duplicate ids",
+              "chosen": "fail visibly before writes and preserve the store for manual repair",
+              "alternatives": "collapse equal duplicates or migrate existing data"
+            }
+          }
+        ],
+        "executionReceipt": {
+          "path": ".dev/execution-receipts/cycle-1-ITEM-1-a1/plan-1.json",
+          "sha256": "e6e6a7dba4b2b94b7c5e65b1f63d02c26e0d35794eeb2e340d627193a251e7fd"
+        }
+      },
+      {
+        "name": "shakedown-plan",
+        "provider": "grok",
+        "model": "default",
+        "ok": false,
+        "subtype": "error_confinement",
+        "detail": "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary"
+      }
+    ]
+  }
+]

@@ -1,0 +1,189 @@
+[
+  {
+    "at": "2026-09-05T20:32:07.031Z",
+    "outcome": "blocked",
+    "reason": "ITEM-1 lookup and claim require prohibited roadmap CLI and git mutations.",
+    "revision": null,
+    "steps": [
+      {
+        "name": "pick",
+        "provider": "codex",
+        "model": "default",
+        "ok": false,
+        "subtype": "blocked",
+        "detail": "ITEM-1 lookup and claim require prohibited roadmap CLI and git mutations.",
+        "outputTail": "ITEM-1 lookup and claim require prohibited roadmap CLI and git mutations."
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T20:34:02.405Z",
+    "outcome": "failed",
+    "reason": "pick failed",
+    "revision": null,
+    "steps": [
+      {
+        "name": "pick",
+        "provider": "claude",
+        "model": "claude-sonnet-5",
+        "ok": false,
+        "subtype": "error_sdk",
+        "detail": "Claude Code returned an error result: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access",
+        "outputTail": "Claude Code returned an error result: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access"
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T20:37:26.666Z",
+    "outcome": "failed",
+    "reason": "shakedown-plan failed: confinement violation",
+    "revision": "0e39f85acd0b83df205f159e30cb6d67cd471955",
+    "steps": [
+      {
+        "name": "plan",
+        "provider": "codex",
+        "model": "default",
+        "ok": true,
+        "outputTail": "e saved path follows the documented markdown branch-slug convention.\n\nRun `/shakedown` for an independent review, or say **go** to start building. When done, run `/shakedown` again to review the code.",
+        "decisions": [
+          {
+            "id": "7fc6df5e-8986-4b20-a03c-b53f61ae743a",
+            "contentFingerprint": "c4cd2808fa3115f64abe008234a51cd5b95a4f855f20bd49ee3fc6209ab2a1f0",
+            "decision": {
+              "fork": "restart identity and progress",
+              "chosen": "persisted records indexed by stable id, with complete record equality",
+              "alternatives": "source hash and separate checkpoint journal"
+            }
+          },
+          {
+            "id": "33ca8fce-465a-4334-9947-0b193600ca86",
+            "contentFingerprint": "6c86b6980d93ad8eaa847d89420cdc4eb6aa5ba05c951ebe732402c82710c6cd",
+            "decision": {
+              "fork": "conflict timing",
+              "chosen": "preflight all source and store conflicts before writing",
+              "alternatives": "stop at the first conflict during incremental commits"
+            }
+          },
+          {
+            "id": "53fe9755-b8dd-43bb-abf3-02f3fba0d998",
+            "contentFingerprint": "358b6f88ca0f13a03013845388a7976ad6bcfdf64ff7ef215a408b4dde782023",
+            "decision": {
+              "fork": "pre-existing duplicate ids",
+              "chosen": "fail visibly before writes and preserve the store for manual repair",
+              "alternatives": "collapse equal duplicates or migrate existing data"
+            }
+          }
+        ],
+        "executionReceipt": {
+          "path": ".dev/execution-receipts/cycle-1-ITEM-1-a1/plan-1.json",
+          "sha256": "e6e6a7dba4b2b94b7c5e65b1f63d02c26e0d35794eeb2e340d627193a251e7fd"
+        }
+      },
+      {
+        "name": "shakedown-plan",
+        "provider": "grok",
+        "model": "default",
+        "ok": false,
+        "subtype": "error_confinement",
+        "detail": "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary"
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T21:10:12.845Z",
+    "outcome": "completed",
+    "revision": "6d9fbe6dda1dd8717af3e3ae68beff8f13ede878",
+    "steps": [
+      {
+        "name": "shakedown-plan",
+        "provider": "grok",
+        "model": "default",
+        "ok": true,
+        "outputTail": "s\nDECISION: pre-existing duplicate ids | chose: fail visibly before writes and preserve the store for manual repair | alternatives: collapse equal duplicates or migrate existing data\n\nVerdict: APPROVE",
+        "decisions": [
+          {
+            "id": "84eae70a-345c-4f0d-86ab-68ba61a42e7a",
+            "contentFingerprint": "c4cd2808fa3115f64abe008234a51cd5b95a4f855f20bd49ee3fc6209ab2a1f0",
+            "decision": {
+              "fork": "restart identity and progress",
+              "chosen": "persisted records indexed by stable id, with complete record equality",
+              "alternatives": "source hash and separate checkpoint journal"
+            }
+          },
+          {
+            "id": "a7c88980-96de-414e-b472-a5e39ff04eb9",
+            "contentFingerprint": "6c86b6980d93ad8eaa847d89420cdc4eb6aa5ba05c951ebe732402c82710c6cd",
+            "decision": {
+              "fork": "conflict timing",
+              "chosen": "preflight all source and store conflicts before writing",
+              "alternatives": "stop at the first conflict during incremental commits"
+            }
+          },
+          {
+            "id": "8a0c9a79-b53f-4682-82cd-41793ed85a18",
+            "contentFingerprint": "358b6f88ca0f13a03013845388a7976ad6bcfdf64ff7ef215a408b4dde782023",
+            "decision": {
+              "fork": "pre-existing duplicate ids",
+              "chosen": "fail visibly before writes and preserve the store for manual repair",
+              "alternatives": "collapse equal duplicates or migrate existing data"
+            }
+          }
+        ]
+      },
+      {
+        "name": "implement",
+        "provider": "codex",
+        "model": "default",
+        "ok": true,
+        "outputTail": "wait the harness commit, so `main...HEAD` does not yet include them.\n\nCoverage is local, single-writer process termination. Power loss, concurrency, and interactive browser behavior remain unverified.",
+        "executionReceipt": {
+          "path": ".dev/execution-receipts/cycle-1-ITEM-1-a2/implement-1.json",
+          "sha256": "13c5aaeaea5fcc4d5fc4a11fc086ff08f52f5266cd1431d31e58f230a5b188d4"
+        }
+      },
+      {
+        "name": "shakedown-code",
+        "provider": "grok",
+        "model": "default",
+        "ok": true,
+        "outputTail": "cised here.\n\nLimits that remain true: single-writer local JSON; kill-after-rename is the durability bound; a conflict reports the first id/row and commits nothing in that invocation.\n\nVerdict: APPROVE",
+        "decisions": [
+          {
+            "id": "72b4acc8-42b1-4750-a3c0-4d056d0d6ad7",
+            "contentFingerprint": "c4cd2808fa3115f64abe008234a51cd5b95a4f855f20bd49ee3fc6209ab2a1f0",
+            "decision": {
+              "fork": "restart identity and progress",
+              "chosen": "persisted records indexed by stable id, with complete record equality",
+              "alternatives": "source hash and separate checkpoint journal"
+            }
+          },
+          {
+            "id": "d40484af-26d0-4d54-b8a0-46a12b63c030",
+            "contentFingerprint": "6c86b6980d93ad8eaa847d89420cdc4eb6aa5ba05c951ebe732402c82710c6cd",
+            "decision": {
+              "fork": "conflict timing",
+              "chosen": "preflight all source and store conflicts before writing",
+              "alternatives": "stop at the first conflict during incremental commits"
+            }
+          },
+          {
+            "id": "45e93d9e-3529-4977-b2f3-d03305031327",
+            "contentFingerprint": "358b6f88ca0f13a03013845388a7976ad6bcfdf64ff7ef215a408b4dde782023",
+            "decision": {
+              "fork": "pre-existing duplicate ids",
+              "chosen": "fail visibly before writes and preserve the store for manual repair",
+              "alternatives": "collapse equal duplicates or migrate existing data"
+            }
+          }
+        ]
+      },
+      {
+        "name": "ship",
+        "provider": "grok",
+        "model": "default",
+        "ok": true,
+        "outputTail": "N_REPO`: `npm test` 23/23 pass; `npm run check` exit 0. No lockfile change.\n\nStopped after step 5a. Mark-done, archive, push, and worktree/branch cleanup are left to the pipeline.\n\nship-merged: ITEM-1"
+      }
+    ]
+  }
+]

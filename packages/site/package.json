@@ -6,11 +6,13 @@
 	"license": "AGPL-3.0-or-later",
 	"type": "module",
 	"scripts": {
-		"dev": "astro dev",
-		"build": "tsx scripts/gen-icons.ts && astro build",
+		"dev": "pnpm example:refresh && astro dev",
+		"build": "pnpm example:refresh && tsx scripts/gen-icons.ts && astro build",
 		"preview": "astro preview",
 		"check:types": "astro check",
-		"test": "tsx --test --test-timeout=60000 __tests__/*.test.ts"
+		"test": "tsx --test --test-timeout=60000 __tests__/*.test.ts",
+		"example:refresh": "tsx scripts/gen-example.ts",
+		"test:browser": "tsx scripts/smoke.ts"
 	},
 	"dependencies": {
 		"@fontsource-variable/outfit": "^5.2.8",
@@ -22,6 +24,7 @@
 		"@astrojs/check": "^0.9.10",
 		"@resvg/resvg-js": "^2.6.2",
 		"@types/node": "^24.13.3",
+		"playwright-core": "1.61.1",
 		"tsx": "^4.23.1",
 		"typescript": "^6.0.3"
 	}

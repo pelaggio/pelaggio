@@ -1,0 +1,38 @@
+{
+  "scenario": "csv",
+  "at": "2026-09-05T20:30:54.095Z",
+  "revision": "e5903dfca113d205641c7dadc7402fd733821bd7",
+  "gitStatus": "",
+  "evaluatorSha256": "6eb71f16f554ed5014147e5e0cdacc3f1b92164bc2778e66976ad0ff6e41359f",
+  "cases": [
+    {
+      "name": "AC-1: all 23 filtered rows across pages; source unchanged",
+      "result": "fail",
+      "detail": "Expected values to be strictly equal:\n\n404 !== 200\n"
+    },
+    {
+      "name": "AC-2: exact Unicode, comma, quote and newline round-trip; CSV download headers",
+      "result": "fail",
+      "detail": "The input did not match the regular expression /text\\/csv/i. Input:\n\n''\n"
+    },
+    {
+      "name": "AC-2: empty store produces header-only export",
+      "result": "fail",
+      "detail": "Expected values to be strictly equal:\n\n404 !== 200\n"
+    },
+    {
+      "name": "AC-3: browser download uses changed filter after pagination",
+      "result": "fail",
+      "detail": "page.waitForEvent: Timeout 8000ms exceeded while waiting for event \"download\"\n=========================== logs ===========================\nwaiting for event \"download\"\n============================================================"
+    },
+    {
+      "name": "AC-4: original status filtering and pagination remain functional",
+      "result": "pass"
+    },
+    {
+      "name": "Baseline tests and syntax checks",
+      "result": "pass"
+    }
+  ],
+  "passed": false
+}

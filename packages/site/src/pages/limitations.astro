@@ -1,0 +1,11 @@
+---
+import Base from "../layouts/Base.astro";
+import Mark from "../components/Mark.astro";
+import { Content } from "../../../../docs/trust/limitations.md";
+---
+<Base title="Limitations" description="What Pelaggio does today, where its protections end, and what to check before your first run.">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header wrap"><a class="wordmark" href="/"><Mark class="size-9" />Pelaggio</a><nav aria-label="Main"><a href="/#example">An example</a><a href="/#install">Get started</a></nav></header>
+  <main id="main" class="prose wrap"><Content /></main>
+  <footer class="site-footer wrap"><a href="/">← Back to Pelaggio</a><a href="https://github.com/pelaggio/pelaggio/blob/main/docs/trust/limitations.md">Read this document in the repository ↗</a></footer>
+</Base>

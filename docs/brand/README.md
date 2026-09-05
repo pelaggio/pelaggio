@@ -15,7 +15,9 @@ image-gen prompts in the appendix below.
 
 ## 1. Positioning
 
-- **Tagline:** *Extend how much one developer can ship.*
+- **Tagline:** *Let the work run.*
+- **Supporting copy:** Set the direction. Pelaggio carries the work to a pull request with your coding agents, checks, and review. Inspect the change and its evidence.
+- **Claims:** lead readers to [`../trust/limitations.md`](../trust/limitations.md) for current behavior, gaps, and failure modes. Do not turn a default, partial safeguard, or format demonstration into an unconditional promise.
 - **Category (for technical evaluators, second):** a control plane for coding agents.
 - **Core promise:** extend a developer's reach without requiring them to surrender control.
 - **Who it's for:** the solo developer (or small team) who has to live with the

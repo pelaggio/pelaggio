@@ -21,3 +21,6 @@ packages/site/.astro/
 packages/site/public/icon-*.png
 packages/site/public/apple-touch-icon.png
 docs/assurance/generated/explorer.html
+packages/site/public/example/
+packages/site/public/og.png
+packages/site/public/ai-delivery/

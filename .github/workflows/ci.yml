@@ -5,10 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
@@ -47,8 +48,82 @@ jobs:
         if: github.event_name != 'pull_request'
       - run: pnpm --filter @pelaggio/web build
       - run: pnpm --filter @pelaggio/site build
+      - run: pnpm --filter @pelaggio/site exec playwright-core install --with-deps chromium
+      - run: pnpm --filter @pelaggio/site test:browser
       - run: pnpm check
       - run: pnpm check:skills
       - run: pnpm check:trust
       - run: pnpm check:links
       - run: pnpm check:doc-claims
+
+      - name: Keep the tested site
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: site-${{ github.sha }}
+          path: packages/site/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  site-deploy:
+    needs: ci
+    if: >-
+      vars.CLOUDFLARE_PAGES_PROJECT != '' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: site-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'production' }}
+      cancel-in-progress: false
+    environment:
+      name: ${{ github.event_name == 'pull_request' && 'site-preview' || 'site-production' }}
+      url: ${{ steps.publish.outputs.deployment-url }}
+    steps:
+      # Only static output crosses from the build job. No checkout or PR scripts
+      # run in the job with the Cloudflare credential.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: site-${{ github.sha }}
+          path: site
+      - name: Publish tested assets
+        id: publish
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.129.0'
+          packageManager: npm
+          command: pages deploy site --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'main' }} --commit-hash=${{ github.sha }}
+      - name: Check the deployed URL
+        env:
+          SITE_URL: ${{ steps.publish.outputs.deployment-url }}
+          IS_PREVIEW: ${{ github.event_name == 'pull_request' }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const origin = new URL(process.env.SITE_URL);
+          assert.equal(origin.protocol, 'https:');
+          assert.ok(origin.hostname.endsWith('.pages.dev'));
+          const get = async path => {
+            const response = await fetch(new URL(path, origin), { signal: AbortSignal.timeout(15000) });
+            assert.equal(response.status, 200, path);
+            return response;
+          };
+          const home = await get('/');
+          if (process.env.IS_PREVIEW === 'true') assert.match(home.headers.get('x-robots-tag') ?? '', /noindex/);
+          assert.match(await home.text(), /Let the work run/);
+          for (const path of ['/limitations', '/og.png', '/apple-touch-icon.png', '/ai-delivery/v0.1/predicate.schema.json']) await get(path);
+          const receipt = await (await get('/example/receipt.json')).json();
+          assert.equal(receipt.kind, 'site-model-execution-capture');
+          const { createHash } = await import('node:crypto');
+          for (const artifact of receipt.artifacts) {
+            const bytes = await (await get('/example/' + artifact.path)).text();
+            assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256);
+          }
+          const missing = await fetch(new URL('/missing-site-smoke-page', origin), { signal: AbortSignal.timeout(15000) });
+          assert.equal(missing.status, 404);
+          console.log('Deployed site smoke passed:', origin.origin);
+          JS
