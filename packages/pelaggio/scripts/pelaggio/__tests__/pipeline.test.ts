@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
+import { allocateAttempt } from "../attempt-identity.js";
 import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
 import { appendReviewEscalation, lookupReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
-import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
+import { dispatchStepEffects, EffectsManifestError, effectManifestPath, writeEffectsManifest } from "../effects.js";
 import { createEventWriter, readEventLog } from "../flow-events.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { runOrchestrator } from "../orchestrator.js";
@@ -5347,6 +5348,7 @@ describe("runPipeline — durable authoring record root (#788)", () => {
 		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
 		const { parent, repo } = makeTempRepoWithParent();
 		const retained: Array<{ path: string; bytes: string }> = [];
+		const legacyArtifacts: Array<{ path: string; bytes: string }> = [];
 		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "Actual clean review", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 		const blocker = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "Judgment split", findings: [{ severity: "must-fix", message: "Style regression", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 		const judge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [] })}\nEND_AUTHORING_REVIEW_JUDGE`;
@@ -5358,6 +5360,14 @@ describe("runPipeline — durable authoring record root (#788)", () => {
 				const worktree = join(parent, `${WORKTREE_PREFIX}${itemId.toLowerCase()}`);
 				const branch = `feat/${itemId.toLowerCase()}-${split ? "retry" : "first"}`;
 				execFileSync("git", ["worktree", "add", "-q", "-b", branch, worktree], { cwd: repo });
+				if (split) {
+					for (let n = 1; n <= 4; n++) assert.equal(allocateAttempt(worktree, itemId), n);
+					for (const artifact of legacyArtifacts) {
+						const path = join(worktree, artifact.path);
+						mkdirSync(dirname(path), { recursive: true });
+						writeFileSync(path, artifact.bytes);
+					}
+				}
 				const signal = makeParkSignal();
 				const { runStep } = createMockRunStep(
 					{
@@ -5386,7 +5396,17 @@ describe("runPipeline — durable authoring record root (#788)", () => {
 					listWorktrees: () => [repo, worktree],
 					appendLog: () => {},
 					runShipBookkeeping: noopBookkeeping,
-					writeEffectsManifest,
+					writeEffectsManifest: (context, effects) => {
+						writeEffectsManifest(context, effects);
+						if (!split && context.cwd === worktree) {
+							const path = effectManifestPath(context);
+							const relativePath = relative(worktree, path);
+							const bytes = readFileSync(path, "utf8");
+							const prior = legacyArtifacts.find((artifact) => artifact.path === relativePath);
+							if (prior) prior.bytes = bytes;
+							else legacyArtifacts.push({ path: relativePath, bytes });
+						}
+					},
 					dispatchStepEffects,
 					appendReviewEscalation: async (root, input) => {
 						captured = input;
@@ -5406,6 +5426,17 @@ describe("runPipeline — durable authoring record root (#788)", () => {
 				assert.ok(emitted);
 				const record = validateReviewRecord(JSON.parse(emitted.bytes) as ReviewRecord);
 				const source = `.dev/review-records/${record.runId}.json`;
+				if (split) {
+					assert.match(record.runId, /-a5$/, "upgrade must exceed the previous checkout high-water");
+					for (const artifact of legacyArtifacts) assert.equal(readFileSync(join(worktree, artifact.path), "utf8"), artifact.bytes, "previous receipt/effect bytes remain intact");
+				} else {
+					for (const family of ["effects", "execution-receipts"]) {
+						const dir = join(worktree, ".dev", family);
+						for (const name of readdirSync(dir, { recursive: true, encoding: "utf8" })) if (name.endsWith(".json")) legacyArtifacts.push({ path: join(".dev", family, name), bytes: readFileSync(join(dir, name), "utf8") });
+					}
+					assert.ok(legacyArtifacts.some((artifact) => artifact.path.includes("execution-receipts")));
+					assert.ok(legacyArtifacts.some((artifact) => artifact.path.includes("effects")));
+				}
 				if (split) {
 					assert.ok(captured);
 					const decisionPath = `docs/decision-log/${itemId}.md`;

@@ -262,7 +262,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	/** Item-scoped attempt run id for an explicit item — pick uses this before the cycle has adopted the claim (#738 review). */
 	const itemRunIdFor = (id: string): string => {
 		if (opts.dryRun) return `${runIdBase}-${id}`;
-		if (!allocated || allocated.itemId !== id) allocated = { itemId: id, attempt: allocateAttempt(mainWorktree(mainRepo), id) };
+		if (!allocated || allocated.itemId !== id) allocated = { itemId: id, attempt: allocateAttempt(mainWorktree(mainRepo), id, mainRepo) };
 		return attemptRunId(runIdBase, id, allocated.attempt);
 	};
 	const itemRunId = (): string => (itemId ? itemRunIdFor(itemId) : `${runIdBase}-unclaimed`);

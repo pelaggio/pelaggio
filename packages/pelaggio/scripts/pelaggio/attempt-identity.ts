@@ -97,7 +97,17 @@ function itemDir(mainRepo: string, itemId: string): string {
  * Returns 1 for an item's first attempt, so a runId that has never been resumed keeps the
  * shape it has today with `-a1` appended.
  */
-export function allocateAttempt(mainRepo: string, itemId: string): number {
+export function allocateAttempt(mainRepo: string, itemId: string, previousRoot?: string): number {
+	// A root transition must not reissue identities already allocated in that checkout.
+	// Read the old floor before any mutation; all new markers still use one O_EXCL namespace.
+	let previousFloor = 0;
+	if (previousRoot && previousRoot !== mainRepo) {
+		try {
+			previousFloor = currentAttempt(previousRoot, itemId, true);
+		} catch (error) {
+			throw new Error(`attempt-identity: cannot read prior allocations under ${previousRoot}; no new allocation was made and existing artifacts remain intact. Restore read access and resume item ${itemId}.`, { cause: error });
+		}
+	}
 	const dir = itemDir(mainRepo, itemId);
 	const marks = ensureMarksDir(dir);
 	// Start the scan from what is already there so a long-resumed item does not re-walk
@@ -105,7 +115,7 @@ export function allocateAttempt(mainRepo: string, itemId: string): number {
 	// racing allocator only makes our create fail and we advance.
 	// Take the greater of the scanned maximum and the high-water mark, so a deleted record
 	// (including the highest) can never cause a number to be handed out twice.
-	let next = Math.max(scanMaxAttempt(dir), readHighWater(dir)) + 1;
+	let next = Math.max(scanMaxAttempt(dir), readHighWater(dir), previousFloor) + 1;
 	for (; next <= MAX_ATTEMPT; next++) {
 		try {
 			// The MARKER is the allocation, and it is written first. Creating the informational
@@ -132,11 +142,12 @@ export function allocateAttempt(mainRepo: string, itemId: string): number {
 }
 
 /** Highest numbered record present in `dir`, ignoring anything else living there. */
-function scanMaxAttempt(dir: string): number {
+function scanMaxAttempt(dir: string, required = false): number {
 	let names: string[];
 	try {
 		names = readdirSync(dir);
-	} catch {
+	} catch (error) {
+		if (required && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		return 0; // never attempted — not an error
 	}
 	let max = 0;
@@ -157,21 +168,23 @@ function ensureMarksDir(dir: string): string {
 }
 
 /** Value of the never-released single-file mark, if a checkout still carries one. */
-function readLegacyMark(dir: string): number {
+function readLegacyMark(dir: string, required = false): number {
 	try {
 		const n = Number.parseInt(readFileSync(join(dir, LEGACY_MARK_FILE), "utf-8").trim(), 10);
 		return Number.isFinite(n) && n > 0 ? n : 0;
-	} catch {
+	} catch (error) {
+		if (required && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		return 0; // absent, a directory, or unreadable — nothing to contribute
 	}
 }
 
-function readHighWater(dir: string): number {
-	let max = readLegacyMark(dir);
+function readHighWater(dir: string, required = false): number {
+	let max = readLegacyMark(dir, required);
 	let names: string[];
 	try {
 		names = readdirSync(join(dir, MARKS_DIR));
-	} catch {
+	} catch (error) {
+		if (required && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		return max; // no marker directory — the legacy file, or the scan, is all we have
 	}
 	for (const name of names) {
@@ -184,11 +197,11 @@ function readHighWater(dir: string): number {
 /**
  * Highest attempt allocated for `itemId`, or 0 when the item has never been attempted.
  * Reads the high-water mark as well as the records, so a pruned record does not make an
- * item look less-attempted than it is.
+ * item look less-attempted than it is. Required migration reads propagate non-ENOENT IO failures.
  */
-export function currentAttempt(mainRepo: string, itemId: string): number {
+export function currentAttempt(mainRepo: string, itemId: string, required = false): number {
 	const dir = itemDir(mainRepo, itemId);
-	return Math.max(scanMaxAttempt(dir), readHighWater(dir));
+	return Math.max(scanMaxAttempt(dir, required), readHighWater(dir, required));
 }
 
 /**

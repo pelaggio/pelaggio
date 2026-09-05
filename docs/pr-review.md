@@ -1132,3 +1132,5 @@ reduced to non-sensitive codes and source facts.
 The local PR-review answer/revision loop, capture commands, applicability limits and
 SARIF/site handoff are documented in [PR review clarification](agent-context/pr-review-clarification.md).
 An operator clarification is task input; it never grants permission to proceed or clears a review blocker.
+
+Authoring attempt identities allocate under the same main-worktree namespace as durable review records. On an existing linked-checkout resume, previously issued local counters contribute a read-only floor before any new allocation. Unreadable prior counters preserve state and refuse allocation until access is restored; legacy counters and receipt/effect writers are unchanged. This supports completed prior allocations, not concurrent old-version allocators still writing separate namespaces.
