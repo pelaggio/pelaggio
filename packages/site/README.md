@@ -49,6 +49,22 @@ expanded plans/receipts, mobile widths, exact downloadable bytes, and revision b
 `docs/trust/limitations.md` is rendered directly at `/limitations`. Edit it there;
 do not maintain a separate marketing copy of the trust statements.
 
+## Temporary GitHub Pages publication
+
+The temporary public URL is `https://pelaggio.github.io/pelaggio/`. Build with
+`pnpm --filter @pelaggio/site build:pages`, then run the browser smoke with
+`SITE_ORIGIN=https://pelaggio.github.io SITE_BASE=/pelaggio` in addition to any Chrome
+settings. `SITE_ORIGIN` controls canonical/social URLs; `SITE_BASE` controls links and
+assets. Ordinary builds retain the Cloudflare root-domain configuration.
+
+Pages publishes static output from the root of `gh-pages`, with an empty `.nojekyll`
+file. Publish only the contents of `packages/site/dist`, omit the Cloudflare-only
+`_headers` and `_redirects`, and record the source commit in the publication commit.
+Subsequent source pushes do not automatically refresh this temporary branch: rebuild,
+check, and update `gh-pages` to publish another version. GitHub runs its Pages deployment
+when that branch changes. The Cloudflare workflow below remains the intended automation.
+GitHub Pages does not apply Cloudflare's custom headers or redirects.
+
 ## Deployment: GitHub Actions to Cloudflare Pages
 
 CI tests and builds the site on GitHub-hosted runners, runs browser smoke checks, and

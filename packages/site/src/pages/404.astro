@@ -1,15 +1,16 @@
 ---
+import { sitePath } from "../lib/path.js";
 import Mark from "../components/Mark.astro";
 import Base from "../layouts/Base.astro";
 ---
 
-<Base title="Not found" description="That page is not on pelaggio.com.">
+<Base title="Not found" description="That page is not on this site.">
 	<main class="mx-auto flex min-h-dvh max-w-xl flex-col items-start justify-center px-5 py-16 sm:px-8">
 		<Mark class="size-10" />
 		<h1 class="mt-8 text-section font-semibold tracking-tight text-ink">Not found</h1>
 		<p class="mt-3 text-base leading-relaxed text-ink-soft">That page is not here. The CLI landing is the home page.</p>
 		<a
-			href="/"
+			href={sitePath("/")}
 			class="mt-8 inline-flex min-h-11 items-center text-sm font-medium text-accent transition-colors duration-150 hover:text-ink"
 		>
 			Back to Pelaggio

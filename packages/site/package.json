@@ -8,6 +8,7 @@
 	"scripts": {
 		"dev": "pnpm example:refresh && astro dev",
 		"build": "pnpm example:refresh && tsx scripts/gen-icons.ts && astro build",
+		"build:pages": "SITE_ORIGIN=https://pelaggio.github.io SITE_BASE=/pelaggio pnpm build",
 		"preview": "astro preview",
 		"check:types": "astro check",
 		"test": "tsx --test --test-timeout=60000 __tests__/*.test.ts",

@@ -1,11 +1,12 @@
 ---
+import { sitePath } from "../lib/path.js";
 import "../styles/global.css";
 import { META_DESCRIPTION, TAGLINE } from "../lib/copy.js";
 
 const { title, description = META_DESCRIPTION } = Astro.props as { title?: string; description?: string };
 const pageTitle = title ? `${title} — Pelaggio` : `Pelaggio — ${TAGLINE}`;
-const canonical = new URL(Astro.url.pathname, Astro.site);
-const ogImage = new URL("/og.png", Astro.site);
+const canonical = new URL(Astro.url.pathname === sitePath("") ? sitePath("/") : Astro.url.pathname, Astro.site);
+const ogImage = new URL(sitePath("/og.png"), Astro.site);
 ---
 
 <!doctype html>
@@ -16,8 +17,8 @@ const ogImage = new URL("/og.png", Astro.site);
 		<meta name="theme-color" content="#0A6E60" />
 		<meta name="description" content={description} />
 		<link rel="canonical" href={canonical} />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<link rel="icon" type="image/svg+xml" href={sitePath("/favicon.svg")}  />
+		<link rel="apple-touch-icon" href={sitePath("/apple-touch-icon.png")}  />
 		<meta property="og:type" content="website" />
 		<meta property="og:title" content={pageTitle} />
 		<meta property="og:description" content={description} />

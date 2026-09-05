@@ -17,8 +17,14 @@ const contentTypes: Record<string, string> = {
 	".png": "image/png",
 	".woff2": "font/woff2",
 };
+const base = (process.env.SITE_BASE || "").replace(/\/$/, "");
 const server = createServer((request, response) => {
-	const path = new URL(request.url ?? "/", "http://localhost").pathname;
+	const requested = new URL(request.url ?? "/", "http://localhost").pathname;
+	if (base && requested !== base && !requested.startsWith(`${base}/`)) {
+		response.writeHead(404).end();
+		return;
+	}
+	const path = requested.slice(base.length) || "/";
 	const relative = path === "/" ? "index.html" : path.slice(1);
 	let file = resolve(dist, relative);
 	if (!file.startsWith(`${dist}/`)) {
@@ -37,7 +43,7 @@ const server = createServer((request, response) => {
 await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
 const address = server.address();
 assert.ok(address && typeof address !== "string");
-const origin = `http://127.0.0.1:${address.port}`;
+const origin = `http://127.0.0.1:${address.port}${base}`;
 const browser = await chromium.launch({ executablePath: process.env.SITE_CHROME_PATH });
 try {
 	const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"], reducedMotion: "reduce" });
@@ -49,10 +55,10 @@ try {
 	});
 	for (const width of [1440, 390, 320]) {
 		await page.setViewportSize({ width, height: 1000 });
-		await page.goto(origin);
+		await page.goto(`${origin}/`);
 		await page.evaluate(() => document.fonts.ready);
 		assert.equal(await page.locator("h1").textContent(), "Let the work run.");
-		assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), "https://pelaggio.com/");
+		assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), `${process.env.SITE_ORIGIN || "https://pelaggio.com"}${base}/`);
 		assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `overflow at ${width}px`);
 		for (const [id, label] of [
 			["csv", "CSV export"],
@@ -109,7 +115,7 @@ try {
 	await context.close();
 	const noJs = await browser.newContext({ javaScriptEnabled: false });
 	const staticPage = await noJs.newPage();
-	await staticPage.goto(origin);
+	await staticPage.goto(`${origin}/`);
 	await staticPage.getByRole("radio", { name: "Interrupted import", exact: true }).check();
 	assert.equal(await staticPage.locator('[data-scenario="import"]').isVisible(), true);
 	assert.equal(await staticPage.locator('[data-scenario="csv"]').isVisible(), false);
