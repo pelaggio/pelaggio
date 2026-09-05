@@ -597,6 +597,7 @@ export function createStepExecutor(env: StepExecutorEnv): StepExecutor {
 				ok: result.ok,
 				...(!result.ok ? { subtype: result.subtype } : {}),
 				...(result.tokens ? { tokens: result.tokens } : {}),
+				...(result.usageMeasurement ? { usageMeasurement: result.usageMeasurement } : {}),
 				...(result.costEstimated ? { costEstimated: true } : {}),
 				...(attempt > 1 ? { attempt } : {}),
 				...(retriedMaxTurns ? { retriedMaxTurns: true } : {}),

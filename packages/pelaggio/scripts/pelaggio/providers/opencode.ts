@@ -26,6 +26,7 @@ import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
 import type { BlockedKind, ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
+import { measureUsage, type UsageMeasurement } from "../usage-measurement.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
 import type { StepProvider } from "./types.js";
 
@@ -231,6 +232,7 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 	let failed = false;
 	let failedText = "";
 	let tokens: TokenUsage | undefined;
+	let usageMeasurement: UsageMeasurement | undefined;
 	let cost = 0;
 	let stopReason: string | undefined;
 	let loopFile: string | null = null;
@@ -262,7 +264,10 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 		}
 		if (/^(step-finish|step\.finish)$/.test(type) || partType === "step-finish") {
 			const usage = usageObject(ev);
-			if (usage) tokens = tokensFromUsage(usage) ?? tokens;
+			if (usage) {
+				tokens = tokensFromUsage(usage) ?? tokens;
+				usageMeasurement = measureUsage("opencode", usage);
+			}
 			cost = reportedCost(ev) || cost;
 			continue;
 		}
@@ -270,7 +275,10 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 			completed = true;
 			stopReason = stringField(ev, "reason", "stopReason", "stop_reason", "finishReason") || stopReason;
 			const usage = usageObject(ev);
-			if (usage) tokens = tokensFromUsage(usage) ?? tokens;
+			if (usage) {
+				tokens = tokensFromUsage(usage) ?? tokens;
+				usageMeasurement = measureUsage("opencode", usage);
+			}
 			cost = reportedCost(ev) || cost;
 			continue;
 		}
@@ -380,6 +388,7 @@ export function buildOpenCodeStepResult(name: Step, events: JsonObject[], exitIn
 			costEstimated: true,
 			turns,
 			...(tokens ? { tokens } : {}),
+			...(usageMeasurement ? { usageMeasurement } : {}),
 			...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 			...(outputTail ? { outputTail } : {}),
 			...(stalledAsk ? { stalledAsk: true } : {}),

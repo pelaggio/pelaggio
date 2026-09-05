@@ -8,7 +8,7 @@ const intent = parseCli(process.argv.slice(2));
 
 switch (intent.kind) {
 	case "stats":
-		runStatsCommand({ json: intent.json });
+		runStatsCommand({ json: intent.json, usage: intent.usage });
 		process.exit(0);
 		break;
 	case "error":

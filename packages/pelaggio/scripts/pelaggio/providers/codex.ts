@@ -9,6 +9,8 @@ import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
 import type { BlockedKind, ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
+import type { UsageMeasurement } from "../usage-measurement.js";
+import { measureUsage } from "../usage-measurement.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
 import type { RunStepOpts, StepProvider } from "./types.js";
 
@@ -273,6 +275,8 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 	let failed = false;
 	let failedText = "";
 	let tokens: TokenUsage | undefined;
+	let usageMeasurement: UsageMeasurement | undefined;
+	let usageEvents = 0;
 	let stopReason: string | undefined;
 	let stalledAsk = false;
 	let loopFile: string | null = null;
@@ -295,6 +299,8 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 		if (type === "turn.completed") {
 			completed = true;
 			tokens = usageFromCompleted(ev);
+			usageEvents++;
+			usageMeasurement = usageEvents === 1 ? measureUsage("codex", nestedObject(ev, "usage") ?? nestedObject(eventItem(ev), "usage")) : { schemaVersion: 1, basis: "unverified" };
 			stopReason = stringField(ev, "stop_reason", "stopReason") || stopReason;
 		}
 		if (type === "turn.failed") {
@@ -415,6 +421,7 @@ export function buildCodexStepResult(name: Step, events: JsonObject[], exitInfo:
 			costEstimated: true,
 			turns,
 			...(tokens ? { tokens } : {}),
+			...(usageMeasurement ? { usageMeasurement } : {}),
 			...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 			...(outputTail ? { outputTail } : {}),
 			...(stalledAsk ? { stalledAsk: true } : {}),

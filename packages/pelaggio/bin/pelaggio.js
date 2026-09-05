@@ -15,10 +15,10 @@ Commands:
   sync    Diff and update installed .claude/skills/<name>/SKILL.md against the package.
   run     Dogfood pipeline (\`--item\`, \`--cycles\`, …) or local autopilot (\`--file\` / \`--text\` / \`--stdin\`).
   resume  Continue a local-autopilot run by runId.
-  show    Print a local-autopilot run snapshot.
+  show    Print a local-autopilot run snapshot (--usage for usage coverage).
   doctor  Check local-autopilot prerequisites.
   cancel  Cancel a paused local-autopilot run by runId.
-  stats   Print the stats dashboard from .dev/pelaggio-log.jsonl.
+  stats   Print local pipeline stats (--usage for token/cache coverage).
   roadmap Adapter-backed queries (list / get / claim / plan-path / publish-plan / mark-done / create-item / archive-plan / stale-scan / stale-list / stale-resolve / source). Used by skill bodies.
   decisions Lifecycle/projection for docs/decision-log/ (resolve, archive-resolved, migrate, rebuild-index).
   taxonomy Owner ritual for the ADR-0016 safety taxonomy (verify / sign / canonical).

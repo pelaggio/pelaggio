@@ -3,6 +3,7 @@ import { LOG_PATH } from "./config.js";
 import { decodeCycleOutcome } from "./cycle-outcome.js";
 import { A } from "./tui.js";
 import type { StepLog, TokenUsage } from "./types.js";
+import { buildUsageReport, cycleUsageRows, renderUsageReport } from "./usage-report.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -482,7 +483,25 @@ export function computeStats(opts: { logPath?: string } = {}): Stats {
 	return reduce(entries);
 }
 
-export function runStatsCommand(opts: { json: boolean } = { json: false }): void {
+export function runStatsCommand(opts: { json: boolean; usage?: boolean } = { json: false }): void {
+	if (opts.usage) {
+		const raw = existsSync(LOG_PATH) ? readFileSync(LOG_PATH, "utf8") : "";
+		let malformedRecords = 0;
+		const entries = raw
+			.split(/\r?\n/)
+			.filter((line) => line.trim())
+			.flatMap((line) => {
+				try {
+					return [JSON.parse(line) as unknown];
+				} catch {
+					malformedRecords++;
+					return [];
+				}
+			});
+		const report = { ...buildUsageReport(cycleUsageRows(entries)), malformedRecords };
+		console.log(opts.json ? JSON.stringify(report, null, 2) : `${renderUsageReport(report)}\nUnreadable records: ${malformedRecords}`);
+		return;
+	}
 	if (!existsSync(LOG_PATH)) {
 		if (opts.json) {
 			console.log(renderJson(reduce([])));

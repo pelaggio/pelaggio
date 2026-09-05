@@ -7,19 +7,22 @@ import { after, describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { cancelRun, continueRun, getRun, startRun } from "../local-autopilot/engine.js";
+import { fakeAdapter } from "../local-autopilot/fake-adapter.js";
+import { grokAdapter } from "../local-autopilot/grok-adapter.js";
 import type { HarnessContext } from "../local-autopilot/harness.js";
 import { readRunEvents } from "../local-autopilot/journal.js";
 import { eventsPath, requestLockPath } from "../local-autopilot/paths.js";
 import { presentHuman, presentJson } from "../local-autopilot/present.js";
 import { looksLikeAnsi } from "../local-autopilot/transport.js";
 import { digestOf } from "../local-autopilot/work-contract.js";
+import { measurePrompt, measureUsage } from "../usage-measurement.js";
 
 const temps: string[] = [];
 after(() => {
 	for (const dir of temps) rmSync(dir, { recursive: true, force: true });
 });
 
-function consumer(script: string, maxRepairs = 1): { cwd: string; ticket: string } {
+function consumer(script: string, maxRepairs = 1, harnessExtra = ""): { cwd: string; ticket: string } {
 	const cwd = mkdtempSync(join(tmpdir(), "pelaggio-la-"));
 	temps.push(cwd);
 	execFileSync("git", ["init", "-b", "main"], { cwd });
@@ -29,7 +32,10 @@ function consumer(script: string, maxRepairs = 1): { cwd: string; ticket: string
 	execFileSync("git", ["add", "README.md"], { cwd });
 	execFileSync("git", ["commit", "-m", "init"], { cwd });
 	mkdirSync(join(cwd, ".pelaggio"));
-	writeFileSync(join(cwd, ".pelaggio", "pelaggio.yml"), `harness:\n  adapter: fake\n  fake:\n    script:\n${script}execution:\n  mode: host\nautopilot:\n  maxRepairs: ${maxRepairs}\n  verification:\n    command: git diff --check HEAD\n`);
+	writeFileSync(
+		join(cwd, ".pelaggio", "pelaggio.yml"),
+		`harness:\n  adapter: fake\n  fake:\n    script:\n${script}${harnessExtra}execution:\n  mode: host\nautopilot:\n  maxRepairs: ${maxRepairs}\n  verification:\n    command: git diff --check HEAD\n`,
+	);
 	writeFileSync(join(cwd, "ticket.md"), "Add a hello export\n\nCreate src/hello.ts that exports hello = 1.\n");
 	return { cwd, ticket: join(cwd, "ticket.md") };
 }
@@ -54,6 +60,75 @@ it("request preparation never steals an expired claim and a later retry succeeds
 });
 
 describe("local autopilot engine", () => {
+	it("projects adapter usage without changing lifecycle or exporting task content", async () => {
+		const { cwd } = consumer(`      - { action: complete }\n`);
+		const adapters = {
+			grok: grokAdapter,
+			fake: {
+				name: "fake" as const,
+				async next(ctx: Parameters<typeof fakeAdapter.next>[0]) {
+					return {
+						...(await fakeAdapter.next(ctx)),
+						usageMeasurement: measurePrompt(ctx.workContract.body, "adapter-assembled", measureUsage("claude", { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 60, cache_creation_input_tokens: 30 })),
+					};
+				},
+			},
+		};
+		const result = await startRun(cwd, { task: { text: "private task body" }, nonInteractive: true }, { adapters });
+		assert.ok(result.ok);
+		if (!result.ok) return;
+		assert.equal(result.value.disposition, "ready_for_review");
+		assert.deepEqual(result.value.metrics?.usage, { inputTokens: 100, outputTokens: 5 });
+		assert.ok(!JSON.stringify(result.value.metrics).includes("private task"));
+		const reread = getRun(cwd, result.value.runId);
+		assert.ok(reread.ok);
+		if (reread.ok) assert.deepEqual(reread.value.metrics, result.value.metrics);
+	});
+
+	it("ignores malformed journal diagnostics during show and resume", async () => {
+		const { cwd } = consumer(SUCCESS_SCRIPT);
+		const controller = new AbortController();
+		const adapters = {
+			grok: grokAdapter,
+			fake: {
+				...fakeAdapter,
+				async next(ctx: Parameters<typeof fakeAdapter.next>[0]) {
+					const result = await fakeAdapter.next(ctx);
+					if (ctx.cursor > 0) controller.abort();
+					return result;
+				},
+			},
+		};
+		const paused = await startRun(cwd, { task: { text: "hello" }, nonInteractive: true }, { adapters, signal: controller.signal });
+		assert.ok(paused.ok);
+		if (!paused.ok) return;
+		const events = readRunEvents(cwd, paused.value.runId);
+		assert.ok(events.some((event) => event.type.endsWith(".fake-progress")));
+		for (const basis of [{ toString: null }, ["codex-cli-v1"]]) {
+			const malformed = events.map((event) => (event.type.endsWith(".fake-progress") ? { ...event, payload: { ...event.payload, usageMeasurement: { schemaVersion: 1, basis, inputTokens: 123 } } } : event));
+			writeFileSync(eventsPath(cwd, paused.value.runId), malformed.map((event) => JSON.stringify(event)).join("\n") + "\n");
+			const shown = getRun(cwd, paused.value.runId);
+			assert.ok(shown.ok);
+			if (shown.ok) {
+				assert.equal(shown.value.state, "paused");
+				assert.equal(shown.value.metrics?.usage, undefined);
+			}
+		}
+		const resumed = await continueRun(cwd, paused.value.runId);
+		assert.ok(resumed.ok, JSON.stringify(resumed));
+		if (resumed.ok) assert.equal(resumed.value.disposition, "ready_for_review");
+	});
+
+	it("does not attribute fake calls to an unused Grok model", async () => {
+		const { cwd } = consumer(`      - { action: complete }\n`, 1, "  grok:\n    model: unused-model\n");
+		const result = await startRun(cwd, { task: { text: "hello" }, nonInteractive: true });
+		assert.ok(result.ok);
+		if (!result.ok) return;
+		const ack = readRunEvents(cwd, result.value.runId).find((event) => event.type.endsWith(".fake-progress"));
+		assert.equal(ack?.payload?.provider, "fake");
+		assert.equal(ack?.payload?.model, "unrecorded");
+	});
+
 	it("resume rejects a substituted worktree before changing the journal and can retry after restoration", async () => {
 		const { cwd } = consumer(`      - { action: decision, code: choose, message: Choose }\n      - { action: complete }\n`);
 		const result = await startRun(cwd, { task: { text: "Task" }, nonInteractive: true });
