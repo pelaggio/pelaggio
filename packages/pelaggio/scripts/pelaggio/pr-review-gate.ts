@@ -22,6 +22,7 @@ import { PR_REVIEW_MARKER, upsertMarkerComment } from "./github-posting.js";
 import { findGuaranteeRecurrenceAdvisory, type GuaranteeRecurrenceAdvisory, recurrenceRollsFromRecords, renderGuaranteeRecurrenceAdvisory } from "./guarantee-authority.js";
 import { parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
 import { type NewPrReviewFleetGateRecord, PR_REVIEW_RECURRENCE_PATH_MAX, type PrReviewGateRecord, type PrReviewRecurrenceFinding, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { REVIEW_RESOURCE_CAPACITIES, REVIEW_SCHEDULING_PROFILES } from "./providers/index.js";
 import { buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
 	buildCarryDispositionDraft,
@@ -35,6 +36,7 @@ import {
 	selectCarrySource,
 	writePrFindingDispositionRecord,
 } from "./review/carry.js";
+import { buildDiscoveryFleetPlan, executeDiscoveryFleet } from "./review/discovery-fleet.js";
 import {
 	evaluateReviewConvergence,
 	materializeAuthoringFinding,
@@ -373,50 +375,6 @@ function mergeChildParkSignals(parent: ParkSignal, children: readonly ParkSignal
 	const winner = withPositive.length > 0 ? withPositive.reduce((a, b) => (a.resetsAt <= b.resetsAt ? a : b)) : parked[0];
 	if (!winner) return;
 	Object.assign(parent, winner);
-}
-
-/**
- * Launch each discovery candidate and settle in `candidates` order.
- *
- * Pools without both Claude and Grok start every seat immediately. When both are present,
- * non-Grok seats start immediately and Grok waits for every Claude promise to settle
- * (fulfillment including park/`ok: false`, or rejection). Every seat promise is wrapped
- * into a settle record AT CREATION — never stored bare — so a seat rejecting while the
- * stage is awaiting a different subset (e.g. Codex crashing during the Claude wait) is
- * already observed and lands as that seat's rejected record instead of an unhandled
- * rejection killing the process before main()'s fail-closed catch (#434). A sparse list
- * would treat holes as fulfilled `undefined`, so the returned list is always dense and
- * index-aligned.
- */
-async function settleDiscoveryLaunches<T>(candidates: readonly StepSettings[], launch: (candidate: StepSettings, index: number) => Promise<T>): Promise<PromiseSettledResult<T>[]> {
-	// Runs synchronously up to `await launch(...)`, attaching the rejection observer the
-	// moment the seat promise exists; the returned settle-record promise never rejects.
-	const settleLaunch = async (candidate: StepSettings, index: number): Promise<PromiseSettledResult<T>> => {
-		try {
-			return { status: "fulfilled", value: await launch(candidate, index) };
-		} catch (reason) {
-			return { status: "rejected", reason };
-		}
-	};
-	const stageGrok = candidates.some((c) => c.provider === "claude") && candidates.some((c) => c.provider === "grok");
-	if (!stageGrok) return Promise.all(candidates.map(settleLaunch));
-
-	const slots: Array<Promise<PromiseSettledResult<T>> | undefined> = Array.from({ length: candidates.length });
-	const claude: Promise<PromiseSettledResult<T>>[] = [];
-	for (const [index, candidate] of candidates.entries()) {
-		if (candidate.provider === "grok") continue;
-		const started = settleLaunch(candidate, index);
-		slots[index] = started;
-		if (candidate.provider === "claude") claude.push(started);
-	}
-	// Staged wait reads settled records (which cannot reject), preserving launch order:
-	// Grok starts only after every Claude seat settles.
-	await Promise.all(claude);
-	for (const [index, candidate] of candidates.entries()) {
-		if (candidate.provider !== "grok") continue;
-		slots[index] = settleLaunch(candidate, index);
-	}
-	return Promise.all(slots.map((slot, index) => slot ?? Promise.resolve<PromiseSettledResult<T>>({ status: "rejected", reason: new Error(`discovery launch missing at index ${index}`) })));
 }
 
 /** Build the PR-comment body. The agent text is preserved under per-pass
@@ -1000,68 +958,83 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 	for (let iteration = 1; iteration <= policy.maxPasses; iteration++) {
 		const iterationPasses: ReviewPass[] = [];
-		for (const label of labels) {
+		const fleetInputs = labels.flatMap((label, labelIndex) => {
 			const skillArgs = options.skillArguments ?? `--pr ${options.pr}`;
 			const args = label === "standard" ? skillArgs : `${skillArgs} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
-			// One shared prompt; configured-order aggregation. When Claude and Grok share the
-			// pool, non-Grok seats start immediately and Grok waits for every Claude promise to settle.
 			const prompt = `${expandPackagedSkill("pr-review", args)}${discoveryContext}`;
-			const children = reviewDrivers.map(() => childParkSignal());
-			const settled = await settleDiscoveryLaunches(reviewDrivers, (candidate, index) =>
-				runReviewPass(iteration, label, prompt, candidate, options.itemId, {
+			return reviewDrivers.map((candidate, driverIndex) => ({
+				key: `${iteration}:${labelIndex}:${driverIndex}`,
+				group: labelIndex,
+				provider: candidate.provider,
+				payload: { label, prompt, candidate, child: childParkSignal() },
+			}));
+		});
+		const fleetPlan = buildDiscoveryFleetPlan({
+			cells: fleetInputs,
+			profiles: REVIEW_SCHEDULING_PROFILES,
+			capacities: REVIEW_RESOURCE_CAPACITIES,
+			maxConcurrent: Math.max(1, new Set(reviewDrivers.map((driver) => driver.provider)).size),
+		});
+		const settled = await executeDiscoveryFleet({
+			plan: fleetPlan,
+			launch: ({ payload }) =>
+				runReviewPass(iteration, payload.label, payload.prompt, payload.candidate, options.itemId, {
 					cwd,
 					runStep: runStepImpl,
 					profile,
-					// children is built from the same reviewDrivers map, so index always lands.
-					parkSignal: children[index] ?? childParkSignal(),
+					parkSignal: payload.child,
 					foreignRootDenial: seatDenial,
 				}),
-			);
-			mergeChildParkSignals(signal, children);
+			shouldStop: ({ payload }) => payload.child.parked,
+		});
+		mergeChildParkSignals(
+			signal,
+			fleetPlan.cells.map((cell) => cell.payload.child),
+		);
 
-			// Convert rejections into typed failed ReviewPass records in configured-driver order.
-			for (const [index, candidate] of reviewDrivers.entries()) {
-				const settledResult = settled[index];
-				let pass: ReviewPass;
-				if (!settledResult) {
-					const result: StepResult = { ok: false, subtype: "error_crash", text: "missing settled result", fullText: "", assistantText: "", cost: 0, turns: 0 };
-					pass = {
-						iteration,
-						label,
-						result,
-						gate: "block",
-						driver: driverIdentity(candidate),
-						effectiveVerdict: "block",
-						failureKind: "infra",
-						diagnostic: "Review fan-out missing settled result.",
-						failureSubtype: "error_crash",
-					};
-				} else if (settledResult.status === "fulfilled") {
-					pass = settledResult.value;
-				} else {
-					const message = settledResult.reason instanceof Error ? settledResult.reason.message : String(settledResult.reason);
-					const result: StepResult = { ok: false, subtype: "error_crash", text: message, fullText: "", assistantText: "", cost: 0, turns: 0 };
-					pass = {
-						iteration,
-						label,
-						result,
-						gate: "block",
-						driver: driverIdentity(candidate),
-						effectiveVerdict: "block",
-						failureKind: "infra",
-						diagnostic: `Review execution threw: ${message}.`,
-						failureSubtype: "error_crash",
-					};
-				}
-				iterationPasses.push(pass);
-				passes.push(pass);
+		// Convert settlements into typed ReviewPass records in stable label/driver order.
+		for (const cell of fleetPlan.cells) {
+			const settledResult = settled[cell.index];
+			const { candidate, label } = cell.payload;
+			let pass: ReviewPass;
+			if (!settledResult) {
+				const result: StepResult = { ok: false, subtype: "error_crash", text: "missing settled result", fullText: "", assistantText: "", cost: 0, turns: 0 };
+				pass = {
+					iteration,
+					label,
+					result,
+					gate: "block",
+					driver: driverIdentity(candidate),
+					effectiveVerdict: "block",
+					failureKind: "infra",
+					diagnostic: "Review fan-out missing settled result.",
+					failureSubtype: "error_crash",
+				};
+			} else if (settledResult.status === "fulfilled") {
+				pass = settledResult.value;
+			} else {
+				const message = settledResult.status === "rejected" ? (settledResult.reason instanceof Error ? settledResult.reason.message : String(settledResult.reason)) : "discovery launch stopped after a sibling parked";
+				const result: StepResult = { ok: false, subtype: "error_crash", text: message, fullText: "", assistantText: "", cost: 0, turns: 0 };
+				pass = {
+					iteration,
+					label,
+					result,
+					gate: "block",
+					driver: driverIdentity(candidate),
+					effectiveVerdict: "block",
+					failureKind: "infra",
+					diagnostic: `Review execution threw: ${message}.`,
+					failureSubtype: "error_crash",
+				};
 			}
+			iterationPasses.push(pass);
+			passes.push(pass);
+		}
 
-			// Park short-circuits after the current fan-out settles (no more labels/iterations).
-			for (const pass of iterationPasses.slice(-reviewDrivers.length)) {
-				const parked = parkGateResult(signal, pass.result, passes);
-				if (parked) return parked;
-			}
+		// Park short-circuits after every already-started discovery settles.
+		for (const pass of iterationPasses) {
+			const parked = parkGateResult(signal, pass.result, passes);
+			if (parked) return parked;
 		}
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).

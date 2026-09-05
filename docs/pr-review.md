@@ -487,9 +487,11 @@ the ordinary `pelaggio run` pipeline.
    The safe default is one iteration and one review driver; `review.max-passes` opts
    into at most three iterations, and `models.profiles.*.providers.pr-review: […]`
    opts into multi-driver **fan-out** (every listed driver **runs** the same
-   discovery prompt — not author rotation). Launch is fully concurrent except when
-   the pool contains both Claude and Grok: Grok waits for Claude discovery to
-   finish, not merely to boot. If the deterministic classifier sees
+   discovery prompt — not author rotation). The complete selected label × driver
+   discovery matrix is scheduled through fixed capacity-one provider resources,
+   so different providers overlap while one provider's cells remain serial. When
+   the pool contains both Claude and Grok, every Grok cell waits for every Claude
+   discovery in the iteration to finish, not merely to boot. If the deterministic classifier sees
    security-sensitive paths or diff keywords, the CLI runs a second fresh
    `pr-review --red-team` discovery label and fans that label across the same
    drivers. After discovery, every driver pass with `must-fix` candidates gets its
@@ -597,9 +599,10 @@ human handoff.
 
 When `providers.pr-review` is a list, every required `(driver × label)` cell still
 runs (private per-driver park signals; earliest positive `resetsAt` wins on merge).
-Launch is fully concurrent except when Claude and Grok share the pool: non-Grok
-seats start immediately and Grok waits for every Claude discovery promise to
-settle. All-pass / fail-closed matrix semantics are unchanged. After sequential
+The whole selected discovery matrix is planned together. Different providers may
+overlap, while a fixed capacity-one session resource serializes each provider's
+cells. When Claude and Grok share the pool, every Grok cell waits for every Claude
+discovery in the iteration to settle. All-pass / fail-closed matrix semantics are unchanged. After sequential
 per-driver verification, the gate computes a closed `agreement` field on the result
 (and in the metrics marker) without scraping comment prose:
 

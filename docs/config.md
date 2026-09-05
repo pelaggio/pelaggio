@@ -334,10 +334,12 @@ excludes the realized author of the artifact and an N-seat request requires
 distinct providers; insufficient eligible seats fails closed. For `pr-review`,
 order is the deterministic render/aggregation order of driver passes (and the
 order used when merging concurrent park metadata), not a start-order contract.
-When the pool contains both Claude and Grok, launch is safety-staged: non-Grok
-seats start immediately and Grok waits for every Claude discovery promise to
-settle. Scalars and one-element lists remain static pins (single-driver / no
-fan-out). Provider lists are rejected for
+Discovery cells are planned for the complete selected label × driver matrix.
+Each provider has a fixed capacity-one session resource, so its own cells are
+serial while different providers overlap. When the pool contains both Claude
+and Grok, launch remains safety-staged: every Grok cell waits for every Claude
+discovery promise in the iteration to settle. Scalars and one-element lists
+remain static pins (single-driver / no fan-out). Provider lists are rejected for
 `pr-verify`, `ship`, coordination, recovery, and other unsupported steps —
 verification stays one independently configurable scalar driver per discovery
 result.
@@ -897,10 +899,13 @@ budget, turn limit, and effort.
 
 A provider pool on `pr-review` is a **fan-out set**: every candidate **runs**
 the same standard (and, when triggered, red-team) discovery prompt. List order
-is render/aggregation order, not a start-order contract. Pools without both
-Claude and Grok start every seat immediately. When the pool contains both,
-non-Grok seats start immediately and Grok waits for every Claude discovery
-promise to settle (not merely to boot); Codex may overlap either phase.
+is render/aggregation order, not a start-order contract. The gate plans the
+whole selected label × driver matrix at once. Cells from different providers
+may overlap; each provider's cells use a fixed capacity-one session resource.
+When the pool contains both Claude and Grok, every Grok discovery waits for
+every Claude discovery in the iteration to settle (not merely to boot); Codex
+may overlap either phase. Verification starts after discovery completes and
+remains sequential.
 `pr-verify` stays scalar — one isolated verification session per blocker-bearing
 driver report. The gate is all-pass / fail-closed: every required
 `(driver × label)` cell must complete with a valid effective PASS. A mix of
