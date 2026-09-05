@@ -21,6 +21,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	// L0 foundation — types/config/argv/terminal/pure utilities; read-only fs probing ok, no `.dev` writes.
 	"types.ts": 0,
+	"usage-measurement.ts": 0,
+	"usage-report.ts": 0,
+	"local-autopilot/usage.ts": 0,
 	"registers.ts": 0,
 	"text.ts": 0,
 	"step-names.ts": 0,
@@ -39,6 +42,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"local-autopilot/config-load.ts": 1,
 	"local-autopilot/execution-policy.ts": 1,
 	"local-autopilot/process.ts": 1,
+	"local-autopilot/prompt.ts": 0,
 	"local-autopilot/fold.ts": 2,
 	"local-autopilot/run-worktree.ts": 1,
 	"local-autopilot/fake-adapter.ts": 3,

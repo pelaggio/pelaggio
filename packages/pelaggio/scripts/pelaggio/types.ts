@@ -1,4 +1,5 @@
 import type { Step } from "./step-names.js";
+import type { UsageMeasurement } from "./usage-measurement.js";
 
 export type { Step };
 
@@ -101,6 +102,8 @@ export interface StepResult {
 	costEstimated?: boolean;
 	turns: number;
 	tokens?: TokenUsage;
+	/** Observe-only, versioned usage; never a quota/budget input. */
+	usageMeasurement?: UsageMeasurement;
 	toolCounts?: Record<string, number>;
 	outputTail?: string;
 	/**
@@ -133,6 +136,8 @@ export interface StepLog {
 	/** Failure category from `step-runner.ts` — present only on failed steps. */
 	subtype?: string;
 	tokens?: TokenUsage;
+	/** Observe-only, versioned usage; never a quota/budget input. */
+	usageMeasurement?: UsageMeasurement;
 	/** 1-indexed attempt number; absent means 1. */
 	attempt?: number;
 	/** Set when this attempt re-entered the step after the prior attempt hit its turn limit

@@ -4,6 +4,7 @@
  * never depends on loop policy — the last `L1 -> L2` edge the module-architecture plan carried.
  */
 import type { ProviderName, ReviewOutcome, StepResult, TokenUsage } from "../types.js";
+import type { UsageMeasurement } from "../usage-measurement.js";
 import type { AuthoringReviewFinding, ReviewFindingsParseErrorCode } from "./findings.js";
 /**
  * Safety-floor posture for the run. `enabled` (default) applies the ADR-0016 code-diff safety floor:
@@ -31,7 +32,7 @@ export interface ReviewCandidate {
 export type UnreadableSource = { chars: number; hasStartMarker: boolean; hasEndMarker: boolean };
 export type SeatOutputObservation = { state: "readable"; payload: "empty" | "non-empty" } | { state: "unreadable"; code: ReviewFindingsParseErrorCode; source: UnreadableSource };
 export type SeatAttemptRecord =
-	| { completion: "returned"; attempt: number; ok: boolean; subtype: string; cost: number; turns: number; tokens?: TokenUsage; output: SeatOutputObservation }
+	| { completion: "returned"; attempt: number; ok: boolean; subtype: string; cost: number; turns: number; tokens?: TokenUsage; usageMeasurement?: UsageMeasurement; output: SeatOutputObservation }
 	| { completion: "rejected"; attempt: number; reason: "seat-rejected"; cost: 0; turns: 0 };
 export type JudgeSkipReason = "no-reviewer-completed" | "cross-model-split";
 export interface SeatAttemptObservation {

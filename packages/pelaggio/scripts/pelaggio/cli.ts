@@ -1,9 +1,10 @@
 import { parseArgs } from "node:util";
 import type { Flags } from "./types.js";
 
-export type CliIntent = { kind: "run"; flags: Flags } | { kind: "stats"; json: boolean } | { kind: "error"; message: string; exitCode: number };
+export type CliIntent = { kind: "run"; flags: Flags } | { kind: "stats"; json: boolean; usage?: boolean } | { kind: "error"; message: string; exitCode: number };
 
 const OPTIONS = {
+	usage: { type: "boolean", default: false },
 	cycles: { type: "string", default: "1" },
 	parallel: { type: "string", default: "1" },
 	item: { type: "string" },
@@ -57,8 +58,10 @@ export function parseCli(argv: string[]): CliIntent {
 				exitCode: 2,
 			};
 		}
-		return { kind: "stats", json: !!values.json };
+		return { kind: "stats", json: !!values.json, ...(values.usage ? { usage: true } : {}) };
 	}
+
+	if (values.usage) return { kind: "error", message: "--usage is only available with stats", exitCode: 2 };
 
 	if (positionals.length > 0) {
 		const tokens = JSON.stringify(positionals);

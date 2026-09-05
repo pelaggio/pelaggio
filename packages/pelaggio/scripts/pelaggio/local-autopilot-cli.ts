@@ -6,10 +6,13 @@ import { loadLocalConfig } from "./local-autopilot/config-load.js";
 import { cancelRun, continueRun, getRun, startRun } from "./local-autopilot/engine.js";
 import { resolveExecutionAssurance } from "./local-autopilot/execution-policy.js";
 import { localGit } from "./local-autopilot/git.js";
+import { readRunEvents } from "./local-autopilot/journal.js";
 import { configPath } from "./local-autopilot/paths.js";
 import { exitCodeFor, exitCodeForProblem, presentHuman, presentJson, presentProblemHuman } from "./local-autopilot/present.js";
 import { protocolProblem } from "./local-autopilot/transport.js";
 import type { ParseResult, Problem, RunSnapshot, TaskInput } from "./local-autopilot/types.js";
+import { localUsageReport } from "./local-autopilot/usage.js";
+import { renderUsageReport } from "./usage-report.js";
 
 const OPTIONS = {
 	file: { type: "string" },
@@ -24,7 +27,7 @@ const OPTIONS = {
 const HELP: Record<string, string> = {
 	run: "Usage: pelaggio run (--file <path> | --text <task> | --stdin) [--non-interactive] [--json] [--request-id <id>] [--allow-host-execution]\nExample: pelaggio run --file ticket.md --allow-host-execution\n",
 	resume: "Usage: pelaggio resume <runId> [--json] [--allow-host-execution]\n",
-	show: "Usage: pelaggio show <runId> [--json]\n",
+	show: "Usage: pelaggio show <runId> [--usage] [--json]\n",
 	cancel: "Usage: pelaggio cancel <runId> [--json]\n",
 	doctor: "Usage: pelaggio doctor [--json]\n",
 };
@@ -93,10 +96,17 @@ async function resumeCommand(argv: string[]): Promise<number> {
 }
 
 async function showCommand(argv: string[]): Promise<number> {
-	const parsed = parseArgs({ args: argv, options: { json: { type: "boolean", default: false } }, allowPositionals: true });
+	const parsed = parseArgs({ args: argv, options: { json: { type: "boolean", default: false }, usage: { type: "boolean", default: false } }, allowPositionals: true });
 	const runId = parsed.positionals[0];
 	const json = !!parsed.values.json;
 	if (!runId || parsed.positionals.length !== 1) return writeProblem(json, protocolProblem("run-id", "show requires exactly one runId"));
+	if (parsed.values.usage) {
+		const current = getRun(process.cwd(), runId);
+		if (!current.ok) return writeProblem(json, current.problem);
+		const report = { ...localUsageReport(readRunEvents(process.cwd(), runId)), runId, state: current.value.state, disposition: current.value.disposition };
+		process.stdout.write(`${json ? JSON.stringify(report) : renderUsageReport(report)}\n`);
+		return 0;
+	}
 	return writeResult(json, getRun(process.cwd(), runId));
 }
 

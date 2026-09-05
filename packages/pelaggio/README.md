@@ -151,6 +151,13 @@ process has stopped; normal runs remove private runner state.
 - [Daemon and web UI](https://github.com/pelaggio/pelaggio/blob/main/docs/server.md)
 - [Issues](https://github.com/pelaggio/pelaggio/issues)
 
+## Usage diagnostics
+
+`npx pelaggio stats --usage [--json]` reports pipeline token/cache coverage and observed harness
+prompt bytes. For a local-autopilot run, use `npx pelaggio show <runId> --usage [--json]`.
+Missing usage remains unavailable; bytes are not token estimates. These reports are local and
+on demand. See the [pilot guide](../../docs/usage-pilot.md) for scope and accounting limits.
+
 ## License
 
 Copyright © 2026 Chris Horne. Licensed under the **GNU Affero General Public License,

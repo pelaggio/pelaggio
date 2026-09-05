@@ -19,6 +19,7 @@ import { buildAgentEnv, makeSecretScrubber, scopeEnvAllowlistToProvider } from "
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
 import type { BlockedKind, ParkSignal, ProviderCapabilities, Step, StepEvent, StepResult, TokenUsage } from "../types.js";
+import { measureUsage } from "../usage-measurement.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
 import type { StepProvider } from "./types.js";
 
@@ -309,6 +310,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 	const { assistantText, fullText } = projection.read();
 	const decisions = emitDecisionsFromText(assistantText);
 	for (const d of decisions) emitted.push({ type: "decision", decision: d.decision });
+	const usageMeasurement = measureUsage("grok", usage);
 	const toolCountsObj = toolCounts.size > 0 ? Object.fromEntries(toolCounts) : undefined;
 	return {
 		result: {
@@ -321,6 +323,7 @@ export function buildGrokStepResult(name: Step, updates: JsonObject[], exitInfo:
 			costEstimated: true,
 			turns,
 			...(tokens ? { tokens } : {}),
+			...(usageMeasurement ? { usageMeasurement } : {}),
 			...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 			...(outputTail ? { outputTail } : {}),
 			...(stalledAsk ? { stalledAsk: true } : {}),

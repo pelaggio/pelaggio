@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ulid } from "ulid";
 import { tryWithFileLock, withFileLock } from "../file-lock.js";
+import { readUsageMeasurement } from "../usage-measurement.js";
 import { codexAdapter } from "./codex-adapter.js";
 import { loadLocalConfig } from "./config-load.js";
 import { resolveExecutionAssurance } from "./execution-policy.js";
@@ -184,7 +185,7 @@ async function driveSteps(state: DriveState): Promise<ParseResult<RunSnapshot>> 
 			}
 			continue;
 		}
-		const { action, cursor } = await adapter.next({
+		const { action, cursor, usageMeasurement } = await adapter.next({
 			cwd: state.cwd,
 			worktree: state.worktree,
 			workContract: state.workContract,
@@ -197,15 +198,21 @@ async function driveSteps(state: DriveState): Promise<ParseResult<RunSnapshot>> 
 		if (state.deps.signal?.aborted) break;
 		validateRunWorktree(state.cwd, state.runId);
 		state.cursor = cursor;
+		const progress = {
+			nextIndex: cursor,
+			provider: adapter.name,
+			model: (adapter.name === "grok" ? state.config.harness.grok?.model : adapter.name === "codex" ? state.config.harness.codex?.model : undefined) ?? "unrecorded",
+			usageMeasurement: readUsageMeasurement(usageMeasurement),
+		};
 		if (action.kind === "write") {
 			const target = containedPath(state.worktree, action.path);
 			mkdirSync(dirname(target), { recursive: true });
 			writeFileSync(target, action.content);
 			commitWorktree(state, `pelaggio: ${action.path}`);
-			emit(state, "pelaggio.local-autopilot.fake-progress", { nextIndex: cursor });
+			emit(state, "pelaggio.local-autopilot.fake-progress", progress);
 			continue;
 		}
-		emit(state, "pelaggio.local-autopilot.fake-progress", { nextIndex: cursor, action });
+		emit(state, "pelaggio.local-autopilot.fake-progress", { ...progress, action });
 		state.phase = { kind: "action", action };
 	}
 	const problem = makeProblem({ type: "protocol", code: "interrupted", message: "run interrupted", retryable: true, runId: state.runId });

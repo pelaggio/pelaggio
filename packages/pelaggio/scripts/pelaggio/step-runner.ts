@@ -3,11 +3,13 @@
  * funnel, and delegates through the registry. The seam types live in `providers/types.ts`, the
  * registry in `providers/index.ts`, and each provider in `providers/<name>.ts`.
  */
+
 import { CONFIG, modelForProvider, REPO, resolveStepSettings } from "./config.js";
 import { appendProviderObservation, createEventWriter } from "./flow-events.js";
 import { getProvider } from "./providers/index.js";
 import type { RunStepFn } from "./providers/types.js";
 import type { EventWriter, ProviderName, ProviderObservation, Step } from "./types.js";
+import { measurePrompt } from "./usage-measurement.js";
 
 export {
 	beginMainCheckoutAttribution,
@@ -77,23 +79,39 @@ export const runStep: RunStepFn = (name, prompt, opts, emit) => {
 	if (process.env.NODE_TEST_CONTEXT !== undefined) {
 		throw new Error(`provider execution blocked under node --test: inject a RunStepFn instead of calling the production dispatcher (step: ${name}; #420)`);
 	}
-	const resolved = resolveStepSettings(CONFIG, opts.profile, name);
-	const provider = opts.executionOverride?.provider ?? resolved.provider;
-	const model = provider === "codex" ? (opts.executionOverride?.codexModel ?? resolved.codexModel ?? "default") : (opts.executionOverride?.model ?? modelForProvider(resolved, provider) ?? "default");
-	let onProviderObservation = opts.onProviderObservation;
-	if (!onProviderObservation) {
-		if (!opts.eventWriter && !standaloneEventWriter) standaloneEventWriter = createEventWriter({ root: REPO });
-		const writer = opts.eventWriter ?? standaloneEventWriter;
-		if (!writer) throw new Error("provider observation writer initialization failed");
-		onProviderObservation = createProviderObservationHandler({
-			writer,
-			provider,
-			step: name,
-			model,
-			...(opts.itemId !== undefined ? { itemId: opts.itemId } : {}),
-			...(opts.providerObservationAttempt !== undefined ? { attempt: opts.providerObservationAttempt } : {}),
-			...(opts.providerObservationLog ? { log: opts.providerObservationLog } : {}),
-		});
-	}
-	return getProvider(provider).runStep(name, prompt, { ...opts, onProviderObservation }, emit);
+	return dispatchStep(name, prompt, opts, emit);
 };
+
+/** Explicit provider injection keeps dispatcher tests hermetic without disabling the production guard. */
+export function createStepDispatcher(providerRunner: (provider: ProviderName) => RunStepFn): RunStepFn {
+	return (name, prompt, opts, emit) => {
+		const resolved = resolveStepSettings(CONFIG, opts.profile, name);
+		const provider = opts.executionOverride?.provider ?? resolved.provider;
+		const model = provider === "codex" ? (opts.executionOverride?.codexModel ?? resolved.codexModel ?? "default") : (opts.executionOverride?.model ?? modelForProvider(resolved, provider) ?? "default");
+		let onProviderObservation = opts.onProviderObservation;
+		if (!onProviderObservation) {
+			if (!opts.eventWriter && !standaloneEventWriter) standaloneEventWriter = createEventWriter({ root: REPO });
+			const writer = opts.eventWriter ?? standaloneEventWriter;
+			if (!writer) throw new Error("provider observation writer initialization failed");
+			onProviderObservation = createProviderObservationHandler({
+				writer,
+				provider,
+				step: name,
+				model,
+				...(opts.itemId !== undefined ? { itemId: opts.itemId } : {}),
+				...(opts.providerObservationAttempt !== undefined ? { attempt: opts.providerObservationAttempt } : {}),
+				...(opts.providerObservationLog ? { log: opts.providerObservationLog } : {}),
+			});
+		}
+		return providerRunner(provider)(name, prompt, { ...opts, onProviderObservation }, emit).then((result) => {
+			try {
+				return { ...result, usageMeasurement: measurePrompt(prompt, "dispatcher-input", result.usageMeasurement) };
+			} catch {
+				// Diagnostic failure must not turn a returned provider result into an execution failure.
+				return result;
+			}
+		});
+	};
+}
+
+const dispatchStep = createStepDispatcher((provider) => getProvider(provider).runStep);

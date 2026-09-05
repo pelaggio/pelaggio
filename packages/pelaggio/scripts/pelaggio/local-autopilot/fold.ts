@@ -3,6 +3,7 @@ import { isBlockingProblem } from "./lifecycle.js";
 import { parseArtifact, parsePauseReason, parseProblem, parseWorkContract } from "./parse.js";
 import { protocolProblem } from "./transport.js";
 import type { Artifact, Disposition, ExecutionAssurance, PauseReason, Problem, RunEvent, RunSnapshot, RunState, WorkContract, WorktreeRef } from "./types.js";
+import { localMetricsUsage } from "./usage.js";
 
 type AcknowledgedAction = Exclude<HarnessAction, { kind: "write" }>;
 
@@ -143,6 +144,7 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 	if (!last) throw new Error("journal is empty");
 	// Pause-reason problems are live only while paused; separately emitted problem events persist.
 	const liveProblems = pauseReason?.problem ? [...problems, pauseReason.problem] : problems;
+	const usage = localMetricsUsage(events);
 	const snapshot: RunSnapshot = {
 		schemaVersion: 1,
 		runId: started.runId,
@@ -163,6 +165,7 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			harnessCalls,
 			verificationPasses,
 			repairAttempts,
+			...(usage ? { usage } : {}),
 		},
 	};
 	return { snapshot, nextFakeIndex, acknowledgedSeq: last.seq, phase, verificationFailure };

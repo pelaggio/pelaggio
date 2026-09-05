@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
@@ -39,6 +39,29 @@ function runCli(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.en
 }
 
 describe("local autopilot packed CLI", () => {
+	it("serves the usage projection from an extracted tarball without a telemetry service", () => {
+		const packedDir = mkdtempSync(join(tmpdir(), "pelaggio-usage-tarball-"));
+		temps.push(packedDir);
+		const packed = execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", packedDir], { cwd: PELAGGIO_PKG, encoding: "utf8" });
+		const filename = JSON.parse(packed.slice(packed.indexOf("[")))[0].filename as string;
+		execFileSync("tar", ["-xzf", join(packedDir, filename), "-C", packedDir]);
+		// Reuse installed dependencies; the tarball supplies every Pelaggio runtime module.
+		symlinkSync(join(PELAGGIO_PKG, "node_modules"), join(packedDir, "package", "node_modules"), "dir");
+		const cwd = consumer();
+		const bin = join(packedDir, "package", "bin", "pelaggio.js");
+		const invoke = (args: string[]) => spawnSync(process.execPath, [bin, ...args], { cwd, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
+		const started = invoke(["run", "--file", "ticket.md", "--json"]);
+		assert.equal(started.status, 0, started.stderr);
+		const snapshot = JSON.parse(started.stdout);
+		const shown = invoke(["show", snapshot.runId, "--usage", "--json"]);
+		assert.equal(shown.status, 0, shown.stderr);
+		const report = JSON.parse(shown.stdout);
+		assert.equal(report.kind, "pelaggio.usage-report");
+		assert.equal(report.disposition, "ready_for_review");
+		assert.equal(report.totals.inputTokens.value, null);
+		assert.equal(report.totals.inputTokens.observed, 0);
+		assert.ok(!shown.stdout.includes("Add a hello export"));
+	});
 	it("JSON mode emits one schema-valid stdout payload with no ANSI", () => {
 		const cwd = consumer();
 		const result = runCli(cwd, ["run", "--file", "ticket.md", "--non-interactive", "--json"]);
@@ -67,6 +90,17 @@ describe("local autopilot packed CLI", () => {
 		const shown = runCli(cwd, ["show", snapshot.runId, "--json"]);
 		assert.equal(shown.status, 0, shown.stderr);
 		assert.equal(JSON.parse(shown.stdout).runId, snapshot.runId);
+		const usage = runCli(cwd, ["show", snapshot.runId, "--usage", "--json"]);
+		assert.equal(usage.status, 0, usage.stderr);
+		const report = JSON.parse(usage.stdout);
+		assert.equal(report.kind, "pelaggio.usage-report");
+		assert.equal(report.totals.inputTokens.value, null); // Fake does not call a model.
+		assert.ok(report.observations > 0);
+		assert.ok(!usage.stdout.includes("Add a hello export"));
+		assert.ok(!usage.stdout.includes(cwd));
+		const again = runCli(cwd, ["show", snapshot.runId, "--usage", "--json"]);
+		assert.deepEqual(JSON.parse(again.stdout), report);
+
 		const doctor = runCli(cwd, ["doctor", "--json"]);
 		assert.equal(doctor.status, 0, doctor.stderr);
 		assert.equal(JSON.parse(doctor.stdout).ok, true);

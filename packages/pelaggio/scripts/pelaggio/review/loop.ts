@@ -162,6 +162,7 @@ function observeSeatAttempt(options: {
 		cost: options.result.cost,
 		turns: options.result.turns,
 		...(options.result.tokens ? { tokens: options.result.tokens } : {}),
+		...(options.result.usageMeasurement ? { usageMeasurement: options.result.usageMeasurement } : {}),
 		output,
 	};
 }

@@ -13,6 +13,8 @@ import { bashDeniedRegisterPattern, bashDeniedRegisters, registerRelativePath, w
 import { composeSystemAppend, createStepTextProjection, EDIT_LOOP_EXEMPT_STEPS, EDIT_LOOP_THRESHOLD, isWorktreePath, type StepTextProjection } from "../step-runner-shared.js";
 import { MUTATING_TOOLS, toolBrief } from "../tui.js";
 import type { BlockedKind, ProviderCapabilities, ProviderObservation, QuotaWindowObservation, StepResult, TokenUsage } from "../types.js";
+import type { UsageMeasurement } from "../usage-measurement.js";
+import { measureUsage } from "../usage-measurement.js";
 import { ensureWorktreeDeps } from "../worktree-deps.js";
 import { claudeAccountRealmId, deriveClaudePoolId } from "./claude-pool-id.js";
 import type { RunStepFn, StepProvider } from "./types.js";
@@ -542,6 +544,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 	let rateLimitPark = false;
 	let lastToolName = "";
 	let tokens: TokenUsage | undefined;
+	let usageMeasurement: UsageMeasurement | undefined;
 	const shouldEmitRateLimitObservation = createClaudeRateLimitObservationDeduper();
 
 	// Edit loop detection
@@ -671,6 +674,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 				// numeric per-category token fields, never the object.
 				const u: SDKResultMessage["usage"] | undefined = r.usage;
 				if (u) {
+					usageMeasurement = measureUsage("claude", u);
 					tokens = {
 						input: u.input_tokens ?? 0,
 						output: u.output_tokens ?? 0,
@@ -739,6 +743,7 @@ const claudeRunStep: RunStepFn = async (name, prompt, opts, emit) => {
 		cost,
 		turns: resultTurns,
 		...(tokens ? { tokens } : {}),
+		...(usageMeasurement ? { usageMeasurement } : {}),
 		...(toolCountsObj ? { toolCounts: toolCountsObj } : {}),
 		...(outputTail ? { outputTail } : {}),
 		...(stalledAsk ? { stalledAsk: true } : {}),
