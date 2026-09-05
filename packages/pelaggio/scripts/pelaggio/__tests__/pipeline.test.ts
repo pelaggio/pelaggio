@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
-import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, execSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
+import { allocateAttempt } from "../attempt-identity.js";
 import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
-import { appendReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
-import { dispatchStepEffects, EffectsManifestError, writeEffectsManifest } from "../effects.js";
+import { appendReviewEscalation, lookupReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
+import { dispatchStepEffects, EffectsManifestError, effectManifestPath, writeEffectsManifest } from "../effects.js";
 import { createEventWriter, readEventLog } from "../flow-events.js";
 import { FifoPolicy } from "../flow-policy.js";
 import { runOrchestrator } from "../orchestrator.js";
 import { archiveReviewFindingsAfterImplement, defaultTypecheckRatchet, type RunStepFn, runPipeline } from "../pipeline.js";
 import type { PrReviewGateResult, RunPrReviewGateOptions } from "../pr-review-gate.js";
 import { OPERATOR_ATTESTED_TTY_SUPPRESSION } from "../provider-routing.js";
+import { type ReviewRecord, validateReviewRecord } from "../review/record.js";
 import { verifyOrRepairAuthoringReviewHostDependencies } from "../review/seat-deps.js";
 import { appliedReviewFindingsArchivePath, reviewFindingsDigest } from "../review-findings-archive.js";
 import { shipBodyFile } from "../ship/decision.js";
@@ -4353,6 +4355,7 @@ describe("runPipeline — authoring review capability seating + effects (#337)",
 
 		assert.equal(result.outcome, "completed", `expected completed cycle; error=${failedError(result)}`);
 		assert.ok(!manifests.some((m) => m.step === "shakedown-code" && m.attempt === 0));
+		assert.equal(existsSync(join(worktree, ".dev/review-records")), false);
 	});
 });
 
@@ -5331,5 +5334,138 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 		assert.equal(result.outcome, "completed", "thrown pre-flight is advisory");
 		assert.equal(calls.filter((c) => c.step === "ship").length, 1);
 		assert.equal(cleaned.length, 1);
+	});
+});
+
+describe("runPipeline — durable authoring record root (#788)", () => {
+	it("preserves clean and split records and a committed decision source after deleting real claim worktrees", async () => {
+		const saved = { enabled: REVIEW_CONFIG.authoring.enabled, reviewers: REVIEW_CONFIG.authoring.reviewers, judge: REVIEW_CONFIG.authoring.judge };
+		REVIEW_CONFIG.authoring.enabled = "local";
+		REVIEW_CONFIG.authoring.reviewers = [
+			{ id: "claude", provider: "claude" },
+			{ id: "grok", provider: "grok" },
+		];
+		REVIEW_CONFIG.authoring.judge = { id: "judge", provider: "claude" };
+		const { parent, repo } = makeTempRepoWithParent();
+		const retained: Array<{ path: string; bytes: string }> = [];
+		const legacyArtifacts: Array<{ path: string; bytes: string }> = [];
+		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "Actual clean review", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const blocker = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "Judgment split", findings: [{ severity: "must-fix", message: "Style regression", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
+		const judge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [] })}\nEND_AUTHORING_REVIEW_JUDGE`;
+		try {
+			for (const [itemId, split] of [
+				["TOOL-99", false],
+				["TOOL-99", true],
+			] as const) {
+				const worktree = join(parent, `${WORKTREE_PREFIX}${itemId.toLowerCase()}`);
+				const branch = `feat/${itemId.toLowerCase()}-${split ? "retry" : "first"}`;
+				execFileSync("git", ["worktree", "add", "-q", "-b", branch, worktree], { cwd: repo });
+				if (split) {
+					for (let n = 1; n <= 4; n++) assert.equal(allocateAttempt(worktree, itemId), n);
+					for (const artifact of legacyArtifacts) {
+						const path = join(worktree, artifact.path);
+						mkdirSync(dirname(path), { recursive: true });
+						writeFileSync(path, artifact.bytes);
+					}
+				}
+				const signal = makeParkSignal();
+				const { runStep } = createMockRunStep(
+					{
+						implement: { ok: true, writes: { [`impl-${itemId}.txt`]: split ? "revised" : "implemented" } },
+						"pr-review": split
+							? [
+									{ ok: true, text: clean, fullText: clean },
+									{ ok: true, text: blocker, fullText: blocker },
+								]
+							: { ok: true, text: clean, fullText: clean },
+						"pr-verify": { ok: true, text: judge, fullText: judge },
+						ship: {
+							ok: true,
+							text: `ship-merged: ${itemId}`,
+							sideEffect: () => {
+								execFileSync("git", ["merge", "-q", "--no-ff", branch], { cwd: repo });
+							},
+						},
+					},
+					signal,
+				);
+				let captured: ReviewEscalationWriteInput | undefined;
+				const result = await runPipeline({ ...baseOpts(worktree), itemId, startFrom: "implement" }, signal, baseFlags, {
+					runStep,
+					mainRepo: split ? worktree : repo,
+					listWorktrees: () => [repo, worktree],
+					appendLog: () => {},
+					runShipBookkeeping: noopBookkeeping,
+					writeEffectsManifest: (context, effects) => {
+						writeEffectsManifest(context, effects);
+						if (!split && context.cwd === worktree) {
+							const path = effectManifestPath(context);
+							const relativePath = relative(worktree, path);
+							const bytes = readFileSync(path, "utf8");
+							const prior = legacyArtifacts.find((artifact) => artifact.path === relativePath);
+							if (prior) prior.bytes = bytes;
+							else legacyArtifacts.push({ path: relativePath, bytes });
+						}
+					},
+					dispatchStepEffects,
+					appendReviewEscalation: async (root, input) => {
+						captured = input;
+						return appendReviewEscalation(root, input);
+					},
+				});
+				assert.equal(result.outcome, split ? "parked" : "completed", failedError(result));
+				const records = [repo, worktree]
+					.flatMap((root) => {
+						const dir = join(root, ".dev/review-records");
+						return existsSync(dir) ? readdirSync(dir).map((file) => join(dir, file)) : [];
+					})
+					.map((path) => ({ path, bytes: readFileSync(path, "utf8") }))
+					.filter(({ bytes }) => (JSON.parse(bytes) as ReviewRecord).itemId === itemId);
+				assert.equal(records.length, retained.length + 1, "same item/cycle through a new checkout must allocate a distinct record");
+				const emitted = records.find((record) => !retained.some((prior) => prior.path === record.path));
+				assert.ok(emitted);
+				const record = validateReviewRecord(JSON.parse(emitted.bytes) as ReviewRecord);
+				const source = `.dev/review-records/${record.runId}.json`;
+				if (split) {
+					assert.match(record.runId, /-a5$/, "upgrade must exceed the previous checkout high-water");
+					for (const artifact of legacyArtifacts) assert.equal(readFileSync(join(worktree, artifact.path), "utf8"), artifact.bytes, "previous receipt/effect bytes remain intact");
+				} else {
+					for (const family of ["effects", "execution-receipts"]) {
+						const dir = join(worktree, ".dev", family);
+						for (const name of readdirSync(dir, { recursive: true, encoding: "utf8" })) if (name.endsWith(".json")) legacyArtifacts.push({ path: join(".dev", family, name), bytes: readFileSync(join(dir, name), "utf8") });
+					}
+					assert.ok(legacyArtifacts.some((artifact) => artifact.path.includes("execution-receipts")));
+					assert.ok(legacyArtifacts.some((artifact) => artifact.path.includes("effects")));
+				}
+				if (split) {
+					assert.ok(captured);
+					const decisionPath = `docs/decision-log/${itemId}.md`;
+					assert.ok(readFileSync(join(worktree, decisionPath), "utf8").includes(source));
+					if (execFileSync("git", ["status", "--porcelain", decisionPath], { cwd: worktree, encoding: "utf8" }).trim()) {
+						execFileSync("git", ["add", decisionPath], { cwd: worktree });
+						execFileSync("git", ["commit", "-qm", "preserve decision"], { cwd: worktree });
+					}
+					execFileSync("git", ["merge", "--ff-only", branch], { cwd: repo });
+				}
+				execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: repo });
+				assert.equal(existsSync(worktree), false);
+				assert.equal(readFileSync(join(repo, source), "utf8"), emitted.bytes, "record must survive removal of its originating worktree");
+				if (captured) {
+					const lookup = lookupReviewEscalation(repo, itemId, captured.escalation.reviewedSha);
+					assert.equal(lookup.state, "active");
+					assert.ok(readFileSync(join(repo, `docs/decision-log/${itemId}.md`), "utf8").includes(source));
+				}
+				retained.push({ path: join(repo, source), bytes: emitted.bytes });
+			}
+			const [first, second] = retained;
+			assert.ok(first && second);
+			assert.notEqual(first.path, second.path);
+			for (const record of retained) assert.equal(readFileSync(record.path, "utf8"), record.bytes);
+		} finally {
+			REVIEW_CONFIG.authoring.enabled = saved.enabled;
+			REVIEW_CONFIG.authoring.reviewers = saved.reviewers;
+			REVIEW_CONFIG.authoring.judge = saved.judge;
+			rmSync(parent, { recursive: true, force: true });
+		}
 	});
 });

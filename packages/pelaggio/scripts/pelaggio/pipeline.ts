@@ -15,7 +15,7 @@ import { digestChallenge } from "./execution-receipt.js";
 import { appendLog as appendLogDefault, findLoggedArtifactAuthor } from "./flow-events.js";
 import { DEFAULT_FLOW_POLICY, type FlowPolicy } from "./flow-policy.js";
 import { readFreshnessGateRecord, writeFreshnessGateRecord } from "./freshness-gate-record.js";
-import { checkpoint, listWorktrees as listWorktreesDefault, quarantineCheckpoint, readGitBinding, resolveWorktree } from "./git.js";
+import { checkpoint, listWorktrees as listWorktreesDefault, mainWorktree, quarantineCheckpoint, readGitBinding, resolveWorktree } from "./git.js";
 import { classifyParkReason, isTransientSdkError } from "./outcome-classify.js";
 import { runPrReviewGate } from "./pr-review-gate.js";
 import { verifyOrRepairAuthoringReviewHostDependencies } from "./review/seat-deps.js";
@@ -262,7 +262,7 @@ export async function runPipeline(opts: PipelineOpts, parkSignal: ParkSignal, fl
 	/** Item-scoped attempt run id for an explicit item — pick uses this before the cycle has adopted the claim (#738 review). */
 	const itemRunIdFor = (id: string): string => {
 		if (opts.dryRun) return `${runIdBase}-${id}`;
-		if (!allocated || allocated.itemId !== id) allocated = { itemId: id, attempt: allocateAttempt(mainRepo, id) };
+		if (!allocated || allocated.itemId !== id) allocated = { itemId: id, attempt: allocateAttempt(mainWorktree(mainRepo), id, mainRepo) };
 		return attemptRunId(runIdBase, id, allocated.attempt);
 	};
 	const itemRunId = (): string => (itemId ? itemRunIdFor(itemId) : `${runIdBase}-unclaimed`);
