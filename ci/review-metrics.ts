@@ -13,8 +13,9 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type PrReviewSecurityTelemetry, validatePrReviewSecurityTelemetry } from "../packages/pelaggio/scripts/pelaggio/pr-review-gate-record.js";
+import { type PrReviewSecurityTelemetry, REVIEW_INTENSITY_PROFILES, validatePrReviewParticipation, validatePrReviewSecurityTelemetry } from "../packages/pelaggio/scripts/pelaggio/pr-review-gate-record.js";
 import { REVIEW_FINDING_CLOSURES, type ReviewFindingClosure } from "../packages/pelaggio/scripts/pelaggio/review/findings.js";
+import type { ReviewIntensityProfile } from "../packages/pelaggio/scripts/pelaggio/types.js";
 
 export interface GateRecord {
 	prNumber: number;
@@ -35,6 +36,7 @@ export interface GateRecord {
 	producer?: string;
 	recurrenceFindings?: readonly { closure?: string }[];
 	securityReview?: unknown;
+	participation?: unknown;
 }
 
 export function repoRoot(): string {
@@ -105,7 +107,40 @@ export function rollupByPr(records: readonly GateRecord[]): PrRollup[] {
 		.sort((a, b) => b.cost - a.cost);
 }
 
+export interface ProfileCoverage {
+	fleetRolls: number;
+	instrumented: number;
+	overlappingPrs: number;
+	profiles: Array<{ profile: ReviewIntensityProfile; prs: number; rolls: number; repeatRolls: number; reachedPass: number; rollsPerPr: number }>;
+}
+
+function profileCoverage(records: readonly GateRecord[]): ProfileCoverage {
+	const fleet = records.filter((record) => record.schemaVersion === 2 && record.producer === "fleet");
+	const byProfile = new Map<ReviewIntensityProfile, GateRecord[]>(REVIEW_INTENSITY_PROFILES.map((profile) => [profile, []]));
+	for (const record of fleet) {
+		try {
+			const selection = validatePrReviewParticipation(record.participation).selection;
+			if (selection) byProfile.get(selection.profile)?.push(record);
+		} catch {
+			/* absent or invalid metadata is unknown, never a full-profile observation */
+		}
+	}
+	const observedPrs = new Map<number, Set<ReviewIntensityProfile>>();
+	const profiles = REVIEW_INTENSITY_PROFILES.map((profile) => {
+		const rolls = byProfile.get(profile) ?? [];
+		const prs = rollupByPr(rolls);
+		for (const pr of prs) {
+			const seen = observedPrs.get(pr.prNumber) ?? new Set<ReviewIntensityProfile>();
+			seen.add(profile);
+			observedPrs.set(pr.prNumber, seen);
+		}
+		return { profile, prs: prs.length, rolls: rolls.length, repeatRolls: rolls.length - prs.length, reachedPass: prs.filter((pr) => pr.passes > 0).length, rollsPerPr: prs.length === 0 ? 0 : Number((rolls.length / prs.length).toFixed(2)) };
+	});
+	return { fleetRolls: fleet.length, instrumented: profiles.reduce((sum, row) => sum + row.rolls, 0), overlappingPrs: [...observedPrs.values()].filter((profiles) => profiles.size > 1).length, profiles };
+}
+
 export interface Baseline {
+	reviewIntensity: ProfileCoverage;
 	prs: number;
 	rolls: number;
 	totalCost: number;
@@ -172,6 +207,7 @@ export function summarize(records: readonly GateRecord[]): Baseline {
 		redTeamOnlyMustFixes += redTeamOnly.size;
 	}
 	return {
+		reviewIntensity: profileCoverage(records),
 		prs: rollups.length,
 		rolls: records.length,
 		totalCost: Number(totalCost.toFixed(2)),
@@ -217,6 +253,11 @@ export function formatBaselineRows(s: Baseline): string {
 		`  security-review coverage  ${s.securityReview.instrumented} / ${s.securityReview.fleetRolls} instrumented fleet rolls`,
 		`  red-team trigger rate     ${s.securityReview.triggered} / ${s.securityReview.instrumented} (${s.securityReview.instrumented === 0 ? "0" : ((100 * s.securityReview.triggered) / s.securityReview.instrumented).toFixed(0)}%)`,
 		`  red-team-only must-fixes  ${s.securityReview.redTeamOnlyMustFixes}   (verified surviving digest set-difference)`,
+		`  profile coverage         ${s.reviewIntensity.instrumented} / ${s.reviewIntensity.fleetRolls} fleet rolls (historical/malformed selection unknown)`,
+		...s.reviewIntensity.profiles.map((row) => `  profile ${row.profile.padEnd(16)} PRs=${row.prs} rolls=${row.rolls} repeats=${row.repeatRolls} rolls/PR=${row.rollsPerPr} reached-pass=${row.reachedPass}`),
+		`  overlapping profile PRs  ${s.reviewIntensity.overlappingPrs} (each PR counts in every observed profile; cohorts are not exclusive)`,
+		"  profile landings         unavailable (gate pass is not observed landing)",
+		"  post-landing must-fixes   unavailable (not recorded by the gate corpus)",
 	].join("\n");
 }
 

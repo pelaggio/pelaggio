@@ -2868,7 +2868,13 @@ describe("realized review participation (#753)", () => {
 			},
 		});
 		assert.equal(review.gate, "block");
-		assert.deepEqual(review.participation, { configuredReviewers: ["codex", "grok"], configuredVerifier: "claude", labels: ["standard", "red-team"], iterations: [{ reviewReturned: [true, true, true, false] }] });
+		assert.deepEqual(review.participation, {
+			configuredReviewers: ["codex", "grok"],
+			configuredVerifier: "claude",
+			labels: ["standard", "red-team"],
+			selection: { profile: "full", reviewerSlots: [0, 1] },
+			iterations: [{ reviewReturned: [true, true, true, false] }],
+		});
 		assert.match(review.body, /Realized review diversity: 2 providers \(codex, grok\); degraded — 3\/4/);
 	});
 
@@ -2904,7 +2910,13 @@ describe("realized review participation (#753)", () => {
 				},
 			});
 			assert.equal(review.gate, "block");
-			assert.deepEqual(review.participation, { configuredReviewers: ["codex", "codex"], configuredVerifier: "grok", labels: ["standard"], iterations: [{ reviewReturned: [true, false] }] });
+			assert.deepEqual(review.participation, {
+				configuredReviewers: ["codex", "codex"],
+				configuredVerifier: "grok",
+				labels: ["standard"],
+				selection: { profile: "full", reviewerSlots: [0, 1] },
+				iterations: [{ reviewReturned: [true, false] }],
+			});
 			assert.match(review.body, /Realized review diversity: 1 provider \(codex\); degraded — 1\/2/);
 		});
 	}
@@ -2946,7 +2958,13 @@ describe("realized review participation (#753)", () => {
 				},
 			});
 			assert.equal(review.gate, "block");
-			assert.deepEqual(review.participation, { configuredReviewers: ["grok"], configuredVerifier: "grok", labels: kind === "diff" ? null : ["standard"], iterations: [] });
+			assert.deepEqual(review.participation, {
+				configuredReviewers: ["grok"],
+				configuredVerifier: "grok",
+				labels: kind === "diff" ? null : ["standard"],
+				...(kind === "diff" ? {} : { selection: { profile: "full", reviewerSlots: [0] } }),
+				iterations: [],
+			});
 			assert.match(review.body, /Realized review diversity: 0 providers \(none\); not run/);
 		}
 	});
@@ -3222,5 +3240,87 @@ describe("security-review telemetry (#746)", () => {
 		});
 		assert.equal(review.subtype, "standard:error_diff");
 		assert.equal(review.securityReview, undefined);
+	});
+});
+
+describe("review intensity selected matrix (#757)", () => {
+	const docsDiff = "diff --git a/docs/guide.md b/docs/guide.md\nindex 1111111..2222222 100644\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1 +1 @@\n-old\n+new\n";
+	const docsExec = () => ((_: string, args: readonly string[]) => (args.includes("--name-only") ? "docs/guide.md\n" : docsDiff)) as typeof import("node:child_process").execFileSync;
+	it("selects the first independent configured slot and retains truthful original intent", async () => {
+		const seen: string[] = [];
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("codex"), driver("grok"), driver("claude")],
+			verifySettings: driver("codex"),
+			policy: reviewPolicy({ providerDiversity: "require" }),
+			execFileSync: docsExec(),
+			runStep: async (_name, _prompt, opts) => {
+				seen.push(opts.executionOverride?.provider ?? "unknown");
+				return result();
+			},
+		});
+		assert.equal(review.gate, "pass");
+		assert.deepEqual(seen, ["grok"]);
+		assert.deepEqual(review.participation?.selection, { profile: "docs", reviewerSlots: [1] });
+		assert.deepEqual(review.participation?.configuredReviewers, ["codex", "grok", "claude"]);
+		assert.match(review.body, /Realized review diversity: 1 provider \(grok\); complete — 1\/1/);
+		assert.match(review.body, /Review intensity: docs; selected reviewer slots=2 \(1\/3 configured\)/);
+	});
+	for (const outcome of ["confirmed", "refuted", "invalid-verifier", "park", "invalid-review"] as const) {
+		it(`preserves ${outcome} verdict semantics under full and reduced matrices`, async () => {
+			const outcomes = [];
+			for (const exec of [plainDiffExec(), docsExec()]) {
+				const review = await runPrReviewGate({
+					pr: "123",
+					reviewDrivers: [driver("codex"), driver("claude")],
+					verifySettings: driver("grok"),
+					policy: reviewPolicy({ maxPasses: 2, budgetCap: 100 }),
+					execFileSync: exec,
+					runStep: async (name) => {
+						if (name === "pr-verify") return outcome === "invalid-verifier" ? result({ text: "invalid" }) : verification([{ candidateId: "C1", decision: outcome === "refuted" ? "refuted" : "survives", rationale: "Checked candidate." }]);
+						if (outcome === "park") return result({ ok: false, subtype: "error_rate_limit" });
+						if (outcome === "invalid-review") return result({ text: "" });
+						return result({ text: report("Candidate inspected.", [{ severity: "must-fix", message: "Broken docs", path: "docs/guide.md", line: 1 }]) });
+					},
+				});
+				outcomes.push({ gate: review.gate, ok: review.ok, agreement: review.agreement, breakerReason: review.breakerReason, iterations: review.iterations, survivors: review.survivorCount });
+				if (outcome === "confirmed") assert.equal(review.iterations, 2, "profiles must not impose a single-pass limit");
+				if (outcome === "invalid-review") assert.match(review.body, /degraded/);
+			}
+			assert.deepEqual(outcomes[0], outcomes[1]);
+		});
+	}
+	it("does not reduce away invalid configuration or the original diversity preflight", async () => {
+		let launches = 0;
+		const options = {
+			pr: "123",
+			verifySettings: driver("codex"),
+			policy: reviewPolicy({ providerDiversity: "require" }),
+			execFileSync: docsExec(),
+			runStep: async () => {
+				launches++;
+				return result();
+			},
+		};
+		const same = await runPrReviewGate({ ...options, reviewDrivers: [driver("codex"), driver("codex")] });
+		assert.equal(same.breakerReason, "provider-diversity");
+		assert.equal(launches, 0);
+		await assert.rejects(runPrReviewGate({ ...options, reviewDrivers: [driver("grok"), driver("future" as ProviderName)] }), /profile|provider/i);
+		assert.equal(launches, 0);
+	});
+	it("keeps original untrusted pool authority when its omitted provider cannot participate", async () => {
+		const survivor: ReviewFinding = { severity: "must-fix", message: "Previously surviving", path: "other.ts", line: 1 };
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("codex"), driver("grok")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: docsExec(),
+			carry: { carriedForward: [], seedSurvivors: new Map([[reviewFindingFingerprint(survivor), survivor]]), autoRefutable: new Map(), narrowed: false },
+			runStep: async () => result(),
+		});
+		assert.equal(review.gate, "pass");
+		assert.match(review.body, /carry=refused-untrusted-pool/);
+		assert.deepEqual(review.participation?.selection, { profile: "docs", reviewerSlots: [0] });
 	});
 });

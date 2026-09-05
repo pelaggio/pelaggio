@@ -11,6 +11,18 @@ the pipeline's own work *in-context*, before ship. This gate is a fresh SDK sess
 that reads the PR diff cold — the same shape that has caught things the in-context
 review missed.
 
+## Deterministic review intensity
+
+The harness selects a closed `full` or `docs` profile from candidate files and diff bytes. This changes seat convening only: finding severity, isolated verification, blocker removal, pass limits, convergence and final verdict rules remain unchanged.
+
+`docs` requires a complete ordinary Git text edit to Markdown under `docs/`, or root `README.md`, `CHANGELOG.md` or `CONTRIBUTING.md`. The explicit governing paths `docs/agent-context/`, `docs/decisions/`, `docs/decision-log/`, `docs/assurance/`, `docs/trust/`, `docs/plans/`, `docs/archived/`, `docs/pr-review.md` and `docs/decisions.md` retain full review. `AGENTS.md` and `SKILL.md` at any depth also retain full review. Every non-doc or mixed diff, rename, mode change, binary change, creation/deletion, or unrecognized patch shape uses `full`. This is a closed path rule, not semantic recognition of policy prose.
+
+The reduced matrix selects the first configured reviewer whose provider differs from the scalar verifier, falling back to the first configured slot when no independent slot exists. The existing `require` diversity check still refuses an all-same-provider configuration. All applicable red-team labels retain the full matrix. Classifier/profile-map and focused-test changes receive full review and trigger additive self-review. Both profiles use the same resource-bounded discovery planner; original configured-pool evidence authority remains unchanged.
+
+Fleet participation optionally records `selection: { profile, reviewerSlots }`, with zero-based configured slot indices. Per-iteration vectors follow label order then selected slot order. Historical participation without selection uses all configured slots for rendering, while historical **profile classification remains unknown**. Rendering states configured intent, selected seats, and realized valid reviews separately; a failed selected seat visibly degrades participation.
+
+Per-profile metrics count gated PRs, rolls, repeats and reached-pass PRs. A PR seen under both profiles counts in both cohorts; the report discloses overlap. Actual landings and post-landing must-fixes are unavailable from these gate records; durable observations are deferred to #793. Revisit the profile after the first 20 instrumented gated PRs if fewer than 10% reduce, or immediately if later evidence identifies a must-fix plausibly missed by the reduced panel.
+
 ## Configured intent and realized participation
 
 Gate comments separate configured reviewers and verifier intent from realized review
@@ -28,7 +40,7 @@ records without this field have unavailable participation evidence. The existing
 `providers=` marker describes configured intent. These statements do not change gate
 policy, findings, verification, convergence or blocker removal.
 
-Before this schema extension, the local gate corpus was fingerprinted on 2026-09-05
+Before the #753 participation schema extension, the local gate corpus was fingerprinted on 2026-09-05
 as `9:4f21a09dbdf6` (9 records), using `npx tsx ci/review-metrics.ts` against the main
 worktree record store. This extension neither changes the metrics reader nor widens
 its corpus; the dated historical baseline is unchanged.

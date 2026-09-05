@@ -854,3 +854,5 @@ export type ImplementedEffect = { kind: "checkpoint"; label: string } | { kind: 
 export type ReservedEffect = ({ kind: "pick.explainSelection" } & Record<string, unknown>) | ({ kind: "shakedown.deferredItems" } & Record<string, unknown>);
 
 export type Effect = ImplementedEffect | ReservedEffect;
+
+export type ReviewIntensityProfile = "full" | "docs";
