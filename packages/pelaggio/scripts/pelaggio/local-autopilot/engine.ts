@@ -10,7 +10,7 @@ import { grokAdapter } from "./grok-adapter.js";
 import type { HarnessAdapter } from "./harness.js";
 import { appendRunEvent, readRunEvents } from "./journal.js";
 import { applyTransition } from "./lifecycle.js";
-import { parseRunSnapshot } from "./parse.js";
+import { parseRunIdRequest, parseRunSnapshot, parseStartRunRequest } from "./parse.js";
 import { requestIndexPath, runDir } from "./paths.js";
 import { containedPath, createRunWorktree } from "./run-worktree.js";
 import { configProblem, conflictProblem, protocolProblem } from "./transport.js";
@@ -46,7 +46,8 @@ function adaptersFor(deps: EngineDeps): Record<LocalConfig["harness"]["adapter"]
 }
 
 export function getRun(cwd: string, runId: string): ParseResult<RunSnapshot> {
-	return snapshotOf(cwd, runId);
+	const request = parseRunIdRequest({ schemaVersion: 1, runId });
+	return request.ok ? snapshotOf(cwd, request.value.runId) : request;
 }
 
 function commitWorktree(worktree: string, message: string): void {
@@ -145,32 +146,34 @@ async function drive(state: DriveState): Promise<ParseResult<RunSnapshot>> {
 }
 
 export async function startRun(cwd: string, input: { task: { text: string } | { file: string } | { stdin: true }; requestId?: string; nonInteractive: boolean }, deps: EngineDeps = {}): Promise<ParseResult<RunSnapshot>> {
+	const request = parseStartRunRequest({ schemaVersion: 1, ...input });
+	if (!request.ok) return request;
 	const config = loadLocalConfig(cwd);
 	if (!config.ok) return config;
 	if (config.value.harness.adapter === "fake" && !config.value.harness.fake?.script?.length) {
 		return { ok: false, problem: configProblem("fake-script", "harness.fake.script is required for the fake adapter") };
 	}
-	const workContract = buildWorkContract(input.task, { now: nowIso(deps), readStdin: deps.readStdin });
-	if (input.requestId) {
+	const workContract = buildWorkContract(request.value.task, { now: nowIso(deps), readStdin: deps.readStdin });
+	if (request.value.requestId) {
 		try {
-			const existing = JSON.parse(readFileSync(requestIndexPath(cwd, input.requestId), "utf8")) as { runId: string; digest: string };
+			const existing = JSON.parse(readFileSync(requestIndexPath(cwd, request.value.requestId), "utf8")) as { runId: string; digest: string };
 			if (existing.digest === workContract.digest.value) return getRun(cwd, existing.runId);
-			return { ok: false, problem: conflictProblem("request-conflict", `requestId ${input.requestId} already names a different work contract`) };
+			return { ok: false, problem: conflictProblem("request-conflict", `requestId ${request.value.requestId} already names a different work contract`) };
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
 		}
 	}
 	const runId = ulid();
 	mkdirSync(runDir(cwd, runId), { recursive: true });
-	if (input.requestId) {
-		mkdirSync(dirname(requestIndexPath(cwd, input.requestId)), { recursive: true });
-		writeFileSync(requestIndexPath(cwd, input.requestId), JSON.stringify({ runId, digest: workContract.digest.value }));
+	if (request.value.requestId) {
+		mkdirSync(dirname(requestIndexPath(cwd, request.value.requestId)), { recursive: true });
+		writeFileSync(requestIndexPath(cwd, request.value.requestId), JSON.stringify({ runId, digest: workContract.digest.value }));
 	}
 	const worktree = createRunWorktree(cwd, runId);
 	appendRunEvent(
 		cwd,
 		newEvent(runId, 0, "pelaggio.local-autopilot.run-started", nowIso(deps), {
-			requestId: input.requestId,
+			requestId: request.value.requestId,
 			workContract,
 			worktree,
 		}),
@@ -191,6 +194,9 @@ export async function startRun(cwd: string, input: { task: { text: string } | { 
 }
 
 export async function continueRun(cwd: string, runId: string, deps: EngineDeps = {}): Promise<ParseResult<RunSnapshot>> {
+	const request = parseRunIdRequest({ schemaVersion: 1, runId });
+	if (!request.ok) return request;
+	runId = request.value.runId;
 	const current = snapshotOf(cwd, runId);
 	if (!current.ok) return current;
 	if (current.value.state === "completed") return current;
@@ -223,6 +229,9 @@ export async function continueRun(cwd: string, runId: string, deps: EngineDeps =
 }
 
 export async function cancelRun(cwd: string, runId: string, deps: EngineDeps = {}): Promise<ParseResult<RunSnapshot>> {
+	const request = parseRunIdRequest({ schemaVersion: 1, runId });
+	if (!request.ok) return request;
+	runId = request.value.runId;
 	const current = snapshotOf(cwd, runId);
 	if (!current.ok) return current;
 	if (current.value.state === "completed") return current;

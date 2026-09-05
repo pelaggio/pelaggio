@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -127,6 +127,16 @@ describe("local autopilot engine", () => {
 		assert.equal(conflict.ok, false);
 		if (conflict.ok) return;
 		assert.equal(conflict.problem.type, "conflict");
+	});
+
+	it("rejects path-shaped request and run IDs before filesystem access", async () => {
+		const { cwd } = consumer(SUCCESS_SCRIPT);
+		const escaped = join(cwd, "escaped.json");
+		const start = await startRun(cwd, { task: { text: "Add hello" }, nonInteractive: true, requestId: "../../../escaped.json" });
+		assert.equal(start.ok, false);
+		assert.equal(existsSync(escaped), false);
+		const shown = getRun(cwd, "../../../escaped.json");
+		assert.equal(shown.ok, false);
 	});
 
 	it("JSON and human transports return semantically equivalent snapshots", async () => {

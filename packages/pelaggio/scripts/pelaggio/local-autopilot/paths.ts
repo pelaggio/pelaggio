@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { isOpaqueId } from "./transport.js";
 
 /** Consumer-local policy and run state. Not a pelaggio `.dev` register. */
 export const LOCAL_POLICY_DIR = ".pelaggio";
@@ -17,7 +18,7 @@ export function runsDir(cwd: string): string {
 }
 
 export function runDir(cwd: string, runId: string): string {
-	return join(runsDir(cwd), runId);
+	return directChild(runsDir(cwd), runId, "runId");
 }
 
 export function eventsPath(cwd: string, runId: string): string {
@@ -33,5 +34,13 @@ export function requestIndexDir(cwd: string): string {
 }
 
 export function requestIndexPath(cwd: string, requestId: string): string {
-	return join(requestIndexDir(cwd), requestId);
+	return directChild(requestIndexDir(cwd), requestId, "requestId");
+}
+
+function directChild(base: string, id: string, label: string): string {
+	if (!isOpaqueId(id)) throw new Error(`${label} is not an opaque id`);
+	const root = resolve(base);
+	const target = resolve(root, id);
+	if (target === root || !target.startsWith(`${root}/`)) throw new Error(`${label} escapes ${root}`);
+	return target;
 }
