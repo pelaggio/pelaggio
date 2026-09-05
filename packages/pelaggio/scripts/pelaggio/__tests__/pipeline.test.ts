@@ -5353,15 +5353,15 @@ describe("runPipeline — durable authoring record root (#788)", () => {
 		try {
 			for (const [itemId, split] of [
 				["TOOL-99", false],
-				["TOOL-98", true],
+				["TOOL-99", true],
 			] as const) {
 				const worktree = join(parent, `${WORKTREE_PREFIX}${itemId.toLowerCase()}`);
-				const branch = `feat/${itemId.toLowerCase()}`;
+				const branch = `feat/${itemId.toLowerCase()}-${split ? "retry" : "first"}`;
 				execFileSync("git", ["worktree", "add", "-q", "-b", branch, worktree], { cwd: repo });
 				const signal = makeParkSignal();
 				const { runStep } = createMockRunStep(
 					{
-						implement: { ok: true, writes: { [`impl-${itemId}.txt`]: "implemented" } },
+						implement: { ok: true, writes: { [`impl-${itemId}.txt`]: split ? "revised" : "implemented" } },
 						"pr-review": split
 							? [
 									{ ok: true, text: clean, fullText: clean },
@@ -5401,8 +5401,8 @@ describe("runPipeline — durable authoring record root (#788)", () => {
 					})
 					.map((path) => ({ path, bytes: readFileSync(path, "utf8") }))
 					.filter(({ bytes }) => (JSON.parse(bytes) as ReviewRecord).itemId === itemId);
-				assert.equal(records.length, 1);
-				const [emitted] = records;
+				assert.equal(records.length, retained.length + 1, "same item/cycle through a new checkout must allocate a distinct record");
+				const emitted = records.find((record) => !retained.some((prior) => prior.path === record.path));
 				assert.ok(emitted);
 				const record = validateReviewRecord(JSON.parse(emitted.bytes) as ReviewRecord);
 				const source = `.dev/review-records/${record.runId}.json`;
