@@ -17,6 +17,7 @@ Commands:
   resume  Continue a local-autopilot run by runId.
   show    Print a local-autopilot run snapshot.
   doctor  Check local-autopilot prerequisites.
+  cancel  Cancel a paused local-autopilot run by runId.
   stats   Print the stats dashboard from .dev/pelaggio-log.jsonl.
   roadmap Adapter-backed queries (list / get / claim / plan-path / publish-plan / mark-done / create-item / archive-plan / stale-scan / stale-list / stale-resolve / source). Used by skill bodies.
   decisions Lifecycle/projection for docs/decision-log/ (resolve, archive-resolved, migrate, rebuild-index).
@@ -41,6 +42,7 @@ const routes = {
 	resume: ["scripts/pelaggio/local-autopilot-cli.ts", "resume"],
 	show: ["scripts/pelaggio/local-autopilot-cli.ts", "show"],
 	doctor: ["scripts/pelaggio/local-autopilot-cli.ts", "doctor"],
+	cancel: ["scripts/pelaggio/local-autopilot-cli.ts", "cancel"],
 	stats: ["scripts/pelaggio.ts", "stats"],
 	roadmap: ["scripts/pelaggio/roadmap-cli.ts"],
 	decisions: ["scripts/pelaggio/decisions-cli.ts"],
@@ -60,14 +62,10 @@ function hasWorkContractInput(args) {
 	return args.some((arg) => arg === "--file" || arg === "--text" || arg === "--stdin" || arg.startsWith("--file=") || arg.startsWith("--text="));
 }
 
-const route = sub === "run" && hasWorkContractInput(rest) ? ["scripts/pelaggio/local-autopilot-cli.ts", "run"] : routes[sub];
-
-if (!sub || sub === "--help" || sub === "-h" || !route) {
+if (!sub || sub === "--help" || sub === "-h") {
 	console.log(HELP);
-	process.exit(sub && sub !== "--help" && sub !== "-h" ? 1 : 0);
+	process.exit(0);
 }
-
-const [script, ...prefix] = route;
 
 // Cold-start restoration guards EVERY routed subcommand: each one resolves tsx and
 // the package dependencies through packages/pelaggio/node_modules, so a dangling
@@ -83,6 +81,13 @@ const [script, ...prefix] = route;
 		process.exit(1);
 	}
 }
+
+const route = sub === "run" && hasWorkContractInput(rest) ? ["scripts/pelaggio/local-autopilot-cli.ts", "run"] : routes[sub];
+if (!route) {
+	console.log(HELP);
+	process.exit(1);
+}
+const [script, ...prefix] = route;
 
 // Run the target script through tsx by loading tsx as a Node import hook via
 // `node --import`, rather than spawning the `node_modules/.bin/tsx` shim. On

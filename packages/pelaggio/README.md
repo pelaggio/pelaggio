@@ -55,17 +55,36 @@ npx pelaggio init
 
 ### Local autopilot preview
 
-Install-free, local-first preview (no Pelaggio dependency in the consumer repo). Uncommitted
-`.pelaggio/pelaggio.yml` is enough. Successful work ends `ready_for_review` in an isolated
-worktree; nothing is pushed, opened as a PR, merged, released, or deployed.
+Install-free, local-first preview (no Pelaggio dependency in the consumer repo). This is
+prerelease software: start with `doctor`, then explicitly opt in to host execution. Host mode
+runs the agent with your ambient user permissions; worktree isolation is not process
+containment. Pelaggio itself does not push, open a PR, merge, release, or deploy.
 
 ```bash
-npx -y pelaggio@next run --file ticket.md
-npx -y pelaggio@next run --file ticket.md --non-interactive --json
+mkdir -p .pelaggio
+cat > .pelaggio/pelaggio.yml <<'YAML'
+harness:
+  adapter: grok
+execution:
+  mode: host
+autopilot:
+  verification:
+    command: pnpm check
+YAML
+
+npx -y pelaggio@next doctor
+npx -y pelaggio@next run --file ticket.md --non-interactive
 ```
 
-`resume`, `show`, and `doctor` inspect or continue the same `runId`. Dogfood pipeline flags
-(`--item`, `--cycles`, `--parallel`, …) still select the existing `pelaggio run` pipeline.
+Use `--text "…"` or `--stdin` instead of `--file`. A successful run ends
+`ready_for_review` only after the configured verification passes and leaves the changes in
+the reported worktree for review. `show <runId>` inspects it, `resume <runId>` continues a
+paused run, and `cancel <runId>` cancels one. Add `--json` for one machine-readable result;
+`--non-interactive` never prompts. As a one-run alternative to committed policy, omit
+`execution.mode` and pass `--allow-host-execution`.
+
+Dogfood pipeline flags (`--item`, `--cycles`, `--parallel`, …) still select the existing
+`pelaggio run` pipeline.
 
 ## Bring your own agent
 

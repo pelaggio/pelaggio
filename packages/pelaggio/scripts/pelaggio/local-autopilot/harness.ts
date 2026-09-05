@@ -7,6 +7,9 @@ export interface HarnessContext {
 	worktree: string;
 	workContract: WorkContract;
 	config: LocalConfig;
+	nonInteractive: boolean;
+	signal?: AbortSignal;
+	verificationFailure?: string;
 	/** Next unacknowledged fake-script index (0 on a fresh run). */
 	cursor: number;
 }

@@ -26,7 +26,10 @@ function consumer(): string {
 	execFileSync("git", ["add", "."], { cwd });
 	execFileSync("git", ["commit", "-m", "init"], { cwd });
 	mkdirSync(join(cwd, ".pelaggio"));
-	writeFileSync(join(cwd, ".pelaggio", "pelaggio.yml"), `harness:\n  adapter: fake\n  fake:\n    script:\n      - { action: write, path: src/hello.ts, content: "export const hello = 1;" }\n      - { action: complete }\n`);
+	writeFileSync(
+		join(cwd, ".pelaggio", "pelaggio.yml"),
+		`harness:\n  adapter: fake\n  fake:\n    script:\n      - { action: write, path: src/hello.ts, content: "export const hello = 1;" }\n      - { action: complete }\nexecution:\n  mode: host\nautopilot:\n  verification:\n    command: git diff --check HEAD\n`,
+	);
 	return cwd;
 }
 
@@ -46,6 +49,12 @@ describe("local autopilot packed CLI", () => {
 		const snapshot = JSON.parse(result.stdout);
 		assert.equal(snapshot.disposition, "ready_for_review");
 		assert.equal(snapshot.state, "completed");
+		assert.equal(snapshot.execution.mode, "host");
+		assert.equal(snapshot.execution.effectsEnforced, false);
+		assert.equal(
+			snapshot.artifacts.some((artifact: { kind: string }) => artifact.kind === "verification"),
+			true,
+		);
 		assert.ok(existsSync(join(snapshot.worktree.path, "src/hello.ts")));
 		assert.equal(readFileSync(join(cwd, "README.md"), "utf8"), "consumer\n");
 	});
@@ -63,6 +72,28 @@ describe("local autopilot packed CLI", () => {
 		assert.equal(JSON.parse(doctor.stdout).ok, true);
 	});
 
+	it("ships command help, strict arity, and the cancel route", () => {
+		const cwd = consumer();
+		const help = runCli(cwd, ["run", "--file", "ticket.md", "--help"]);
+		assert.equal(help.status, 0, help.stderr);
+		assert.match(help.stdout, /--allow-host-execution/);
+
+		const extra = runCli(cwd, ["show", "one", "two", "--json"]);
+		assert.equal(extra.status, 2);
+		assert.equal(JSON.parse(extra.stdout).code, "run-id");
+
+		writeFileSync(
+			join(cwd, ".pelaggio", "pelaggio.yml"),
+			`harness:\n  adapter: fake\n  fake:\n    script:\n      - { action: decision, code: choose, message: "Choose." }\nexecution:\n  mode: host\nautopilot:\n  verification:\n    command: git diff --check HEAD\n`,
+		);
+		const started = runCli(cwd, ["run", "--file", "ticket.md", "--json"]);
+		assert.equal(started.status, 0, started.stderr);
+		const runId = JSON.parse(started.stdout).runId as string;
+		const cancelled = runCli(cwd, ["cancel", runId, "--json"]);
+		assert.equal(cancelled.status, 0, cancelled.stderr);
+		assert.equal(JSON.parse(cancelled.stdout).disposition, "cancelled");
+	});
+
 	it("packed tarball contains the contract schema and the local-autopilot runtime", () => {
 		copySkillsIn(PELAGGIO_PKG, REPO);
 		try {
@@ -74,6 +105,27 @@ describe("local autopilot packed CLI", () => {
 			assert.ok(files.includes("scripts/pelaggio/local-autopilot-cli.ts"));
 			assert.ok(files.includes("bin/pelaggio.js"));
 			assert.ok(!files.some((path) => path.includes("local-autopilot-engine.test.ts")));
+		} finally {
+			cleanSkillsOut(PELAGGIO_PKG);
+		}
+	});
+
+	it("runs the installed bin from the packed tarball", () => {
+		const cwd = consumer();
+		const packDir = mkdtempSync(join(tmpdir(), "pelaggio-tarball-"));
+		temps.push(packDir);
+		copySkillsIn(PELAGGIO_PKG, REPO);
+		try {
+			const packed = execFileSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir], {
+				cwd: PELAGGIO_PKG,
+				encoding: "utf8",
+			});
+			const [{ filename }] = JSON.parse(packed.slice(packed.indexOf("["))) as Array<{ filename: string }>;
+			execFileSync("npm", ["install", "--ignore-scripts", "--no-package-lock", "--no-save", join(packDir, filename)], { cwd, stdio: "pipe" });
+			const installedBin = join(cwd, "node_modules", ".bin", "pelaggio");
+			const result = spawnSync(installedBin, ["doctor", "--json"], { cwd, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
+			assert.equal(result.status, 0, result.stderr);
+			assert.equal(JSON.parse(result.stdout).ok, true);
 		} finally {
 			cleanSkillsOut(PELAGGIO_PKG);
 		}

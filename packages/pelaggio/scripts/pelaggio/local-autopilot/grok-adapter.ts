@@ -7,39 +7,57 @@ function grokBin(ctx: HarnessContext): string {
 	return ctx.config.harness.grok?.bin ?? join(homedir(), ".grok", "bin", "grok");
 }
 
-function runGrok(bin: string, args: string[], cwd: string): Promise<{ ok: boolean; output: string }> {
+export type GrokRunner = (bin: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<{ ok: boolean; output: string }>;
+
+const runGrok: GrokRunner = (bin, args, cwd, signal) => {
 	return new Promise((resolve) => {
 		const child = spawn(bin, args, { cwd, env: process.env });
 		let output = "";
+		const onAbort = (): void => {
+			child.kill("SIGINT");
+		};
+		if (signal?.aborted) onAbort();
+		else signal?.addEventListener("abort", onAbort, { once: true });
 		child.stdout?.on("data", (chunk) => {
 			output += String(chunk);
 		});
 		child.stderr?.on("data", (chunk) => {
 			output += String(chunk);
 		});
-		child.on("error", (err) => resolve({ ok: false, output: err.message }));
-		child.on("close", (code) => resolve({ ok: code === 0, output }));
+		child.on("error", (err) => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve({ ok: false, output: err.message });
+		});
+		child.on("close", (code) => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve({ ok: code === 0, output });
+		});
 	});
+};
+
+export function createGrokAdapter(run: GrokRunner = runGrok): HarnessAdapter {
+	return {
+		name: "grok",
+		async next(ctx: HarnessContext) {
+			const bin = grokBin(ctx);
+			const prompt = [
+				"Implement the following task in this git worktree.",
+				"Do not push, open a pull request, merge, release, or deploy.",
+				"Stay inside the current working directory.",
+				"",
+				`# ${ctx.workContract.title}`,
+				"",
+				ctx.workContract.body,
+				...(ctx.verificationFailure ? ["", "The previous verification failed. Repair this exact failure:", ctx.verificationFailure] : []),
+			].join("\n");
+			const model = ctx.config.harness.grok?.model;
+			const args = ["agent", "--always-approve", ...(model ? ["-m", model] : []), "-p", prompt];
+			const result = await run(bin, args, ctx.worktree, ctx.signal);
+			const cursor = ctx.cursor + 1;
+			if (!result.ok) return { action: { kind: "crash", message: result.output.slice(0, 2000) || "grok harness failed" }, cursor };
+			return { action: { kind: "complete" }, cursor };
+		},
+	};
 }
 
-export const grokAdapter: HarnessAdapter = {
-	name: "grok",
-	async next(ctx: HarnessContext) {
-		if (ctx.cursor > 0) return { action: { kind: "complete" as const }, cursor: ctx.cursor };
-		const bin = grokBin(ctx);
-		const prompt = [
-			"Implement the following task in this git worktree.",
-			"Do not push, open a pull request, merge, release, or deploy.",
-			"Stay inside the current working directory.",
-			"",
-			`# ${ctx.workContract.title}`,
-			"",
-			ctx.workContract.body,
-		].join("\n");
-		const model = ctx.config.harness.grok?.model;
-		const args = ["agent", "--always-approve", ...(model ? ["-m", model] : []), "-p", prompt];
-		const result = await runGrok(bin, args, ctx.worktree);
-		if (!result.ok) return { action: { kind: "crash", message: result.output.slice(0, 2000) || "grok harness failed" }, cursor: 1 };
-		return { action: { kind: "complete" }, cursor: 1 };
-	},
-};
+export const grokAdapter = createGrokAdapter();

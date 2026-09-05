@@ -8,6 +8,7 @@ export function presentJson(value: RunSnapshot | Problem): string {
 
 export function presentHuman(snapshot: RunSnapshot): string {
 	const lines = [`run ${snapshot.runId}`, `state ${snapshot.state}${snapshot.disposition ? ` disposition ${snapshot.disposition}` : ""}`, `task ${snapshot.workContract.title}`];
+	lines.push(`execution ${snapshot.execution.mode}${snapshot.execution.effectsEnforced ? " (effects enforced)" : " (host capabilities not contained)"}`);
 	if (snapshot.worktree) lines.push(`worktree ${snapshot.worktree.branch}${snapshot.worktree.path ? ` @ ${snapshot.worktree.path}` : ""}`);
 	if (snapshot.pauseReason) lines.push(`paused ${snapshot.pauseReason.code}: ${snapshot.pauseReason.message}`);
 	for (const problem of snapshot.problems) lines.push(`problem ${problem.type}/${problem.code}: ${problem.message}`);

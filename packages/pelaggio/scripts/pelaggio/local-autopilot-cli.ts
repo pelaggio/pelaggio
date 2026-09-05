@@ -17,7 +17,16 @@ const OPTIONS = {
 	json: { type: "boolean", default: false },
 	"non-interactive": { type: "boolean", default: false },
 	"request-id": { type: "string" },
+	"allow-host-execution": { type: "boolean", default: false },
 } as const;
+
+const HELP: Record<string, string> = {
+	run: "Usage: pelaggio run (--file <path> | --text <task> | --stdin) [--non-interactive] [--json] [--request-id <id>] [--allow-host-execution]\nExample: pelaggio run --file ticket.md --allow-host-execution\n",
+	resume: "Usage: pelaggio resume <runId> [--json]\n",
+	show: "Usage: pelaggio show <runId> [--json]\n",
+	cancel: "Usage: pelaggio cancel <runId> [--json]\n",
+	doctor: "Usage: pelaggio doctor [--json]\n",
+};
 
 function writeResult(json: boolean, result: ParseResult<RunSnapshot>): number {
 	if (!result.ok) {
@@ -54,7 +63,7 @@ async function runCommand(argv: string[]): Promise<number> {
 	const onInterrupt = (): void => controller.abort();
 	process.once("SIGINT", onInterrupt);
 	try {
-		const result = await startRun(process.cwd(), { task: task.value, nonInteractive: !!values["non-interactive"], requestId: values["request-id"] }, { signal: controller.signal });
+		const result = await startRun(process.cwd(), { task: task.value, nonInteractive: !!values["non-interactive"], requestId: values["request-id"], allowHostExecution: !!values["allow-host-execution"] }, { signal: controller.signal });
 		return writeResult(json, result);
 	} finally {
 		process.removeListener("SIGINT", onInterrupt);
@@ -65,7 +74,7 @@ async function resumeCommand(argv: string[]): Promise<number> {
 	const parsed = parseArgs({ args: argv, options: { json: { type: "boolean", default: false } }, allowPositionals: true });
 	const runId = parsed.positionals[0];
 	const json = !!parsed.values.json;
-	if (!runId) return writeProblem(json, protocolProblem("run-id", "resume requires a runId"));
+	if (!runId || parsed.positionals.length !== 1) return writeProblem(json, protocolProblem("run-id", "resume requires exactly one runId"));
 	const controller = new AbortController();
 	const onInterrupt = (): void => controller.abort();
 	process.once("SIGINT", onInterrupt);
@@ -80,7 +89,7 @@ async function showCommand(argv: string[]): Promise<number> {
 	const parsed = parseArgs({ args: argv, options: { json: { type: "boolean", default: false } }, allowPositionals: true });
 	const runId = parsed.positionals[0];
 	const json = !!parsed.values.json;
-	if (!runId) return writeProblem(json, protocolProblem("run-id", "show requires a runId"));
+	if (!runId || parsed.positionals.length !== 1) return writeProblem(json, protocolProblem("run-id", "show requires exactly one runId"));
 	return writeResult(json, getRun(process.cwd(), runId));
 }
 
@@ -99,6 +108,10 @@ function doctorCommand(argv: string[]): number {
 	if (!config.ok) checks.push({ name: "config", ok: false, detail: config.problem.message });
 	else {
 		checks.push({ name: "config", ok: true, detail: configPath(process.cwd()) });
+		const host = config.value.execution?.mode === "host";
+		checks.push({ name: "execution", ok: host, detail: host ? "host (explicitly allowed; effects are not enforced)" : "contained execution is not available in this preview" });
+		const verification = config.value.autopilot?.verification?.command;
+		checks.push({ name: "verification", ok: !!verification, detail: verification ?? "autopilot.verification.command is required" });
 		if (config.value.harness.adapter === "grok") {
 			const bin = config.value.harness.grok?.bin ?? join(homedir(), ".grok", "bin", "grok");
 			checks.push({ name: "harness", ok: existsSync(bin), detail: bin });
@@ -113,9 +126,13 @@ function doctorCommand(argv: string[]): number {
 	return ok ? 0 : 1;
 }
 
-export async function main(argv: string[]): Promise<number> {
+async function dispatch(argv: string[]): Promise<number> {
 	const command = argv[0] ?? "run";
 	const rest = argv.slice(1);
+	if (rest.includes("--help") || rest.includes("-h")) {
+		process.stdout.write(HELP[command] ?? "Unknown local-autopilot command.\n");
+		return HELP[command] ? 0 : 2;
+	}
 	if (command === "run") return runCommand(rest);
 	if (command === "resume") return resumeCommand(rest);
 	if (command === "show") return showCommand(rest);
@@ -124,10 +141,18 @@ export async function main(argv: string[]): Promise<number> {
 		const parsed = parseArgs({ args: rest, options: { json: { type: "boolean", default: false } }, allowPositionals: true });
 		const runId = parsed.positionals[0];
 		const json = !!parsed.values.json;
-		if (!runId) return writeProblem(json, protocolProblem("run-id", "cancel requires a runId"));
+		if (!runId || parsed.positionals.length !== 1) return writeProblem(json, protocolProblem("run-id", "cancel requires exactly one runId"));
 		return writeResult(json, await cancelRun(process.cwd(), runId));
 	}
 	return writeProblem(false, protocolProblem("command", `unknown local-autopilot command ${command}`));
+}
+
+export async function main(argv: string[]): Promise<number> {
+	try {
+		return await dispatch(argv);
+	} catch (error) {
+		return writeProblem(argv.includes("--json"), protocolProblem("arguments", error instanceof Error ? error.message : String(error)));
+	}
 }
 
 const isMain = process.argv[1] && (process.argv[1].endsWith("local-autopilot-cli.ts") || process.argv[1].endsWith("local-autopilot-cli.js"));

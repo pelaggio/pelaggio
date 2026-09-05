@@ -4,7 +4,7 @@ Construction home for [ADR-0029](../decisions/0029-local-autopilot-contract.md) 
 
 ## Public object
 
-A `Run` is the durable object. Operations: `startRun`, `getRun`, `continueRun`, `cancelRun`. CLI `run | resume | show | doctor` are projections. JSON Schema 2020-12 lives in `local-autopilot/schemas/v0.schema.json`. Runtime parsing is fail-closed TypeScript (`parse.ts`); Ajv agreement is a CI test, not a published dependency.
+A `Run` is the durable object. Operations: `startRun`, `getRun`, `continueRun`, `cancelRun`. CLI `run | resume | show | cancel | doctor` are projections. JSON Schema 2020-12 lives in `local-autopilot/schemas/v0.schema.json`. Runtime parsing is fail-closed TypeScript (`parse.ts`); Ajv agreement is a CI test, not a published dependency.
 
 ## Lifecycle
 
@@ -12,7 +12,7 @@ A `Run` is the durable object. Operations: `startRun`, `getRun`, `continueRun`, 
 
 ## Dispatch
 
-`pelaggio run --file|--text|--stdin …` starts a local-autopilot Run. `pelaggio run` with pipeline flags (`--item`, `--cycles`, `--parallel`, …) remains the dogfood pipeline. `resume` / `show` / `doctor` are local-autopilot only.
+`pelaggio run --file|--text|--stdin …` starts a local-autopilot Run. `pelaggio run` with pipeline flags (`--item`, `--cycles`, `--parallel`, …) remains the dogfood pipeline. `resume` / `show` / `cancel` / `doctor` are local-autopilot only. Operators should run `doctor` before the first run; it checks repository, config, execution consent, verification, and harness availability without mutating a Run.
 
 ## Authority
 
@@ -24,4 +24,4 @@ v0: `fake` (deterministic, packed-tarball suite), `grok`, and `codex`. Codex aut
 
 ## CLI dispatch
 
-`bin/pelaggio.js` routes `run --file|--text|--stdin` plus `resume` / `show` / `doctor` to `local-autopilot-cli.ts`. Other `run` flags remain the dogfood pipeline. Prerelease publishes use a signed `v*-next*` tag and `npm publish --tag next --provenance`.
+`bin/pelaggio.js` routes `run --file|--text|--stdin` plus `resume` / `show` / `cancel` / `doctor` to `local-autopilot-cli.ts`. Other `run` flags remain the dogfood pipeline. Prerelease publishes use a signed `v*-next*` tag and `npm publish --tag next --provenance`.
