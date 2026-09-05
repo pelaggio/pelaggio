@@ -10,6 +10,7 @@ export const fakeAdapter: HarnessAdapter = {
 		}
 		if (ctx.cursor >= script.length) return { action: { kind: "complete" }, cursor: ctx.cursor };
 		const step = script[ctx.cursor];
+		if (!step) return { action: { kind: "complete" }, cursor: ctx.cursor };
 		const cursor = ctx.cursor + 1;
 		if (step.action === "write") return { action: { kind: "write", path: step.path, content: step.content }, cursor };
 		if (step.action === "decision") return { action: { kind: "decision", code: step.code, message: step.message }, cursor };

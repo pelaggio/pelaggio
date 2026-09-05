@@ -27,6 +27,7 @@ function asExecution(value: unknown): ExecutionAssurance {
 export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 	if (events.length === 0) throw new Error("journal is empty");
 	const started = events[0];
+	if (!started) throw new Error("journal is empty");
 	if (started.type !== "pelaggio.local-autopilot.run-started") throw new Error("journal must begin with run-started");
 	const payload = started.payload ?? {};
 	const contract = parseWorkContract(payload.workContract);
@@ -93,6 +94,7 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 	}
 
 	const last = events[events.length - 1];
+	if (!last) throw new Error("journal is empty");
 	const snapshot: RunSnapshot = {
 		schemaVersion: 1,
 		runId: started.runId,

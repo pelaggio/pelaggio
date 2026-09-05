@@ -99,7 +99,9 @@ describe("local autopilot packed CLI", () => {
 		try {
 			const packed = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: PELAGGIO_PKG, encoding: "utf8" });
 			const jsonStart = packed.indexOf("[");
-			const files = (JSON.parse(packed.slice(jsonStart)) as Array<{ files: Array<{ path: string }> }>)[0].files.map((file) => file.path);
+			const manifest = (JSON.parse(packed.slice(jsonStart)) as Array<{ files: Array<{ path: string }> }>)[0];
+			assert.ok(manifest);
+			const files = manifest.files.map((file) => file.path);
 			assert.ok(files.includes("scripts/pelaggio/local-autopilot/schemas/v0.schema.json"));
 			assert.ok(files.includes("scripts/pelaggio/local-autopilot/engine.ts"));
 			assert.ok(files.includes("scripts/pelaggio/local-autopilot-cli.ts"));
@@ -120,7 +122,9 @@ describe("local autopilot packed CLI", () => {
 				cwd: PELAGGIO_PKG,
 				encoding: "utf8",
 			});
-			const [{ filename }] = JSON.parse(packed.slice(packed.indexOf("["))) as Array<{ filename: string }>;
+			const manifest = (JSON.parse(packed.slice(packed.indexOf("["))) as Array<{ filename: string }>)[0];
+			assert.ok(manifest);
+			const { filename } = manifest;
 			execFileSync("npm", ["install", "--ignore-scripts", "--no-package-lock", "--no-save", join(packDir, filename)], { cwd, stdio: "pipe" });
 			const installedBin = join(cwd, "node_modules", ".bin", "pelaggio");
 			const result = spawnSync(installedBin, ["doctor", "--json"], { cwd, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
