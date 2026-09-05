@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,20 +6,23 @@ import { ulid } from "ulid";
 import { tryWithFileLock, withFileLock } from "../file-lock.js";
 import { codexAdapter } from "./codex-adapter.js";
 import { loadLocalConfig } from "./config-load.js";
+import { resolveExecutionAssurance } from "./execution-policy.js";
 import { fakeAdapter } from "./fake-adapter.js";
-import { foldRunEvents } from "./fold.js";
+import { type ExecutionPhase, foldRunEvents } from "./fold.js";
 import { grokAdapter } from "./grok-adapter.js";
 import type { HarnessAdapter } from "./harness.js";
 import { appendRunEvent, readRunEvents } from "./journal.js";
 import { applyTransition } from "./lifecycle.js";
 import { parseRunIdRequest, parseRunSnapshot, parseStartRunRequest } from "./parse.js";
-import { requestIndexPath, runDir } from "./paths.js";
+import { requestIndexPath, requestLockPath, runDir } from "./paths.js";
+import { runLocalProcess } from "./process.js";
 import { containedPath, createRunWorktree } from "./run-worktree.js";
 import { configProblem, conflictProblem, protocolProblem } from "./transport.js";
 import type { Artifact, ExecutionAssurance, LocalConfig, ParseResult, PauseReason, Problem, RunEvent, RunSnapshot, WorkContract } from "./types.js";
 import { buildWorkContract, digestOf } from "./work-contract.js";
 
 export interface EngineDeps {
+	allowHostExecution?: boolean;
 	now?: () => string;
 	adapters?: Partial<Record<LocalConfig["harness"]["adapter"], HarnessAdapter>>;
 	readStdin?: () => string;
@@ -76,14 +79,9 @@ function commitWorktree(worktree: string, message: string): void {
 	execFileSync("git", ["commit", "-m", message, "--no-verify"], { cwd: worktree, encoding: "utf8" });
 }
 
-function runVerification(worktree: string, command: string): { ok: boolean; message: string } {
-	try {
-		execSync(command, { cwd: worktree, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-		return { ok: true, message: "verification passed" };
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return { ok: false, message: message.slice(0, 2000) };
-	}
+async function runVerification(worktree: string, command: string, signal?: AbortSignal): Promise<{ ok: boolean; message: string }> {
+	const result = await runLocalProcess(command, [], worktree, signal, { shell: true });
+	return { ok: result.ok, message: result.ok ? "verification passed" : result.output.slice(0, 2000) || "verification failed" };
 }
 
 function verificationArtifact(state: DriveState, ok: boolean, message: string): Artifact {
@@ -102,17 +100,8 @@ function verificationArtifact(state: DriveState, ok: boolean, message: string): 
 	return { kind: "verification", uri: pathToFileURL(path).href, mediaType: "application/json", digest };
 }
 
-function executionAssurance(config: LocalConfig, allowHostExecution: boolean): ParseResult<ExecutionAssurance> {
-	if (config.execution?.mode === "host" || allowHostExecution) {
-		return { ok: true, value: { mode: "host", contained: false, effectsEnforced: false } };
-	}
-	return {
-		ok: false,
-		problem: configProblem("contained-unavailable", "contained harness execution is not available in this preview; pass --allow-host-execution or set execution.mode: host in uncommitted local policy"),
-	};
-}
-
 interface DriveState {
+	phase: ExecutionPhase;
 	cwd: string;
 	runId: string;
 	seq: number;
@@ -149,6 +138,31 @@ async function driveSteps(state: DriveState): Promise<ParseResult<RunSnapshot>> 
 	const maxRepairs = state.config.autopilot?.maxRepairs ?? 1;
 	const verifyCommand = state.config.autopilot?.verification?.command as string;
 	while (!state.deps.signal?.aborted) {
+		if (state.phase.kind === "verification") {
+			const verification = state.phase.forcedFailure === undefined ? await runVerification(state.worktree, verifyCommand, state.deps.signal) : { ok: false, message: state.phase.forcedFailure };
+			if (state.deps.signal?.aborted) break;
+			const artifact = verificationArtifact(state, verification.ok, verification.message);
+			emit(state, "pelaggio.local-autopilot.verification-finished", { ...verification, artifact });
+			state.phase = { kind: "verification-result", ...verification };
+		}
+		if (state.phase.kind === "verification-result") {
+			const verification = state.phase;
+			if (verification.ok) {
+				emit(state, "pelaggio.local-autopilot.run-completed", { disposition: "ready_for_review", durationMs: Date.now() - state.startedAt });
+				return snapshotOf(state.cwd, state.runId);
+			}
+			if (state.repairs < maxRepairs) {
+				state.repairs += 1;
+				state.verificationFailure = verification.message;
+				emit(state, "pelaggio.local-autopilot.repair-attempted", { attempt: state.repairs, message: verification.message });
+				state.phase = { kind: "harness" };
+				continue;
+			}
+			const problem: Problem = { schemaVersion: 1, type: "verification", code: "verification-budget", message: verification.message, retryable: true, runId: state.runId };
+			const pauseReason: PauseReason = { code: "verification_budget", message: verification.message, problem };
+			emit(state, "pelaggio.local-autopilot.run-paused", { pauseReason, durationMs: Date.now() - state.startedAt });
+			return snapshotOf(state.cwd, state.runId);
+		}
 		const { action, cursor } = await adapter.next({
 			cwd: state.cwd,
 			worktree: state.worktree,
@@ -183,24 +197,8 @@ async function driveSteps(state: DriveState): Promise<ParseResult<RunSnapshot>> 
 			return snapshotOf(state.cwd, state.runId);
 		}
 		if (action.kind === "verify-fail" || action.kind === "complete") {
-			emit(state, "pelaggio.local-autopilot.harness-finished", {});
-			const verification = action.kind === "verify-fail" ? { ok: false, message: action.message } : runVerification(state.worktree, verifyCommand);
-			const artifact = verificationArtifact(state, verification.ok, verification.message);
-			emit(state, "pelaggio.local-autopilot.verification-finished", { ok: verification.ok, artifact });
-			if (verification.ok) {
-				emit(state, "pelaggio.local-autopilot.run-completed", { disposition: "ready_for_review", durationMs: Date.now() - state.startedAt });
-				return snapshotOf(state.cwd, state.runId);
-			}
-			if (state.repairs < maxRepairs) {
-				state.repairs += 1;
-				state.verificationFailure = verification.message;
-				emit(state, "pelaggio.local-autopilot.repair-attempted", { attempt: state.repairs });
-				continue;
-			}
-			const problem: Problem = { schemaVersion: 1, type: "verification", code: "verification-budget", message: verification.message, retryable: true, runId: state.runId };
-			const pauseReason: PauseReason = { code: "verification_budget", message: verification.message, problem };
-			emit(state, "pelaggio.local-autopilot.run-paused", { pauseReason, durationMs: Date.now() - state.startedAt });
-			return snapshotOf(state.cwd, state.runId);
+			state.phase = { kind: "verification", ...(action.kind === "verify-fail" ? { forcedFailure: action.message } : {}) };
+			emit(state, "pelaggio.local-autopilot.harness-finished", { ...(action.kind === "verify-fail" ? { forcedFailure: action.message } : {}) });
 		}
 	}
 	const problem: Problem = { schemaVersion: 1, type: "protocol", code: "interrupted", message: "run interrupted", retryable: true, runId: state.runId };
@@ -219,7 +217,7 @@ export async function startRun(
 	if (!request.ok) return request;
 	const config = loadLocalConfig(cwd);
 	if (!config.ok) return config;
-	const execution = executionAssurance(config.value, input.allowHostExecution ?? false);
+	const execution = resolveExecutionAssurance(cwd, config.value, input.allowHostExecution ?? false);
 	if (!execution.ok) return execution;
 	if (!config.value.autopilot?.verification?.command) {
 		return { ok: false, problem: configProblem("missing-verification", "autopilot.verification.command is required before a run can become ready_for_review") };
@@ -228,58 +226,57 @@ export async function startRun(
 		return { ok: false, problem: configProblem("fake-script", "harness.fake.script is required for the fake adapter") };
 	}
 	const workContract = buildWorkContract(request.value.task, { now: nowIso(deps), readStdin: deps.readStdin });
-	type Prepared = { kind: "existing"; result: ParseResult<RunSnapshot> } | { kind: "new"; state: DriveState };
-	const prepare = (): Prepared => {
-		if (request.value.requestId) {
-			try {
-				const existing = JSON.parse(readFileSync(requestIndexPath(cwd, request.value.requestId), "utf8")) as { runId: string; digest: string };
-				if (existing.digest === workContract.digest.value) return { kind: "existing", result: getRun(cwd, existing.runId) };
-				return { kind: "existing", result: { ok: false, problem: conflictProblem("request-conflict", `requestId ${request.value.requestId} already names a different work contract`) } };
-			} catch (err) {
-				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+	const runId = ulid();
+	return withRunLease(cwd, runId, async () => {
+		type Prepared = { kind: "existing"; result: ParseResult<RunSnapshot> } | { kind: "new"; state: DriveState };
+		const prepare = (): Prepared => {
+			if (request.value.requestId) {
+				try {
+					const existing = JSON.parse(readFileSync(requestIndexPath(cwd, request.value.requestId), "utf8")) as { runId: string; digest: string };
+					if (existing.digest === workContract.digest.value) return { kind: "existing", result: getRun(cwd, existing.runId) };
+					return { kind: "existing", result: { ok: false, problem: conflictProblem("request-conflict", `requestId ${request.value.requestId} already names a different work contract`) } };
+				} catch (err) {
+					if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+				}
 			}
-		}
-		const runId = ulid();
-		mkdirSync(runDir(cwd, runId), { recursive: true });
-		const worktree = createRunWorktree(cwd, runId);
-		appendRunEvent(
-			cwd,
-			newEvent(runId, 0, "pelaggio.local-autopilot.run-started", nowIso(deps), {
-				requestId: request.value.requestId,
-				workContract,
-				worktree,
-				execution: execution.value,
-			}),
-		);
-		if (request.value.requestId) {
-			mkdirSync(dirname(requestIndexPath(cwd, request.value.requestId)), { recursive: true });
-			writeFileSync(requestIndexPath(cwd, request.value.requestId), JSON.stringify({ runId, digest: workContract.digest.value }), { flag: "wx" });
-		}
-		return {
-			kind: "new",
-			state: {
+			mkdirSync(runDir(cwd, runId), { recursive: true });
+			const worktree = createRunWorktree(cwd, runId);
+			appendRunEvent(
 				cwd,
-				runId,
-				seq: 0,
-				cursor: 0,
-				repairs: 0,
-				startedAt: Date.now(),
-				worktree: worktree.path,
-				workContract,
-				config: config.value,
-				execution: execution.value,
-				deps,
-				nonInteractive: request.value.nonInteractive,
-			},
+				newEvent(runId, 0, "pelaggio.local-autopilot.run-started", nowIso(deps), {
+					requestId: request.value.requestId,
+					workContract,
+					worktree,
+					execution: execution.value,
+				}),
+			);
+			if (request.value.requestId) {
+				mkdirSync(dirname(requestIndexPath(cwd, request.value.requestId)), { recursive: true });
+				writeFileSync(requestIndexPath(cwd, request.value.requestId), JSON.stringify({ runId, digest: workContract.digest.value }), { flag: "wx" });
+			}
+			return {
+				kind: "new",
+				state: {
+					phase: { kind: "harness" },
+					cwd,
+					runId,
+					seq: 0,
+					cursor: 0,
+					repairs: 0,
+					startedAt: Date.now(),
+					worktree: worktree.path,
+					workContract,
+					config: config.value,
+					execution: execution.value,
+					deps,
+					nonInteractive: request.value.nonInteractive,
+				},
+			};
 		};
-	};
-	const prepared = request.value.requestId
-		? await withFileLock(requestIndexPath(cwd, `lock-${digestOf(request.value.requestId).value}`), prepare, { label: "local-autopilot request claim", staleMs: 30_000, acquireTimeoutMs: 5_000 })
-		: prepare();
-	if (prepared.kind === "existing") return prepared.result;
-	const state = prepared.state;
-	const runId = state.runId;
-	return withRunLease(cwd, runId, () => drive(state));
+		const prepared = request.value.requestId ? await withFileLock(requestLockPath(cwd, digestOf(request.value.requestId).value), prepare, { label: "local-autopilot request claim", staleMs: 30_000, acquireTimeoutMs: 5_000 }) : prepare();
+		if (prepared.kind === "existing") return prepared.result;
+		return drive(prepared.state);
+	});
 }
 
 export async function continueRun(cwd: string, runId: string, deps: EngineDeps = {}): Promise<ParseResult<RunSnapshot>> {
@@ -291,7 +288,7 @@ export async function continueRun(cwd: string, runId: string, deps: EngineDeps =
 		if (!current.ok || current.value.state === "completed") return current;
 		const config = loadLocalConfig(cwd);
 		if (!config.ok) return config;
-		const execution = executionAssurance(config.value, current.value.execution.mode === "host");
+		const execution = resolveExecutionAssurance(cwd, config.value, deps.allowHostExecution ?? false);
 		if (!execution.ok) return execution;
 		if (!config.value.autopilot?.verification?.command) return { ok: false, problem: configProblem("missing-verification", "autopilot.verification.command is required to resume") };
 		const events = readRunEvents(cwd, runId);
@@ -306,6 +303,8 @@ export async function continueRun(cwd: string, runId: string, deps: EngineDeps =
 		const worktree = current.value.worktree?.path;
 		if (!worktree) return { ok: false, problem: protocolProblem("worktree", "run has no worktree path to resume") };
 		return drive({
+			phase: current.value.pauseReason?.code === "verification_budget" ? { kind: "harness" } : folded.phase,
+			verificationFailure: folded.verificationFailure,
 			cwd,
 			runId,
 			seq,

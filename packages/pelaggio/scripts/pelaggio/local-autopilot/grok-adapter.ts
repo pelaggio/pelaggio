@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HarnessAdapter, HarnessContext } from "./harness.js";
+import { runLocalProcess } from "./process.js";
 
 function grokBin(ctx: HarnessContext): string {
 	return ctx.config.harness.grok?.bin ?? join(homedir(), ".grok", "bin", "grok");
@@ -9,31 +9,7 @@ function grokBin(ctx: HarnessContext): string {
 
 export type GrokRunner = (bin: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<{ ok: boolean; output: string }>;
 
-const runGrok: GrokRunner = (bin, args, cwd, signal) => {
-	return new Promise((resolve) => {
-		const child = spawn(bin, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-		let output = "";
-		const onAbort = (): void => {
-			child.kill("SIGINT");
-		};
-		if (signal?.aborted) onAbort();
-		else signal?.addEventListener("abort", onAbort, { once: true });
-		child.stdout?.on("data", (chunk) => {
-			output += String(chunk);
-		});
-		child.stderr?.on("data", (chunk) => {
-			output += String(chunk);
-		});
-		child.on("error", (err) => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve({ ok: false, output: err.message });
-		});
-		child.on("close", (code) => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve({ ok: code === 0, output });
-		});
-	});
-};
+const runGrok: GrokRunner = runLocalProcess;
 
 export function createGrokAdapter(run: GrokRunner = runGrok): HarnessAdapter {
 	return {

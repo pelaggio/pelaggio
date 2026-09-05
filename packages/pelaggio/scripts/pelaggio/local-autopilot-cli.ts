@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { loadLocalConfig } from "./local-autopilot/config-load.js";
 import { cancelRun, continueRun, getRun, startRun } from "./local-autopilot/engine.js";
+import { resolveExecutionAssurance } from "./local-autopilot/execution-policy.js";
 import { configPath } from "./local-autopilot/paths.js";
 import { exitCodeFor, exitCodeForProblem, presentHuman, presentJson, presentProblemHuman } from "./local-autopilot/present.js";
 import { protocolProblem } from "./local-autopilot/transport.js";
@@ -22,7 +23,7 @@ const OPTIONS = {
 
 const HELP: Record<string, string> = {
 	run: "Usage: pelaggio run (--file <path> | --text <task> | --stdin) [--non-interactive] [--json] [--request-id <id>] [--allow-host-execution]\nExample: pelaggio run --file ticket.md --allow-host-execution\n",
-	resume: "Usage: pelaggio resume <runId> [--json]\n",
+	resume: "Usage: pelaggio resume <runId> [--json] [--allow-host-execution]\n",
 	show: "Usage: pelaggio show <runId> [--json]\n",
 	cancel: "Usage: pelaggio cancel <runId> [--json]\n",
 	doctor: "Usage: pelaggio doctor [--json]\n",
@@ -71,7 +72,7 @@ async function runCommand(argv: string[]): Promise<number> {
 }
 
 async function resumeCommand(argv: string[]): Promise<number> {
-	const parsed = parseArgs({ args: argv, options: { json: { type: "boolean", default: false } }, allowPositionals: true });
+	const parsed = parseArgs({ args: argv, options: { json: { type: "boolean", default: false }, "allow-host-execution": { type: "boolean", default: false } }, allowPositionals: true });
 	const runId = parsed.positionals[0];
 	const json = !!parsed.values.json;
 	if (!runId || parsed.positionals.length !== 1) return writeProblem(json, protocolProblem("run-id", "resume requires exactly one runId"));
@@ -79,7 +80,7 @@ async function resumeCommand(argv: string[]): Promise<number> {
 	const onInterrupt = (): void => controller.abort();
 	process.once("SIGINT", onInterrupt);
 	try {
-		return writeResult(json, await continueRun(process.cwd(), runId, { signal: controller.signal }));
+		return writeResult(json, await continueRun(process.cwd(), runId, { signal: controller.signal, allowHostExecution: !!parsed.values["allow-host-execution"] }));
 	} finally {
 		process.removeListener("SIGINT", onInterrupt);
 	}
@@ -91,6 +92,18 @@ async function showCommand(argv: string[]): Promise<number> {
 	const json = !!parsed.values.json;
 	if (!runId || parsed.positionals.length !== 1) return writeProblem(json, protocolProblem("run-id", "show requires exactly one runId"));
 	return writeResult(json, getRun(process.cwd(), runId));
+}
+
+function executableAvailable(bin: string): boolean {
+	const candidates = bin.includes("/") ? [resolve(process.cwd(), bin)] : (process.env.PATH ?? "").split(delimiter).map((dir) => resolve(dir || process.cwd(), bin));
+	return candidates.some((path) => {
+		try {
+			accessSync(path, constants.X_OK);
+			return statSync(path).isFile();
+		} catch {
+			return false;
+		}
+	});
 }
 
 function doctorCommand(argv: string[]): number {
@@ -108,21 +121,17 @@ function doctorCommand(argv: string[]): number {
 	if (!config.ok) checks.push({ name: "config", ok: false, detail: config.problem.message });
 	else {
 		checks.push({ name: "config", ok: true, detail: configPath(process.cwd()) });
-		const host = config.value.execution?.mode === "host";
-		checks.push({ name: "execution", ok: host, detail: host ? "host (explicitly allowed; effects are not enforced)" : "contained execution is not available in this preview" });
+		const execution = resolveExecutionAssurance(process.cwd(), config.value, false);
+		checks.push({ name: "execution", ok: execution.ok, detail: execution.ok ? "host (local policy allows execution; effects are not enforced)" : execution.problem.message });
 		const verification = config.value.autopilot?.verification?.command;
 		checks.push({ name: "verification", ok: !!verification, detail: verification ?? "autopilot.verification.command is required" });
 		if (config.value.harness.adapter === "grok") {
 			const bin = config.value.harness.grok?.bin ?? join(homedir(), ".grok", "bin", "grok");
-			checks.push({ name: "harness", ok: existsSync(bin), detail: bin });
+			checks.push({ name: "harness", ok: executableAvailable(bin), detail: bin });
 		} else if (config.value.harness.adapter === "codex") {
 			const bin = config.value.harness.codex?.bin ?? "codex";
-			try {
-				execFileSync(bin, ["--version"], { encoding: "utf8", stdio: "ignore" });
-				checks.push({ name: "harness", ok: true, detail: bin });
-			} catch {
-				checks.push({ name: "harness", ok: false, detail: `${bin} is not executable` });
-			}
+			const available = executableAvailable(bin);
+			checks.push({ name: "harness", ok: available, detail: available ? bin : `${bin} is not executable` });
 		} else checks.push({ name: "harness", ok: true, detail: "fake" });
 	}
 	const ok = checks.every((check) => check.ok);

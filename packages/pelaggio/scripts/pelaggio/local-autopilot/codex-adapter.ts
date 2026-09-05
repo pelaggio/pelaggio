@@ -1,32 +1,9 @@
-import { spawn } from "node:child_process";
 import type { HarnessAdapter, HarnessContext } from "./harness.js";
+import { runLocalProcess } from "./process.js";
 
 export type CodexRunner = (bin: string, args: string[], cwd: string, signal?: AbortSignal) => Promise<{ ok: boolean; output: string }>;
 
-const runCodex: CodexRunner = (bin, args, cwd, signal) =>
-	new Promise((resolve) => {
-		const child = spawn(bin, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-		let output = "";
-		const onAbort = (): void => {
-			child.kill("SIGINT");
-		};
-		if (signal?.aborted) onAbort();
-		else signal?.addEventListener("abort", onAbort, { once: true });
-		child.stdout?.on("data", (chunk) => {
-			output += String(chunk);
-		});
-		child.stderr?.on("data", (chunk) => {
-			output += String(chunk);
-		});
-		child.on("error", (error) => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve({ ok: false, output: error.message });
-		});
-		child.on("close", (code) => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve({ ok: code === 0, output });
-		});
-	});
+const runCodex: CodexRunner = runLocalProcess;
 
 export function createCodexAdapter(run: CodexRunner = runCodex): HarnessAdapter {
 	return {

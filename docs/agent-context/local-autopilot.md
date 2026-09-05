@@ -16,7 +16,7 @@ A `Run` is the durable object. Operations: `startRun`, `getRun`, `continueRun`, 
 
 ## Authority
 
-The run journal is authoritative. Snapshots and metrics are derived. Resume is checkpoint-restart (ADR-0019). `ready_for_review` requires configured verification evidence. Pelaggio performs no push/PR/merge/release/deploy effect. Uncontained host harness execution requires explicit CLI or uncommitted-policy consent and reports `effectsEnforced: false`.
+The run journal is authoritative. Snapshots and metrics are derived. Resume is checkpoint-restart (ADR-0019). `ready_for_review` requires configured verification evidence. Pelaggio performs no push/PR/merge/release/deploy effect. Uncontained host harness execution requires explicit CLI or untracked local-policy consent and reports `effectsEnforced: false`. Tracked/indexed policy (including a staged deletion) and symlink policy cannot confer consent; pass `--allow-host-execution` for repository-owned configuration. Each resume reauthorizes the current policy; repository-owned policy requires `resume <runId> --allow-host-execution` even when the original start used explicit consent. Git provenance errors refuse policy-based consent without changing run state. Untracked status is a bounded provenance check, not proof of trust. `doctor` resolves executable availability without invoking configured binaries.
 
 ## Adapters
 

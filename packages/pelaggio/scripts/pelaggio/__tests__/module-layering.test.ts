@@ -36,6 +36,8 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"local-autopilot/work-contract.ts": 1,
 	"local-autopilot/journal.ts": 1,
 	"local-autopilot/config-load.ts": 1,
+	"local-autopilot/execution-policy.ts": 1,
+	"local-autopilot/process.ts": 1,
 	"local-autopilot/fold.ts": 2,
 	"local-autopilot/run-worktree.ts": 1,
 	"local-autopilot/fake-adapter.ts": 3,

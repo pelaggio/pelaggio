@@ -2,7 +2,11 @@ import { parseArtifact, parsePauseReason, parseWorkContract } from "./parse.js";
 import { protocolProblem } from "./transport.js";
 import type { Artifact, Disposition, ExecutionAssurance, PauseReason, Problem, RunEvent, RunSnapshot, RunState, WorkContract, WorktreeRef } from "./types.js";
 
+export type ExecutionPhase = { kind: "harness" } | { kind: "verification"; forcedFailure?: string } | { kind: "verification-result"; ok: boolean; message: string };
+
 export interface FoldedRun {
+	phase: ExecutionPhase;
+	verificationFailure?: string;
 	snapshot: RunSnapshot;
 	nextFakeIndex: number;
 	acknowledgedSeq: number;
@@ -33,6 +37,8 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 	const contract = parseWorkContract(payload.workContract);
 	if (!contract.ok) throw new Error(contract.problem.message);
 	const workContract: WorkContract = contract.value;
+	let phase: ExecutionPhase = { kind: "harness" };
+	let verificationFailure: string | undefined;
 	let state: RunState = "queued";
 	let pauseReason: PauseReason | undefined;
 	let disposition: Disposition | undefined;
@@ -57,7 +63,12 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			if (typeof p.nextIndex === "number") nextFakeIndex = p.nextIndex;
 		} else if (event.type === "pelaggio.local-autopilot.harness-finished") {
 			harnessCalls += 1;
+			phase = { kind: "verification", ...(typeof p.forcedFailure === "string" ? { forcedFailure: p.forcedFailure } : {}) };
 		} else if (event.type === "pelaggio.local-autopilot.verification-finished") {
+			if (typeof p.ok !== "boolean") throw new Error("verification-finished missing result");
+			const message = typeof p.message === "string" ? p.message : p.ok ? "verification passed" : "verification failed";
+			phase = { kind: "verification-result", ok: p.ok, message };
+			if (!p.ok) verificationFailure = message;
 			if (p.ok === true) verificationPasses += 1;
 			if (p.artifact !== undefined) {
 				const parsed = parseArtifact(p.artifact);
@@ -66,8 +77,11 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			}
 		} else if (event.type === "pelaggio.local-autopilot.repair-attempted") {
 			repairAttempts += 1;
+			phase = { kind: "harness" };
+			if (typeof p.message === "string") verificationFailure = p.message;
 		} else if (event.type === "pelaggio.local-autopilot.run-resumed") {
 			if (state !== "paused") throw new Error(`cannot resume a ${state} run`);
+			if (pauseReason?.code === "verification_budget") phase = { kind: "harness" };
 			state = "running";
 			pauseReason = undefined;
 		} else if (event.type === "pelaggio.local-autopilot.run-paused") {
@@ -118,7 +132,7 @@ export function foldRunEvents(events: readonly RunEvent[]): FoldedRun {
 			repairAttempts,
 		},
 	};
-	return { snapshot, nextFakeIndex, acknowledgedSeq: last.seq };
+	return { snapshot, nextFakeIndex, acknowledgedSeq: last.seq, phase, verificationFailure };
 }
 
 export function emptyJournalProblem(): ReturnType<typeof protocolProblem> {

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { cancelRun, continueRun, getRun, startRun } from "../local-autopilot/engine.js";
 import type { HarnessContext } from "../local-autopilot/harness.js";
+import { readRunEvents } from "../local-autopilot/journal.js";
 import { eventsPath } from "../local-autopilot/paths.js";
 import { presentHuman, presentJson } from "../local-autopilot/present.js";
 import { looksLikeAnsi } from "../local-autopilot/transport.js";
@@ -458,4 +460,177 @@ describe("local autopilot engine", () => {
 		assert.equal(metrics.includes("SECRET-TICKET-TEXT"), false);
 		assert.equal(metrics.includes(cwd), false);
 	});
+});
+
+it("keeps request mapping IDs disjoint from request lock names", async () => {
+	const { cwd } = consumer(`      - { action: complete }\n`);
+	const requestId = "request-two";
+	const collisionId = `lock-${digestOf(requestId).value}`;
+	const first = await startRun(cwd, { task: { text: "one" }, requestId: collisionId, nonInteractive: true });
+	assert.ok(first.ok);
+	const second = await startRun(cwd, { task: { text: "two" }, requestId, nonInteractive: true });
+	assert.ok(second.ok);
+	const again = await startRun(cwd, { task: { text: "one" }, requestId: collisionId, nonInteractive: true });
+	assert.ok(again.ok);
+	if (first.ok && again.ok) assert.equal(again.value.runId, first.value.runId);
+});
+
+it("holds the run lease before publishing its first journal record", async () => {
+	const { cwd } = consumer(`      - { action: complete }\n`);
+	let observed = false;
+	const result = await startRun(
+		cwd,
+		{ task: { text: "task" }, requestId: "publication", nonInteractive: true },
+		{
+			now: () => {
+				const root = join(cwd, ".pelaggio", "runs");
+				if (existsSync(root)) {
+					for (const entry of readdirSync(root)) {
+						if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(entry)) continue;
+						if (existsSync(join(root, entry, "events.jsonl"))) continue;
+						assert.ok(existsSync(join(root, entry, "lease")));
+						observed = true;
+					}
+				}
+				return new Date().toISOString();
+			},
+		},
+	);
+	assert.ok(result.ok);
+	assert.ok(observed);
+});
+
+for (const boundary of ["harness-finished", "verification-finished"]) {
+	it(`resumes after ${boundary} without replaying acknowledged work`, async () => {
+		const { cwd } = consumer(`      - { action: complete }\n`);
+		const initial = await startRun(cwd, { task: { text: "task" }, nonInteractive: true });
+		assert.ok(initial.ok);
+		if (!initial.ok) return;
+		const path = eventsPath(cwd, initial.value.runId);
+		const events = readRunEvents(cwd, initial.value.runId);
+		const index = events.findIndex((event) => event.type.endsWith(`.${boundary}`));
+		assert.ok(index >= 0);
+		writeFileSync(
+			path,
+			`${events
+				.slice(0, index + 1)
+				.map((event) => JSON.stringify(event))
+				.join("\n")}\n`,
+		);
+		if (boundary === "verification-finished") {
+			const config = join(cwd, ".pelaggio", "pelaggio.yml");
+			writeFileSync(config, readFileSync(config, "utf8").replace("git diff --check HEAD", "exit 1"));
+		}
+		const resumed = await continueRun(cwd, initial.value.runId, {
+			adapters: {
+				fake: {
+					name: "fake",
+					async next() {
+						throw new Error("acknowledged harness replayed");
+					},
+				},
+			},
+		});
+		assert.ok(resumed.ok, JSON.stringify(resumed));
+		if (resumed.ok) {
+			assert.equal(resumed.value.disposition, "ready_for_review");
+			assert.equal(resumed.value.metrics?.harnessCalls, 1);
+			assert.equal(resumed.value.metrics?.verificationPasses, 1);
+		}
+	});
+}
+
+for (const boundary of ["verification-finished", "repair-attempted"]) {
+	it(`restores repair failure context and count after ${boundary}`, async () => {
+		const { cwd } = consumer(`      - { action: verify-fail, message: "specific failure" }\n      - { action: complete }\n`);
+		const initial = await startRun(cwd, { task: { text: "task" }, nonInteractive: true });
+		assert.ok(initial.ok);
+		if (!initial.ok) return;
+		const events = readRunEvents(cwd, initial.value.runId);
+		const index = events.findIndex((event) => event.type.endsWith(`.${boundary}`));
+		assert.ok(index >= 0);
+		writeFileSync(
+			eventsPath(cwd, initial.value.runId),
+			`${events
+				.slice(0, index + 1)
+				.map((event) => JSON.stringify(event))
+				.join("\n")}\n`,
+		);
+		let calls = 0;
+		const resumed = await continueRun(cwd, initial.value.runId, {
+			adapters: {
+				fake: {
+					name: "fake",
+					async next(ctx) {
+						calls++;
+						assert.equal(ctx.verificationFailure, "specific failure");
+						return { action: { kind: "complete" }, cursor: ctx.cursor + 1 };
+					},
+				},
+			},
+		});
+		assert.ok(resumed.ok, JSON.stringify(resumed));
+		assert.equal(calls, 1);
+		if (resumed.ok) assert.equal(resumed.value.metrics?.repairAttempts, 1);
+	});
+}
+
+it("interrupts async verification and resumes it without replaying the provider", { timeout: 10_000 }, async () => {
+	const { cwd } = consumer(`      - { action: complete }\n`);
+	const configPath = join(cwd, ".pelaggio", "pelaggio.yml");
+	const originalConfig = readFileSync(configPath, "utf8");
+	const marker = join(cwd, "verification-started");
+	const script = join(cwd, "verification.cjs");
+	writeFileSync(script, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started"); setInterval(() => {}, 1000);`);
+	const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`;
+	writeFileSync(configPath, originalConfig.replace("git diff --check HEAD", JSON.stringify(command)));
+	const controller = new AbortController();
+	const pending = startRun(cwd, { task: { text: "task" }, nonInteractive: true }, { signal: controller.signal });
+	try {
+		for (let i = 0; i < 100 && !existsSync(marker); i++) await delay(20);
+		assert.ok(existsSync(marker), "verification child started");
+		controller.abort();
+		const paused = await pending;
+		assert.ok(paused.ok, JSON.stringify(paused));
+		if (!paused.ok) return;
+		assert.equal(paused.value.state, "paused");
+		assert.equal(paused.value.pauseReason?.code, "interrupted");
+		assert.equal(paused.value.metrics?.verificationPasses, 0);
+		writeFileSync(configPath, originalConfig);
+		const resumed = await continueRun(cwd, paused.value.runId, {
+			adapters: {
+				fake: {
+					name: "fake",
+					async next() {
+						throw new Error("provider replayed after verification interrupt");
+					},
+				},
+			},
+		});
+		assert.ok(resumed.ok, JSON.stringify(resumed));
+		if (resumed.ok) {
+			assert.equal(resumed.value.disposition, "ready_for_review");
+			assert.equal(resumed.value.metrics?.harnessCalls, 1);
+			assert.equal(resumed.value.metrics?.verificationPasses, 1);
+		}
+	} finally {
+		controller.abort();
+		await pending;
+	}
+});
+
+it("reauthorizes current policy on resume instead of inheriting earlier host consent", async () => {
+	const { cwd } = consumer(`      - { action: decision, code: choose, message: "Choose" }\n      - { action: complete }\n`);
+	const paused = await startRun(cwd, { task: { text: "task" }, nonInteractive: true });
+	assert.ok(paused.ok);
+	if (!paused.ok) return;
+	execFileSync("git", ["add", ".pelaggio/pelaggio.yml"], { cwd });
+	const before = readFileSync(eventsPath(cwd, paused.value.runId), "utf8");
+	const refused = await continueRun(cwd, paused.value.runId);
+	assert.equal(refused.ok, false);
+	if (!refused.ok) assert.equal(refused.problem.code, "host-consent-required");
+	assert.equal(readFileSync(eventsPath(cwd, paused.value.runId), "utf8"), before);
+	const resumed = await continueRun(cwd, paused.value.runId, { allowHostExecution: true });
+	assert.ok(resumed.ok, JSON.stringify(resumed));
+	if (resumed.ok) assert.equal(resumed.value.disposition, "ready_for_review");
 });

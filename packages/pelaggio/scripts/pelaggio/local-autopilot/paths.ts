@@ -37,6 +37,10 @@ export function requestIndexPath(cwd: string, requestId: string): string {
 	return directChild(requestIndexDir(cwd), requestId, "requestId");
 }
 
+export function requestLockPath(cwd: string, digest: string): string {
+	return directChild(join(runsDir(cwd), "request-locks"), digest, "request digest");
+}
+
 function directChild(base: string, id: string, label: string): string {
 	if (!isOpaqueId(id)) throw new Error(`${label} is not an opaque id`);
 	const root = resolve(base);
