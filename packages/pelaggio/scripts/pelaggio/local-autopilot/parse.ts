@@ -47,7 +47,7 @@ const WORKTREE_KEYS = new Set(["path", "branch"]);
 const SNAPSHOT_KEYS = new Set(["schemaVersion", "runId", "requestId", "state", "pauseReason", "disposition", "workContract", "createdAt", "updatedAt", "durationMs", "worktree", "execution", "artifacts", "problems", "metrics"]);
 const EVENT_KEYS = new Set(["schemaVersion", "eventId", "runId", "seq", "type", "at", "payload"]);
 const CONFIG_KEYS = new Set(["project", "harness", "autopilot", "execution", "effects"]);
-const HARNESS_KEYS = new Set(["adapter", "fake", "grok"]);
+const HARNESS_KEYS = new Set(["adapter", "fake", "grok", "codex"]);
 const FAKE_KEYS = new Set(["script"]);
 const GROK_KEYS = new Set(["bin", "model"]);
 const AUTOPILOT_KEYS = new Set(["maxRepairs", "verification"]);
@@ -504,7 +504,7 @@ export function parseLocalConfig(value: unknown): ParseResult<LocalConfig> {
 	const harnessUnknown = rejectUnknownKeys(value.harness, HARNESS_KEYS, "harness");
 	if (!harnessUnknown.ok) return { ok: false, problem: configProblem(harnessUnknown.problem.code, harnessUnknown.problem.message) };
 	if (typeof value.harness.adapter !== "string" || !(HARNESS_ADAPTERS as readonly string[]).includes(value.harness.adapter)) {
-		return fail(configProblem("adapter", "harness.adapter must be fake|grok"));
+		return fail(configProblem("adapter", "harness.adapter must be fake|grok|codex"));
 	}
 	const config: LocalConfig = { harness: { adapter: value.harness.adapter as LocalConfig["harness"]["adapter"] } };
 	if (value.harness.fake !== undefined) {
@@ -536,6 +536,23 @@ export function parseLocalConfig(value: unknown): ParseResult<LocalConfig> {
 			grok.model = model.value;
 		}
 		config.harness.grok = grok;
+	}
+	if (value.harness.codex !== undefined) {
+		if (!isObject(value.harness.codex)) return fail(configProblem("codex", "harness.codex must be an object"));
+		const codexUnknown = rejectUnknownKeys(value.harness.codex, GROK_KEYS, "harness.codex");
+		if (!codexUnknown.ok) return { ok: false, problem: configProblem(codexUnknown.problem.code, codexUnknown.problem.message) };
+		const codex: { bin?: string; model?: string } = {};
+		if (value.harness.codex.bin !== undefined) {
+			const bin = parseString(value.harness.codex.bin, "harness.codex.bin", 1, Number.MAX_SAFE_INTEGER);
+			if (!bin.ok) return bin;
+			codex.bin = bin.value;
+		}
+		if (value.harness.codex.model !== undefined) {
+			const model = parseString(value.harness.codex.model, "harness.codex.model", 1, Number.MAX_SAFE_INTEGER);
+			if (!model.ok) return model;
+			codex.model = model.value;
+		}
+		config.harness.codex = codex;
 	}
 	if (value.project !== undefined) {
 		if (!isObject(value.project)) return fail(configProblem("project", "project must be an object"));

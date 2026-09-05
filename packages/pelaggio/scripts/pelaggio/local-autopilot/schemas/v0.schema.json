@@ -299,7 +299,7 @@
 					"additionalProperties": false,
 					"required": ["adapter"],
 					"properties": {
-						"adapter": { "enum": ["fake", "grok"] },
+						"adapter": { "enum": ["fake", "grok", "codex"] },
 						"fake": {
 							"type": "object",
 							"additionalProperties": false,
@@ -312,6 +312,14 @@
 							}
 						},
 						"grok": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"bin": { "type": "string", "minLength": 1 },
+								"model": { "type": "string", "minLength": 1 }
+							}
+						},
+						"codex": {
 							"type": "object",
 							"additionalProperties": false,
 							"properties": {

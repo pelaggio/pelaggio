@@ -79,6 +79,12 @@ describe("local autopilot JSON Schema 2020-12", () => {
 		}
 	});
 
+	it("accepts the Codex auto-mode adapter without weakening host assurance", () => {
+		const config = { harness: { adapter: "codex", codex: { bin: "/opt/codex", model: "gpt-codex" } }, execution: { mode: "host" } };
+		assert.equal(validators.localConfig(config), true, JSON.stringify(validators.localConfig.errors));
+		assert.deepEqual(parseLocalConfig(config), { ok: true, value: config });
+	});
+
 	it("agrees on additive output field names", () => {
 		for (const [kind, file] of cases.filter(([kind, , valid]) => valid && ["runSnapshot", "event", "problem", "artifact"].includes(kind))) {
 			for (const key of ["futureExtension", "future_extension"]) {
