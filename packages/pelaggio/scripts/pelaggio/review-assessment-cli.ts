@@ -10,6 +10,7 @@ import { prepareAssessmentInput } from "./review/assessment-context.js";
 import { answerAssessmentQuestion, readAssessmentFile, writeAssessmentRecord } from "./review/assessment-store.js";
 
 export interface ReviewAssessmentCliDeps {
+	env: NodeJS.ProcessEnv;
 	repo: string;
 	mainRepo: string;
 	task: (pr: number, item: string, sha: string) => Promise<AssessmentTask>;
@@ -22,6 +23,7 @@ const USAGE =
 
 export async function reviewAssessmentMain(argv: string[], overrides: Partial<ReviewAssessmentCliDeps> = {}): Promise<number> {
 	const deps: ReviewAssessmentCliDeps = {
+		env: process.env,
 		repo: REPO,
 		mainRepo: mainWorktree(REPO),
 		task: async (pr, item, sha) => (await prepareAssessmentInput(overrides.repo ?? REPO, pr, item, sha)).task,
@@ -48,7 +50,7 @@ export async function reviewAssessmentMain(argv: string[], overrides: Partial<Re
 	}
 	if (command !== "answer" && command !== "check") throw new Error(USAGE);
 	if (!v.pr || !/^[1-9]\d*$/.test(v.pr) || !v.item?.trim() || !v.sha || !/^[a-f0-9]{40}$/.test(v.sha)) throw new Error(USAGE);
-	if (process.env.CI === "true" || process.env.PELAGGIO_SINGLE_SHOT) throw new Error("Use the attended host-operator command outside CI/pipeline seats; existing records preserved.");
+	if (deps.env.CI === "true" || deps.env.PELAGGIO_SINGLE_SHOT) throw new Error("Use the attended host-operator command outside CI/pipeline seats; existing records preserved.");
 	const task = await deps.task(Number(v.pr), v.item, v.sha);
 	if (task.itemId !== v.item || task.prNumber !== Number(v.pr)) throw new Error("Task binding mismatch; state preserved.");
 	if (command === "answer") {

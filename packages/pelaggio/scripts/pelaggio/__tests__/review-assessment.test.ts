@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -14,8 +14,8 @@ import { DEFAULTS } from "../config.js";
 import { createDriverAssignmentState } from "../driver-assignment.js";
 import { runPrReviewGate } from "../pr-review-gate.js";
 
-import { assessmentDigest, assessmentSarif, assessmentTaskPrompt, buildAssessment, makeAssessment, renderAssessment } from "../review/assessment.js";
-import { answerAssessmentQuestion, listAssessmentRecords, loadAssessmentInput, writeAssessmentRecord } from "../review/assessment-store.js";
+import { assessmentDigest, assessmentSarif, assessmentTaskPrompt, buildAssessment, makeAssessmentTask, renderAssessment } from "../review/assessment.js";
+import { answerAssessmentQuestion, listAssessmentRecords, loadAssessmentInput, questionPathObjects, readAssessmentFile, writeAssessmentRecord } from "../review/assessment-store.js";
 import { parseReviewFindings, reviewFindingFingerprint, reviewFindingsGate } from "../review/findings.js";
 import { reviewAssessmentMain } from "../review-assessment-cli.js";
 import { reviseFindingsPath } from "../revise-sweep.js";
@@ -24,7 +24,7 @@ import { runImplement } from "../steps/implement.js";
 import type { StepResult } from "../types.js";
 
 const now = "2026-09-05T00:00:00.000Z";
-const task = makeAssessment({ itemId: "782", prNumber: 900, source: "simulated:roadmap/782", request: "Usable labels\n\nReturn a usable display label. Clarify blank-input behavior." });
+const task = makeAssessmentTask({ itemId: "782", prNumber: 900, source: "simulated:roadmap/782", request: "Usable labels\n\nReturn a usable display label. Clarify blank-input behavior." });
 const question = { question: "Which label should blank input display?", context: "The request requires a usable label but does not name a fallback.", paths: ["requirements.md"] };
 const finding = {
 	severity: "must-fix",
@@ -61,6 +61,84 @@ function fixture(): { repo: string; head: () => string; git: (...args: string[])
 }
 
 describe("PR assessment qualifications", () => {
+	it("refuses CI and pipeline mutations before loading task context", async () => {
+		for (const env of [{ CI: "true" }, { PELAGGIO_SINGLE_SHOT: "1" }]) {
+			await assert.rejects(
+				reviewAssessmentMain(["answer", "--pr", "900", "--item", "782", "--sha", "a".repeat(40)], {
+					env,
+					task: async () => {
+						assert.fail("must refuse before roadmap access");
+					},
+				}),
+				/outside CI\/pipeline seats; existing records preserved/,
+			);
+		}
+	});
+	it("round-trips task identity regardless of caller property order", () => {
+		const f = fixture();
+		try {
+			const reordered = makeAssessmentTask({ request: task.request, source: task.source, prNumber: task.prNumber, itemId: task.itemId });
+			assert.deepEqual(reordered, task);
+			const record = buildAssessment(loadAssessmentInput(f.repo, f.repo, reordered, f.head()), [], "pass", now);
+			assert.deepEqual(readAssessmentFile(writeAssessmentRecord(f.repo, record)), record);
+		} finally {
+			f.cleanup();
+		}
+	});
+	it("distinguishes genuine absent paths from missing Git trees and blobs", () => {
+		const f = fixture();
+		try {
+			mkdirSync(join(f.repo, "nested"));
+			writeFileSync(join(f.repo, "nested", "policy.md"), "policy");
+			f.git("add", ".");
+			f.git("commit", "-m", "nested scope");
+			const sha = f.head();
+			assert.deepEqual(questionPathObjects(f.repo, sha, ["missing", "nested/missing", "label.mjs/child"]), { missing: null, "nested/missing": null, "label.mjs/child": null });
+			assert.equal(questionPathObjects(f.repo, sha, ["nested/policy.md"])["nested/policy.md"], f.git("rev-parse", `${sha}:nested/policy.md`));
+			const scopedReport = parseReviewFindings(report([], [{ ...question, paths: ["nested/missing"] }]));
+			const initial = buildAssessment(loadAssessmentInput(f.repo, f.repo, task, sha), [{ actor: "reviewer", iteration: 1, report: scopedReport, dispositions: [] }], "pass", now);
+			writeAssessmentRecord(f.repo, initial);
+			assert.ok(initial.questions[0]);
+			answerAssessmentQuestion({ mainRepo: f.repo, repo: f.repo, task, headSha: sha, assessmentId: initial.id, questionId: initial.questions[0].id, actor: "operator", response: "Keep absent", supersedes: [], now });
+			assert.equal(loadAssessmentInput(f.repo, f.repo, task, sha).answers[0]?.state, "applicable");
+			const blob = f.git("rev-parse", `${sha}:nested/policy.md`);
+			rmSync(join(f.repo, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+			assert.throws(() => questionPathObjects(f.repo, sha, ["nested/policy.md"]));
+			const tree = f.git("rev-parse", `${sha}:nested`);
+			rmSync(join(f.repo, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+			assert.throws(() => questionPathObjects(f.repo, sha, ["nested/missing"]));
+			assert.equal(loadAssessmentInput(f.repo, f.repo, task, sha).answers[0]?.state, "unavailable");
+		} finally {
+			f.cleanup();
+		}
+	});
+	it("projects only canonical code paths into a typed SARIF result", () => {
+		const input = { originalTask: task, task, headSha: "a".repeat(40), answers: [], questions: [], checks: [], supersedes: [], diagnostics: [] };
+		const paths = ["src/a b.ts", "/absolute", "./relative", "a//b", "a/../b", "a\\b", "bad\0path"];
+		const record = buildAssessment(
+			input,
+			[
+				{
+					actor: "reviewer",
+					iteration: 1,
+					report: parseReviewFindings(
+						report(
+							paths.map((path) => ({ ...finding, path })),
+							[],
+						),
+					),
+					dispositions: [],
+				},
+			],
+			"block",
+			now,
+		);
+		const sarif = assessmentSarif(record);
+		assert.deepEqual(
+			sarif.runs.flatMap((run) => run.results.map((r) => r.locations[0]?.physicalLocation.artifactLocation.uri)),
+			["src/a%20b.ts"],
+		);
+	});
 	it("retains legacy reports and keeps optional explanation outside gate and fingerprint authority", () => {
 		const legacy = parseReviewFindings(wire({ schemaVersion: 1, summary: "Legacy review", findings: [finding] }));
 		const changed = parseReviewFindings(report([{ ...finding, qualification: { inventedTruth: "pass" } }], [{ bad: true }]));
@@ -107,7 +185,7 @@ describe("operator answer lifecycle", () => {
 			const conflicted = loadAssessmentInput(f.repo, f.repo, task, f.head());
 			assert.ok(conflicted.answers.every((entry) => entry.state === "conflicting"));
 			assert.doesNotMatch(assessmentTaskPrompt(conflicted), /Use Untitled|Use Blank/);
-			const changedTask = makeAssessment({ itemId: task.itemId, prNumber: task.prNumber, source: task.source, request: "A revised product requirement" });
+			const changedTask = makeAssessmentTask({ itemId: task.itemId, prNumber: task.prNumber, source: task.source, request: "A revised product requirement" });
 			const changed = loadAssessmentInput(f.repo, f.repo, changedTask, f.head());
 			assert.equal(changed.originalTask.request, task.request);
 			assert.equal(changed.task.request, changedTask.request);
@@ -188,7 +266,7 @@ describe("operator answer lifecycle", () => {
 			assert.equal(initial.gate, "block");
 			assert.ok(initial.assessment);
 			assert.ok(initial.assessment.questions[0]);
-			const cliDeps = { repo: f.repo, mainRepo: f.repo, task: async () => task, now: () => now, print: () => {} };
+			const cliDeps = { env: {}, repo: f.repo, mainRepo: f.repo, task: async () => task, now: () => now, print: () => {} };
 			assert.equal(
 				await reviewAssessmentMain(
 					["answer", "--pr", "900", "--item", "782", "--sha", initialSha, "--assessment", initial.assessment.id, "--question", initial.assessment.questions[0].id, "--by", "simulated operator", "--response", "Blank input must display Untitled."],
@@ -237,6 +315,25 @@ describe("operator answer lifecycle", () => {
 			const check = nextInput.checks[0];
 			assert.ok(check);
 			assert.equal(check.exitCode, 0);
+			const withheldPrompts: string[] = [];
+			const withheld = await runPrReviewGate({
+				...gateOptions,
+				reviewedSha: nextInput.headSha,
+				diffHeadRef: nextInput.headSha,
+				reviewDrivers: [{ ...driver, provider: "grok" }],
+				assessmentMainRepo: undefined,
+				assessmentInput: nextInput,
+				runStep: async (_step, prompt) => {
+					withheldPrompts.push(prompt);
+					return result(report([], []));
+				},
+			});
+			assert.equal(withheld.gate, "pass", "withholding context does not introduce a new blocking gate");
+			assert.deepEqual(withheld.assessment?.input.answers, []);
+			assert.doesNotMatch(JSON.stringify(withheld.assessment), /Blank input must display Untitled/);
+			assert.doesNotMatch(withheldPrompts.join("\n"), /Blank input must display Untitled/);
+			assert.match(renderAssessment(withheld.assessment!), /withheld for an untrusted provider pool/);
+			assert.equal(nextInput.answers[0]?.state, "applicable", "caller snapshot remains intact");
 			const next = await runPrReviewGate({
 				...gateOptions,
 				diffCwd: worker,

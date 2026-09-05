@@ -72,7 +72,8 @@ as unavailable; legacy review policy still runs.
 The existing provider store-trust boundary governs admission. Claude/Codex review pools
 have the register protection used by the existing carry machinery. Grok/OpenCode pools
 do not currently establish that protection, so stored clarification/check evidence is
-withheld with an explicit diagnostic. The repository's current Codex+Grok configuration
+withheld from both seat prompts and the new rendered assessment, with an explicit
+diagnostic. Existing files remain available for deliberate local inspection. The repository's current Codex+Grok configuration
 therefore does not admit persisted answers. No configuration or policy is silently
 weakened here. Host processes and uncontained execution remain outside this boundary;
 #419 owns the broader authority-hardening work. These records are not a new attestation.
@@ -85,8 +86,9 @@ recommendation. Optional `questions` are independent of severity. Invalid option
 detail is unavailable; it cannot change the existing gate or finding fingerprint.
 Authoring-v3 findings and the Judge's synthesis/grouping remain #702's separate scope.
 
-A model cannot author a captured check result. An attended operator can capture a
-configured package script against a clean, exact local revision:
+Optional model qualification cannot create a captured check result. The attended
+operator command records the actual process result of a configured package script
+against a clean, exact local revision:
 
 ```bash
 npx pelaggio review-assessment check --pr <pr> --item <item> --sha <full-sha> --script <package-script> --scope "<narrow behavior exercised>"
@@ -126,6 +128,13 @@ The [captured assessment](../examples/pr-review-clarification/assessment.json),
 contract. Reviewer/verifier/worker/operator inputs are explicitly simulated. The actual
 parser, record writer, answer command, revision worker handoff, git changes and configured
 blank-input check run. This proves deterministic plumbing, not autonomous model behavior.
+
+Consumers can reuse the exported `AssessmentRecord` union and `AssessmentSarif`
+projection type. `renderAssessment` and `assessmentSarif` are pure projections over a
+validated record; `review-assessment show` and `sarif` expose them without launching a
+review or posting a status. Check-state interpretation and canonical path admission are
+shared across the prompt, renderer and export where applicable. No new storage adapter
+or detector interface is required to reuse these outputs.
 
 For presentation changes, re-render the captured JSON using `review-assessment show` or
 `sarif`. For workflow changes, regenerate the scenario and review the evidence diff.

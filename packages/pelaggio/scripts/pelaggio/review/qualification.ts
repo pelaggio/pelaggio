@@ -13,6 +13,11 @@ export interface ReviewQuestion {
 	paths: string[];
 }
 
+/** Reject noncanonical scopes; never silently broaden an operator's declared paths. */
+export function isAssessmentPath(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && !/[\\\r\n\0]/.test(value) && !value.split("/").some((part) => !part || part === "." || part === "..");
+}
+
 export function qualificationText(value: unknown): string {
 	if (typeof value !== "string" || !value.trim() || /[\r\n]/.test(value) || value.length > 8000) throw new Error("invalid qualification text");
 	return value.trim();
@@ -41,7 +46,7 @@ export function parseQuestions(value: unknown): ReviewQuestion[] {
 		const v = object(entry, ["question", "context", "paths"]);
 		if (!Array.isArray(v.paths) || v.paths.length > 64) throw new Error("invalid question paths");
 		const paths = v.paths.map(qualificationText);
-		if (paths.some((path) => path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === ".."))) throw new Error("invalid question path");
+		if (paths.some((path) => !isAssessmentPath(path))) throw new Error("invalid question path");
 		return { question: qualificationText(v.question), context: qualificationText(v.context), paths: [...new Set(paths)].sort() };
 	});
 }

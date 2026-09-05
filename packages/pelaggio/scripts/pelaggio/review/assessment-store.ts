@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { writeJsonAtomically } from "../record-store.js";
 import { registerPath } from "../registers.js";
-import { type AssessmentInput, type AssessmentQuestion, type AssessmentTask, assessmentDigest, buildAssessment, type CapturedReviewCheck, type OperatorAnswer, type PrAssessment } from "./assessment.js";
+import { type AssessmentInput, type AssessmentQuestion, type AssessmentTask, assessmentDigest, buildAssessment, type CapturedReviewCheck, makeAssessmentTask, type OperatorAnswer, type PrAssessment } from "./assessment.js";
 import { parseReviewFindings } from "./findings.js";
-import { parseQuestions } from "./qualification.js";
+import { isAssessmentPath, parseQuestions } from "./qualification.js";
 
-type Stored = PrAssessment | OperatorAnswer | { schemaVersion: 1; kind: "check"; id: string; check: CapturedReviewCheck; task: AssessmentTask };
+export type AssessmentRecord = PrAssessment | OperatorAnswer | { schemaVersion: 1; kind: "check"; id: string; check: CapturedReviewCheck; task: AssessmentTask };
 const DIGEST = /^[a-f0-9]{64}$/;
 const SHA = /^[a-f0-9]{40}$/;
 
@@ -16,7 +16,7 @@ export function assessmentRoot(mainRepo: string): string {
 }
 
 /** Each generation has its own filename; no shared read/modify/write document or pointer. */
-export function writeAssessmentRecord(mainRepo: string, record: Stored): string {
+export function writeAssessmentRecord(mainRepo: string, record: AssessmentRecord): string {
 	const path = registerPath(mainRepo, "pr-review-assessments", `${record.kind}-${record.id}-${randomUUID()}.json`);
 	writeJsonAtomically(path, { digest: assessmentDigest(record), record }, { mode: 0o600 });
 	return path;
@@ -30,11 +30,12 @@ function validTask(value: unknown): value is AssessmentTask {
 	return (
 		object(value) &&
 		typeof value.itemId === "string" &&
-		Number.isInteger(value.prNumber) &&
+		typeof value.prNumber === "number" &&
+		Number.isSafeInteger(value.prNumber) &&
 		Number(value.prNumber) > 0 &&
 		typeof value.source === "string" &&
 		typeof value.request === "string" &&
-		value.digest === assessmentDigest({ itemId: value.itemId, prNumber: value.prNumber, source: value.source, request: value.request })
+		value.digest === makeAssessmentTask({ itemId: value.itemId, prNumber: value.prNumber, source: value.source, request: value.request }).digest
 	);
 }
 
@@ -120,7 +121,7 @@ function validReport(value: unknown): boolean {
 	}
 }
 
-function validStored(value: unknown): value is Stored {
+function validStored(value: unknown): value is AssessmentRecord {
 	if (!object(value) || value.schemaVersion !== 1 || typeof value.id !== "string" || !DIGEST.test(value.id)) return false;
 	if (value.kind === "answer") return validAnswer(value);
 	if (value.kind === "check") return validTask(value.task) && validCheck(value.check) && value.id === value.check.id;
@@ -158,7 +159,7 @@ function validStored(value: unknown): value is Stored {
 	);
 }
 
-export function readAssessmentFile(path: string): Stored {
+export function readAssessmentFile(path: string): AssessmentRecord {
 	const value: unknown = JSON.parse(readFileSync(path, "utf8"));
 	if (!object(value) || !validStored(value.record) || value.digest !== assessmentDigest(value.record)) throw new Error("invalid assessment record");
 	const record = value.record;
@@ -169,10 +170,10 @@ export function readAssessmentFile(path: string): Stored {
 	return record;
 }
 
-export function listAssessmentRecords(mainRepo: string): { records: Stored[]; diagnostics: string[] } {
+export function listAssessmentRecords(mainRepo: string): { records: AssessmentRecord[]; diagnostics: string[] } {
 	const root = assessmentRoot(mainRepo);
 	if (!existsSync(root)) return { records: [], diagnostics: [] };
-	const records: Stored[] = [];
+	const records: AssessmentRecord[] = [];
 	const diagnostics: string[] = [];
 	for (const name of readdirSync(root).sort()) {
 		if (!name.endsWith(".json")) continue;
@@ -182,7 +183,7 @@ export function listAssessmentRecords(mainRepo: string): { records: Stored[]; di
 			diagnostics.push("A stored assessment record is unreadable or invalid; its contents were not admitted.");
 		}
 	}
-	const unique = new Map<string, Stored>();
+	const unique = new Map<string, AssessmentRecord>();
 	const conflicts = new Set<string>();
 	for (const record of records) {
 		const task = record.kind === "assessment" ? record.input.task : record.task;
@@ -230,17 +231,29 @@ export function listAssessmentRecords(mainRepo: string): { records: Stored[]; di
 
 export function questionPathObjects(repo: string, headSha: string, paths: string[]): Record<string, string | null> {
 	if (!SHA.test(headSha)) throw new Error("expected full revision SHA");
+	const git = (...args: string[]): string => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	const root = git("rev-parse", "--verify", `${headSha}^{tree}`).trim();
 	const entries = paths.map((path): [string, string | null] => {
-		if (!path || path.startsWith("/") || path.includes("\\") || path.split("/").some((v) => !v || v === "." || v === "..")) throw new Error("invalid relevant path");
-		try {
-			const oid = execFileSync("git", ["rev-parse", "--verify", `${headSha}:${path}`], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-			if (!SHA.test(oid)) throw new Error("invalid object id");
-			return [path, oid];
-		} catch {
-			// Distinguish absent path from unavailable revision.
-			execFileSync("git", ["cat-file", "-e", `${headSha}^{commit}`], { cwd: repo, stdio: "pipe" });
-			return [path, null];
+		if (!isAssessmentPath(path)) throw new Error("invalid relevant path");
+		let tree = root;
+		const parts = path.split("/");
+		for (const [index, part] of parts.entries()) {
+			// Successful traversal with no exact entry means absence. Git failures propagate as unavailable.
+			const entry = git("ls-tree", "-z", tree)
+				.split("\0")
+				.find((line) => line.slice(line.indexOf("\t") + 1) === part);
+			if (!entry) return [path, null];
+			const match = /^[0-7]+ (blob|tree|commit) ([a-f0-9]{40})\t/.exec(entry);
+			if (!match?.[2]) throw new Error("invalid tree entry");
+			if (index === parts.length - 1) {
+				// Gitlink targets need not exist in the superproject object database.
+				if (match[1] !== "commit") git("cat-file", "-e", match[2]);
+				return [path, match[2]];
+			}
+			if (match[1] !== "tree") return [path, null];
+			tree = match[2];
 		}
+		throw new Error("invalid relevant path");
 	});
 	return Object.fromEntries(entries);
 }
@@ -268,7 +281,7 @@ export function loadAssessmentInput(mainRepo: string, repo: string, task: Assess
 			}
 		}),
 		questions: [...new Map(prior.flatMap((record) => record.questions).map((question) => [question.id, question])).values()],
-		checks: listed.records.filter((record) => record.kind === "check" && record.task.digest === task.digest).map((record) => (record as Extract<Stored, { kind: "check" }>).check),
+		checks: listed.records.filter((record): record is Extract<AssessmentRecord, { kind: "check" }> => record.kind === "check" && record.task.digest === task.digest).map((record) => record.check),
 		supersedes: prior.map((record) => record.id),
 		diagnostics: listed.diagnostics,
 	};

@@ -938,7 +938,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		assessmentInput.originalTask = assessmentInput.task;
 		assessmentInput.questions = [];
 		assessmentInput.supersedes = [];
-		assessmentInput.answers = assessmentInput.answers.map((entry) => ({ ...entry, state: "unavailable", reason: "Provider pool lacks proven protected-store access; clarification withheld." }));
+		assessmentInput.answers = [];
 		assessmentInput.checks = [];
 		assessmentInput.diagnostics.push("Stored clarification and check evidence withheld for an untrusted provider pool.");
 	}
