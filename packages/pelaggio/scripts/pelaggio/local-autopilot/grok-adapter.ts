@@ -1,4 +1,5 @@
-import { homedir } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessAdapter, HarnessContext } from "./harness.js";
 import { runLocalProcess } from "./process.js";
@@ -28,8 +29,16 @@ export function createGrokAdapter(run: GrokRunner = runGrok): HarnessAdapter {
 			].join("\n");
 			const model = ctx.config.harness.grok?.model;
 			// Keep execution in this process group so cancellation cannot leave a shared leader running.
-			const args = ["--no-leader", "--always-approve", ...(model ? ["-m", model] : []), "-p", prompt];
-			const result = await run(bin, args, ctx.worktree, ctx.signal);
+			const promptDir = mkdtempSync(join(tmpdir(), "pelaggio-grok-prompt-"));
+			const promptPath = join(promptDir, "prompt.txt");
+			writeFileSync(promptPath, prompt, { mode: 0o600 });
+			let result: Awaited<ReturnType<GrokRunner>>;
+			try {
+				const args = ["--no-leader", "--always-approve", ...(model ? ["-m", model] : []), "--prompt-file", promptPath];
+				result = await run(bin, args, ctx.worktree, ctx.signal);
+			} finally {
+				rmSync(promptDir, { recursive: true, force: true });
+			}
 			const cursor = ctx.cursor + 1;
 			if (!result.ok) return { action: { kind: "crash", message: result.output.slice(0, 2000) || "grok harness failed" }, cursor };
 			return { action: { kind: "complete" }, cursor };

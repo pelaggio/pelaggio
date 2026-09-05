@@ -5,9 +5,9 @@ import type { HarnessContext } from "../local-autopilot/harness.js";
 
 describe("local autopilot Codex adapter", () => {
 	it("uses approval-review auto mode, workspace sandboxing, and repair context", async () => {
-		const calls: Array<{ bin: string; args: string[]; signal?: AbortSignal }> = [];
-		const adapter = createCodexAdapter(async (bin, args, _cwd, signal) => {
-			calls.push({ bin, args, signal });
+		const calls: Array<{ bin: string; args: string[]; signal?: AbortSignal; input?: string }> = [];
+		const adapter = createCodexAdapter(async (bin, args, _cwd, signal, options) => {
+			calls.push({ bin, args, signal, input: options?.input });
 			return { ok: true, output: "" };
 		});
 		const signal = new AbortController().signal;
@@ -33,7 +33,8 @@ describe("local autopilot Codex adapter", () => {
 		assert.equal(result.cursor, 1);
 		assert.equal(calls[0]?.bin, "/opt/codex");
 		assert.deepEqual(calls[0]?.args.slice(0, 8), ["exec", "--approve-for-me", "--sandbox", "workspace-write", "--cd", context.worktree, "--model", "gpt-codex"]);
-		assert.match(calls[0]?.args.at(-1) ?? "", /tests failed/);
+		assert.equal(calls[0]?.args.at(-1), "-");
+		assert.match(calls[0]?.input ?? "", /tests failed/);
 		assert.equal(calls[0]?.signal, signal);
 		assert.equal(calls[0]?.args.includes("--dangerously-bypass-approvals-and-sandbox"), false);
 	});

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { createGrokAdapter } from "../local-autopilot/grok-adapter.js";
 import type { HarnessContext } from "../local-autopilot/harness.js";
@@ -23,8 +24,8 @@ describe("local autopilot Grok adapter", () => {
 				assert.equal(bin, "/bin/grok");
 				assert.equal(cwd, "/repo/worktree");
 				assert.equal(receivedSignal, signal);
-				assert.deepEqual(args.slice(0, -1), ["--no-leader", "--always-approve", ...(model ? ["-m", model] : []), "-p"]);
-				assert.match(args.at(-1) ?? "", /Create the hello export/);
+				assert.deepEqual(args.slice(0, -1), ["--no-leader", "--always-approve", ...(model ? ["-m", model] : []), "--prompt-file"]);
+				assert.match(readFileSync(args.at(-1) ?? "", "utf8"), /Create the hello export/);
 				return { ok: true, output: "done" };
 			});
 			const result = await adapter.next({
@@ -45,7 +46,7 @@ describe("local autopilot Grok adapter", () => {
 		const prompts: string[] = [];
 		const signals: Array<AbortSignal | undefined> = [];
 		const adapter = createGrokAdapter(async (_bin, args, _cwd, signal) => {
-			prompts.push(args.at(-1) ?? "");
+			prompts.push(readFileSync(args.at(-1) ?? "", "utf8"));
 			signals.push(signal);
 			return { ok: true, output: "" };
 		});
@@ -67,5 +68,16 @@ describe("local autopilot Grok adapter", () => {
 		assert.doesNotMatch(prompts[0] ?? "", /tests failed/);
 		assert.match(prompts[1] ?? "", /tests failed/);
 		assert.deepEqual(signals, [signal, signal]);
+	});
+
+	it("removes its temporary prompt after the provider returns", async () => {
+		let promptPath = "";
+		const adapter = createGrokAdapter(async (_bin, args) => {
+			promptPath = args.at(-1) ?? "";
+			assert.equal(existsSync(promptPath), true);
+			return { ok: true, output: "" };
+		});
+		await adapter.next({ cwd: "/repo", worktree: "/repo/worktree", workContract: contract, config: { harness: { adapter: "grok", grok: { bin: "/bin/grok" } } }, nonInteractive: true, cursor: 0 });
+		assert.equal(existsSync(promptPath), false);
 	});
 });

@@ -36,6 +36,31 @@ for (const adapter of [createCodexAdapter(), createGrokAdapter()]) {
 	});
 }
 
+for (const adapter of [createCodexAdapter(), createGrokAdapter()]) {
+	it(`${adapter.name} transports a large prompt outside argv`, { timeout: 10_000 }, async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "pelaggio-adapter-large-"));
+		const bin = join(cwd, "harness");
+		try {
+			writeFileSync(
+				bin,
+				`#!${process.execPath}\nconst fs=require("node:fs");const i=process.argv.indexOf("--prompt-file");const prompt=i<0?fs.readFileSync(0,"utf8"):fs.readFileSync(process.argv[i+1],"utf8");process.exit(prompt.length>200000?0:3);\n`,
+			);
+			chmodSync(bin, 0o755);
+			const result = await adapter.next({
+				cwd,
+				worktree: cwd,
+				workContract: buildWorkContract({ text: "x".repeat(256 * 1024) }),
+				config: { harness: { adapter: adapter.name, [adapter.name]: { bin } }, execution: { mode: "host" } },
+				nonInteractive: true,
+				cursor: 0,
+			});
+			assert.deepEqual(result.action, { kind: "complete" });
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+}
+
 it("interrupt stops descendants with independent stdio before returning", { skip: process.platform === "win32", timeout: 10_000 }, async () => {
 	const cwd = mkdtempSync(join(tmpdir(), "pelaggio-process-group-"));
 	const marker = join(cwd, "writes");
