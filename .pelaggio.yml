@@ -28,25 +28,20 @@ review:
   authoring:
     enabled: local
     provider-diversity: prefer
-    # Three-reviewer panel restored 2026-08-05 after the grok Build top-up.
-    # Caveat until #455 lands: a grok balance failure (402) has no distinct fault
-    # class. Grok's own "Internal error" text passes through as a generic error_sdk,
-    # so a grok seat failing at turn 1 means check the Build balance first.
-    # (#434 is the concurrent-boot race — a different fault with the same symptom;
-    # landing it will NOT fix this masking.)
+    # Ongoing two-provider panel; both available providers remain required.
+    judge: { id: judge, provider: codex }
     reviewers:
-      - { id: claude, provider: claude }
       # No codex-model pin: this environment's Codex runs on a ChatGPT account
       # where 'gpt-5-codex' 400s; the CLI default is correct here.
       - { id: codex, provider: codex }
       - { id: grok, provider: grok }
   # Dogfooding posture: highest-quality gate, still auto-merging. Two independent
-  # review iterations over a three-driver fan-out, with a structurally-different
-  # scalar verifier.
+  # review iterations over Codex + Grok, with Codex verification and Grok diversity.
   max-passes: 2
   # reservation = labels × drivers × (pr-review $5 + pr-verify $5), reserved per
   # iteration; budget-cap is the aggregate across passes. Red-team trigger doubles
-  # labels: 2 × 3 × $10 = $60/iteration × 2 passes = $120. Sized to never preflight-
+  # labels: 2 × 2 × $10 = $40/iteration × 2 passes = $80. The existing $120 cap
+  # leaves headroom without changing the number of passes. Sized to never preflight-
   # block the intended configuration. Review runs on the local subscription, so this
   # is a runaway governor, not a metered bill.
   budget-cap: 120
@@ -75,29 +70,13 @@ models:
         plan: [grok, codex]
         shakedown-plan: [grok, codex]
         implement: [grok, codex]
-        # Selection set, author-excluded: keeps the final code review cross-model
-        # against a grok/codex implementation while dropping Claude's share from
-        # 1-in-2 to 1-in-3.
-        shakedown-code: [claude, grok, codex]
+        # Author-excluded review uses the other available provider.
+        shakedown-code: [grok, codex]
         ship: claude
         shipwreck: claude
-        # Fan-out set: every driver runs the same discovery prompt and every
-        # (driver × label) cell must return a valid PASS — all-pass/fail-closed.
-        # List order is render/aggregation order. Launch is fully concurrent except
-        # when Claude and Grok share the pool: non-Grok seats start immediately
-        # and Grok waits for every Claude discovery promise to settle.
-        # Widened to three drivers 2026-08-06. The earlier two-driver rationale measured
-        # cost *per pass* and concluded a third seat "adds cost without conserving Claude
-        # (Claude runs either way)". True per pass; wrong for cost-to-land — under-enumeration
-        # is what forces repeat gate runs, and Claude runs on every one. A third seat cuts the
-        # number of passes, and the two added cells are grok (Build subscription), so Claude's
-        # per-pass cell count is unchanged: we pay in a resource we have for one we don't.
-        # Caveat: this is fail-closed, so an exhausted grok Build balance blocks every PR — a
-        # 402 surfaces as `block (infra)`, not a real finding (see #428). Until #455 gives
-        # balance-exhaustion its own non-blocking fault class, keep the Build balance funded.
-        pr-review: [claude, codex, grok]
-        # Scalar verifier, pinned off the pool's first entry (claude) so
-        # provider-diversity: require is satisfied by construction.
+        # Every driver × label cell must pass. Grok differs from the Codex verifier,
+        # preserving provider-diversity: require with both reviewers mandatory.
+        pr-review: [codex, grok]
         pr-verify: codex
     # Quick mode (S/XS/bug) skips plan+shakedown-plan and runs implement-only under
     # this profile. Its implement mirrors the standard profile's Claude-conservation
@@ -105,8 +84,10 @@ models:
     # to those drivers, so each uses its own default model.
     quick:
       providers:
+        pr-review: [codex, grok]
+        pr-verify: codex
         pick: claude
         implement: [grok, codex]
-        shakedown-code: [claude, grok, codex]
+        shakedown-code: [grok, codex]
         ship: claude
         shipwreck: claude

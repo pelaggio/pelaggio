@@ -115,6 +115,7 @@
 		"problem": {
 			"type": "object",
 			"additionalProperties": true,
+			"propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]*$" },
 			"required": ["schemaVersion", "type", "code", "message", "retryable"],
 			"properties": {
 				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
@@ -128,6 +129,7 @@
 		"pauseReason": {
 			"type": "object",
 			"additionalProperties": true,
+			"propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]*$" },
 			"required": ["code", "message"],
 			"properties": {
 				"code": { "$ref": "#/$defs/pauseCode" },
@@ -138,6 +140,7 @@
 		"artifact": {
 			"type": "object",
 			"additionalProperties": true,
+			"propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]*$" },
 			"required": ["kind", "uri", "mediaType", "digest"],
 			"properties": {
 				"kind": { "$ref": "#/$defs/artifactKind" },
@@ -172,6 +175,7 @@
 		"worktreeRef": {
 			"type": "object",
 			"additionalProperties": true,
+			"propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]*$" },
 			"required": ["branch"],
 			"properties": {
 				"path": { "type": "string", "minLength": 1 },
@@ -202,6 +206,7 @@
 		"runSnapshot": {
 			"type": "object",
 			"additionalProperties": true,
+			"propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]*$" },
 			"required": ["schemaVersion", "runId", "state", "workContract", "createdAt", "updatedAt", "execution", "artifacts", "problems"],
 			"properties": {
 				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
@@ -262,6 +267,7 @@
 		"event": {
 			"type": "object",
 			"additionalProperties": true,
+			"propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]*$" },
 			"required": ["schemaVersion", "eventId", "runId", "seq", "type", "at"],
 			"properties": {
 				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },

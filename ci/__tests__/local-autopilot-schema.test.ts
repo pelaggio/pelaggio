@@ -30,10 +30,6 @@ const validators = {
 const parsers = {
 	workContract: parseWorkContract,
 	startRunRequest: parseStartRunRequest,
-	runIdRequest: (value: unknown) => {
-		const valid = validators.runIdRequest(value);
-		return valid ? { ok: true as const, value } : { ok: false as const };
-	},
 	runSnapshot: parseRunSnapshot,
 	event: parseRunEvent,
 	metrics: parseMetrics,
@@ -42,30 +38,44 @@ const parsers = {
 	localConfig: parseLocalConfig,
 };
 
+const cases: Array<[keyof typeof parsers, string, boolean]> = [
+	["workContract", "work-contract.json", true],
+	["startRunRequest", "start-run-request.json", true],
+	["runSnapshot", "snapshot-running.json", true],
+	["runSnapshot", "snapshot-paused-decision.json", true],
+	["runSnapshot", "snapshot-ready-for-review.json", true],
+	["event", "event-run-started.json", true],
+	["metrics", "metrics.json", true],
+	["problem", "problem-protocol.json", true],
+	["artifact", "artifact.json", true],
+	["localConfig", "config.json", true],
+	["startRunRequest", "invalid-start-unknown-field.json", false],
+	["runSnapshot", "invalid-snapshot-paused-without-reason.json", false],
+	["runSnapshot", "invalid-snapshot-ready-with-blocker.json", false],
+	["runSnapshot", "invalid-snapshot-accepted.json", false],
+	["metrics", "invalid-metrics-path.json", false],
+	["localConfig", "invalid-config-effect.json", false],
+];
+
 describe("local autopilot JSON Schema 2020-12", () => {
 	it("compiles every $defs document", () => {
-		for (const [name, validate] of Object.entries(validators)) {
-			assert.equal(typeof validate, "function", name);
+		for (const name of Object.keys(schema.$defs)) assert.equal(typeof ref(name), "function", name);
+	});
+
+	it("checks every fixture against both independent validators", () => {
+		for (const [kind, file, expected] of cases) {
+			const value = load(file);
+			assert.equal(validators[kind](value), expected, `${file}: ${JSON.stringify(validators[kind].errors)}`);
+			assert.equal(parsers[kind](value).ok, expected, `${file} parser`);
 		}
 	});
 
-	it("accepts valid fixtures and agrees with the TypeScript parser", () => {
-		const pairs: Array<[keyof typeof validators, string]> = [
-			["workContract", "work-contract.json"],
-			["startRunRequest", "start-run-request.json"],
-			["runSnapshot", "snapshot-running.json"],
-			["runSnapshot", "snapshot-paused-decision.json"],
-			["runSnapshot", "snapshot-ready-for-review.json"],
-			["event", "event-run-started.json"],
-			["metrics", "metrics.json"],
-			["problem", "problem-protocol.json"],
-			["artifact", "artifact.json"],
-			["localConfig", "config.json"],
-		];
-		for (const [kind, file] of pairs) {
-			const value = load(file);
-			assert.equal(validators[kind](value), true, `${file}: ${JSON.stringify(validators[kind].errors)}`);
-			assert.equal(parsers[kind](value).ok, true, `${file} parser`);
+	it("validates the run-id operation request schemas", () => {
+		for (const name of ["getRunRequest", "continueRunRequest", "cancelRunRequest"]) {
+			const validate = ref(name);
+			assert.equal(validate({ schemaVersion: 1, runId: "run-1" }), true);
+			assert.equal(validate({ schemaVersion: 1 }), false);
+			assert.equal(validate({ schemaVersion: 1, runId: "run-1", extra: true }), false);
 		}
 	});
 
@@ -75,19 +85,29 @@ describe("local autopilot JSON Schema 2020-12", () => {
 		assert.deepEqual(parseLocalConfig(config), { ok: true, value: config });
 	});
 
-	it("rejects invalid fixtures; parser agrees", () => {
-		const pairs: Array<[keyof typeof validators, string]> = [
-			["startRunRequest", "invalid-start-unknown-field.json"],
-			["runSnapshot", "invalid-snapshot-paused-without-reason.json"],
-			["runSnapshot", "invalid-snapshot-ready-with-blocker.json"],
-			["runSnapshot", "invalid-snapshot-accepted.json"],
-			["metrics", "invalid-metrics-path.json"],
-			["localConfig", "invalid-config-effect.json"],
+	it("agrees on additive output field names", () => {
+		for (const [kind, file] of cases.filter(([kind, , valid]) => valid && ["runSnapshot", "event", "problem", "artifact"].includes(kind))) {
+			for (const key of ["futureExtension", "future_extension"]) {
+				const value = { ...(load(file) as Record<string, unknown>), [key]: true };
+				assert.equal(validators[kind](value), key === "futureExtension", `${kind} schema ${key}`);
+				assert.equal(parsers[kind](value).ok, key === "futureExtension", `${kind} parser ${key}`);
+			}
+		}
+	});
+
+	it("agrees at Unicode string-length boundaries", () => {
+		const probes: Array<[keyof typeof parsers, string, string, number]> = [
+			["workContract", "work-contract.json", "title", 200],
+			["problem", "problem-protocol.json", "message", 2000],
+			["artifact", "artifact.json", "uri", 4096],
+			["artifact", "artifact.json", "mediaType", 128],
 		];
-		for (const [kind, file] of pairs) {
-			const value = load(file);
-			assert.equal(validators[kind](value), false, file);
-			assert.equal(parsers[kind](value).ok, false, `${file} parser`);
+		for (const [kind, file, key, max] of probes) {
+			for (const length of [max, max + 1]) {
+				const value = { ...(load(file) as Record<string, unknown>), [key]: "😀".repeat(length) };
+				assert.equal(validators[kind](value), length === max, `${kind}.${key} schema ${length}`);
+				assert.equal(parsers[kind](value).ok, length === max, `${kind}.${key} parser ${length}`);
+			}
 		}
 	});
 
@@ -107,7 +127,6 @@ describe("local autopilot JSON Schema 2020-12", () => {
 		const names = readdirSync(fixtures)
 			.filter((name) => name.endsWith(".json"))
 			.sort();
-		assert.ok(names.includes("work-contract.json"));
-		assert.ok(names.some((name) => name.startsWith("invalid-")));
+		assert.deepEqual(cases.map(([, file]) => file).sort(), names);
 	});
 });

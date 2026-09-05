@@ -69,7 +69,12 @@ function requireSchemaVersion(value: Record<string, unknown>, label: string): Pa
 
 function parseString(value: unknown, label: string, min: number, max: number): ParseResult<string> {
 	if (typeof value !== "string") return fail(protocolProblem("type", `${label} must be a string`));
-	if (value.length < min || value.length > max) return fail(protocolProblem("length", `${label} length must be ${min}..${max}`));
+	// JSON Schema minLength/maxLength count Unicode code points, not UTF-16 units.
+	let length = 0;
+	for (const _codePoint of value) {
+		if (++length > max) break;
+	}
+	if (length < min || length > max) return fail(protocolProblem("length", `${label} length must be ${min}..${max}`));
 	return { ok: true, value };
 }
 
