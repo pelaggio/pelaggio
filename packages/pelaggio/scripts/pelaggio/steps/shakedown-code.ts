@@ -8,7 +8,7 @@ import type { DriverAssignmentState } from "../driver-assignment.js";
 import { selectReviewers } from "../driver-assignment.js";
 import type { dispatchStepEffects as dispatchStepEffectsDefault, writeEffectsManifest as writeEffectsManifestDefault } from "../effects.js";
 import { type Effect, type EffectsContext, EffectsManifestError, type ReviewEscalationEffect, type ReviewSeatIdentity, type ReviewVerdictEffect } from "../effects.js";
-import { getArtifactHeadSha, gitDiffNameOnly } from "../git.js";
+import { getArtifactHeadSha, gitDiffNameOnly, mainWorktree } from "../git.js";
 import { parseDeferredItems } from "../pick-parse.js";
 import { capabilityMapFrom, resolveAuthoringReviewConfig, resolveAuthoringReviewExecution } from "../provider-routing.js";
 import { registerRelativePath } from "../registers.js";
@@ -273,7 +273,7 @@ export async function runShakedownCode(ctx: ShakedownCodeInput, helpers: Shakedo
 			if (!finalReviewedSha) return { kind: "terminal", result: parkExit("adversarial review could not bind final reviewed HEAD")! };
 			const reviewRunId = itemRunId();
 			const record: ReviewRecord = { schemaVersion: 1, runId: reviewRunId, itemId: itemId!, createdAt: new Date().toISOString(), blockingBar: "must-fix", result: loop };
-			const recordPath = writeReviewRecord(worktree!, record);
+			const recordPath = writeReviewRecord(mainWorktree(mainRepo), record);
 			reviewRecordMarkdown = renderReviewRecord(record);
 			log(`review record → ${recordPath}`);
 			const reviewRecordSource = registerRelativePath("review-records", `${record.runId}.json`);

@@ -98,7 +98,10 @@ request only; it does not mutate the harness-owned candidate class. Full taxonom
 The `prefer` diversity policy records the run as softened whenever the author,
 reviewers, and Judge span fewer than three distinct providers (a same-provider
 degrade). It reflects the configured seats, not a runtime credential probe. Each run
-writes an atomic, unbound `.dev/review-records/<run-id>.json`; PR targets append the
+writes an atomic, unbound `.dev/review-records/<run-id>.json` under the main worktree,
+so the structured record and its repo-relative decision source survive claim-worktree
+removal. Historical records lost before this root correction remain unavailable;
+#788 documents the inspected references without reconstructing evidence. PR targets append the
 same deterministic record to the PR body. This is a review record, not an
 identity-bound attestation.
 
