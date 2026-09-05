@@ -2854,6 +2854,146 @@ describe("finding closure mode (#756)", () => {
 	});
 });
 
+describe("realized review participation (#753)", () => {
+	it("attributes both labels by configured provider order and exposes a failed red-team cell", async () => {
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("codex"), driver("grok")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 100, providerDiversity: "off" }),
+			execFileSync: securityDiffExec(),
+			runStep: async (_name, prompt, opts) => {
+				if (opts.executionOverride?.provider === "grok" && /Arguments:.*--red-team/.test(prompt)) return result({ text: "" });
+				return result();
+			},
+		});
+		assert.equal(review.gate, "block");
+		assert.deepEqual(review.participation, { configuredReviewers: ["codex", "grok"], configuredVerifier: "claude", labels: ["standard", "red-team"], iterations: [{ reviewReturned: [true, true, true, false] }] });
+		assert.match(review.body, /Realized review diversity: 2 providers \(codex, grok\); degraded — 3\/4/);
+	});
+
+	it("records actual valid reviews separately from configured intent and persists them", async () => {
+		const out = await runCli({ files: "docs/a.md\n", diff: "+copy" });
+		const stored = readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "fleet");
+		assert.deepEqual(stored.participation?.iterations, [{ reviewReturned: [true] }]);
+		assert.match(out.comments[0] ?? "", /Configured review intent:/);
+		assert.match(out.comments[0] ?? "", /Realized review diversity: 1 provider/);
+	});
+
+	for (const [name, bad] of [
+		["schema echo", result({ text: report("Concise single-line summary.", []) })],
+		["empty output", result({ text: "" })],
+		["invalid output", result({ text: "not a report" })],
+		["incomplete execution", result({ text: report("Actual inspection.", []), ok: false, subtype: "error_max_turns" })],
+		["rejection", new Error("rejected")],
+	] as const) {
+		it(`does not count ${name}, including a failed slot from an otherwise participating provider`, async () => {
+			const queued: Array<StepResult | Error> = [result(), bad];
+			const review = await runPrReviewGate({
+				pr: "123",
+				reviewDrivers: [driver("codex"), driver("codex")],
+				verifySettings: driver("grok"),
+				policy: reviewPolicy({ providerDiversity: "off" }),
+				execFileSync: plainDiffExec(),
+				runStep: async () => {
+					const next = queued.shift();
+					assert.ok(next);
+					if (next instanceof Error) throw next;
+					return next;
+				},
+			});
+			assert.equal(review.gate, "block");
+			assert.deepEqual(review.participation, { configuredReviewers: ["codex", "codex"], configuredVerifier: "grok", labels: ["standard"], iterations: [{ reviewReturned: [true, false] }] });
+			assert.match(review.body, /Realized review diversity: 1 provider \(codex\); degraded — 1\/2/);
+		});
+	}
+
+	it("does not erase a real review when its verifier fails", async () => {
+		const queued = [result({ text: report("Confirmed defect.", [{ severity: "must-fix", message: "Unsafe change", path: "a.ts", line: 1 }]) }), result({ ok: false, subtype: "error_crash", text: "verifier failed" })];
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("codex")],
+			verifySettings: driver("grok"),
+			policy: reviewPolicy(),
+			execFileSync: plainDiffExec(),
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next);
+				return next;
+			},
+		});
+		assert.equal(review.gate, "block");
+		assert.deepEqual(review.participation?.iterations, [{ reviewReturned: [true] }]);
+		assert.match(review.body, /complete — 1\/1/);
+	});
+
+	it("reports actual intent and no realized participants on preflight failures", async () => {
+		for (const kind of ["diff", "budget", "diversity"] as const) {
+			const review = await runPrReviewGate({
+				pr: "123",
+				reviewDrivers: [driver("grok")],
+				verifySettings: driver("grok"),
+				policy: reviewPolicy({ budgetCap: kind === "budget" ? 0 : 100, providerDiversity: kind === "diversity" ? "require" : "off" }),
+				execFileSync:
+					kind === "diff"
+						? ((() => {
+								throw new Error("unavailable");
+							}) as typeof import("node:child_process").execFileSync)
+						: plainDiffExec(),
+				runStep: async () => {
+					throw new Error("must not launch");
+				},
+			});
+			assert.equal(review.gate, "block");
+			assert.deepEqual(review.participation, { configuredReviewers: ["grok"], configuredVerifier: "grok", labels: kind === "diff" ? null : ["standard"], iterations: [] });
+			assert.match(review.body, /Realized review diversity: 0 providers \(none\); not run/);
+		}
+	});
+
+	it("retains completed reviewer participation when a peer parks", async () => {
+		const queued = [result(), result({ ok: false, subtype: "error_rate_limit", text: "rate limit" })];
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("codex"), driver("grok")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: plainDiffExec(),
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next);
+				return next;
+			},
+		});
+		assert.equal(review.gate, "park");
+		assert.deepEqual(review.participation?.iterations, [{ reviewReturned: [true, false] }]);
+		assert.match(review.body, /degraded — 1\/2/);
+	});
+
+	it("an earlier successful review cannot hide incomplete participation in a later iteration", async () => {
+		const queued = [
+			result({ text: report("Confirmed defect.", [{ severity: "must-fix", message: "Unsafe change", path: "a.ts", line: 1 }]) }),
+			verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed." }]),
+			result({ text: "" }),
+		];
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("codex")],
+			verifySettings: driver("grok"),
+			policy: reviewPolicy({ maxPasses: 2 }),
+			execFileSync: plainDiffExec(),
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next);
+				return next;
+			},
+		});
+		assert.equal(review.gate, "block");
+		assert.deepEqual(review.participation?.iterations, [{ reviewReturned: [true] }, { reviewReturned: [false] }]);
+		assert.match(review.body, /degraded — 1\/2/);
+	});
+});
+
 describe("security-review telemetry (#746)", () => {
 	const findingStd = { severity: "must-fix" as const, message: "Standard-only leak.", path: "src/a.ts", line: 10 };
 	const findingRt = { severity: "must-fix" as const, message: "Red-team-only bypass.", path: "src/a.ts", line: 20 };

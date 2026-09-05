@@ -21,7 +21,16 @@ import { listWorktreesIn, mainWorktree } from "./git.js";
 import { PR_REVIEW_MARKER, upsertMarkerComment } from "./github-posting.js";
 import { findGuaranteeRecurrenceAdvisory, type GuaranteeRecurrenceAdvisory, recurrenceRollsFromRecords, renderGuaranteeRecurrenceAdvisory } from "./guarantee-authority.js";
 import { parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
-import { type NewPrReviewFleetGateRecord, PR_REVIEW_RECURRENCE_PATH_MAX, type PrReviewGateRecord, type PrReviewRecurrenceFinding, type PrReviewSecurityTelemetry, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import {
+	type NewPrReviewFleetGateRecord,
+	PR_REVIEW_RECURRENCE_PATH_MAX,
+	type PrReviewGateRecord,
+	type PrReviewParticipation,
+	type PrReviewRecurrenceFinding,
+	type PrReviewSecurityTelemetry,
+	renderPrReviewParticipation,
+	writePrReviewGateRecord,
+} from "./pr-review-gate-record.js";
 import { REVIEW_RESOURCE_CAPACITIES, REVIEW_SCHEDULING_PROFILES } from "./providers/review-resources.js";
 import { buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import { type AssessmentInput, assessmentTaskPrompt, buildAssessment, type PrAssessment, renderAssessment } from "./review/assessment.js";
@@ -213,6 +222,7 @@ export interface PrReviewGateResult {
 	/** Compact confirmed must-fix observations for this completed roll. Always set on a
 	 *  non-park return, including `[]`. Absent on park. */
 	recurrenceFindings?: readonly PrReviewRecurrenceFinding[];
+	participation?: PrReviewParticipation;
 	/** Present on post-inspection terminal results unless digest sets overflow; absent on park. */
 	securityReview?: PrReviewSecurityTelemetry;
 }
@@ -946,6 +956,13 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	// it silently reads the host repo's own .pelaggio.yml and passes or fails by accident.
 	const verifySettings = options.verifySettings ?? deps.verifySettings ?? resolveStepSettings(CONFIG, profile, "pr-verify");
 
+	const participation: PrReviewParticipation = { configuredReviewers: reviewDrivers.map((driver) => driver.provider), configuredVerifier: verifySettings.provider, labels: null, iterations: [] };
+	const finish = (result: PrReviewGateResult): PrReviewGateResult => {
+		const reported = { ...result, participation, body: `${result.body}\n\n${renderPrReviewParticipation(participation)}` };
+		if (result.gate !== "park") options.upsertComment?.(options.pr, reported.body);
+		return reported;
+	};
+
 	let securitySignal: SecurityDiffSignal;
 	let inspectionFiles: string[] = [];
 	let inspectionDiff = "";
@@ -958,19 +975,18 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		const msg = e instanceof Error ? e.message : String(e);
 		const body = buildFailClosedComment("error_diff", `Could not inspect the PR diff for security-sensitive changes, so this gate blocks the merge.\n\n${msg}`);
 		process.stderr.write(`pr-review could not inspect diff — failing closed: ${msg}\n`);
-		options.upsertComment?.(options.pr, body);
-		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "standard:error_diff", agreement: "invalid", recurrenceFindings: [] };
+		return finish({ gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "standard:error_diff", agreement: "invalid", recurrenceFindings: [] });
 	}
 
 	const labels: ReviewLabel[] = securitySignal.triggered ? ["standard", "red-team"] : ["standard"];
+	participation.labels = labels;
 	// Worst-case: every (driver × label) may spend one discovery + one verify budget.
 	const reservation = labels.length * reviewDrivers.length * (reviewSettings.budget + verifySettings.budget);
 	const pairing = `${formatReviewerSet(reviewDrivers)}/${verifySettings.provider}`;
 	// require: at least one review driver must differ from the scalar verifier (independent-verifier guarantee).
 	if (policy.providerDiversity === "require" && reviewDrivers.every((driver) => driver.provider === verifySettings.provider)) {
 		const body = buildFailClosedComment("provider-diversity", `review.provider-diversity=require but every pr-review driver equals the pr-verify provider (${verifySettings.provider}; reviewers=${formatReviewerSet(reviewDrivers)}).`);
-		options.upsertComment?.(options.pr, body);
-		return {
+		return finish({
 			gate: "block",
 			body,
 			cost: 0,
@@ -982,15 +998,14 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			breakerReason: "provider-diversity",
 			recurrenceFindings: [],
 			securityReview: emptySecurityReview(securitySignal),
-		};
+		});
 	}
 	if (reservation > policy.budgetCap) {
 		const body = buildFailClosedComment(
 			"budget",
 			`A complete required review iteration reserves $${reservation} (${labels.length} labels × ${reviewDrivers.length} drivers × (review+verify)), exceeding review.budget-cap $${policy.budgetCap}.`,
 		);
-		options.upsertComment?.(options.pr, body);
-		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget", recurrenceFindings: [], securityReview: emptySecurityReview(securitySignal) };
+		return finish({ gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget", recurrenceFindings: [], securityReview: emptySecurityReview(securitySignal) });
 	}
 
 	const passes: ReviewPass[] = [];
@@ -1123,10 +1138,12 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			passes.push(pass);
 		}
 
+		participation.iterations.push({ reviewReturned: iterationPasses.map((pass) => pass.result.ok && pass.report !== undefined) });
+
 		// Park short-circuits after every already-started discovery settles.
 		for (const pass of iterationPasses) {
 			const parked = parkGateResult(signal, pass.result, passes);
-			if (parked) return parked;
+			if (parked) return finish(parked);
 		}
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).
@@ -1141,7 +1158,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 				autoRefutable: carry?.autoRefutable,
 			});
 			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
-			if (parked) return parked;
+			if (parked) return finish(parked);
 		}
 
 		agreement = computePrReviewAgreement(iterationPasses);
@@ -1334,8 +1351,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			}
 		}
 	}
-	options.upsertComment?.(options.pr, body);
-	return {
+	return finish({
 		...(assessment ? { assessment } : {}),
 		gate,
 		body,
@@ -1352,7 +1368,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		...(dispositionDraft ? { dispositionDraft } : {}),
 		recurrenceFindings,
 		securityReview,
-	};
+	});
 }
 
 /**
@@ -1399,6 +1415,7 @@ export function persistLocalGateEvidence(opts: {
 		runner: "local",
 		reviewedAt: new Date(opts.now()).toISOString(),
 		...(opts.review.recurrenceFindings !== undefined ? { recurrenceFindings: opts.review.recurrenceFindings } : {}),
+		...(opts.review.participation !== undefined ? { participation: opts.review.participation } : {}),
 		...(opts.review.securityReview !== undefined ? { securityReview: opts.review.securityReview } : {}),
 	};
 	let fleetPath: string;

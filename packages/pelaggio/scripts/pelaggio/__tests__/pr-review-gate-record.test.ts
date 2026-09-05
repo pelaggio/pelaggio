@@ -12,6 +12,7 @@ import {
 	type PrReviewGateRecord,
 	type PrReviewOperatorGateRecordV2,
 	readPrReviewGateRecord,
+	renderPrReviewParticipation,
 	validatePrReviewGateRecord,
 	writePrReviewGateRecord,
 } from "../pr-review-gate-record.js";
@@ -440,5 +441,52 @@ describe("PR review gate record store", () => {
 			{ ...valid, securityReview: { triggered: true, reasons: ["path:x.ts"], standardMustFixDigests: [DIGEST.slice(0, 63)], redTeamMustFixDigests: [] } },
 		];
 		for (const value of invalid) assert.throws(() => validatePrReviewGateRecord(value));
+	});
+});
+
+describe("closed realized participation records (#753)", () => {
+	const participation = { configuredReviewers: ["codex", "grok"], configuredVerifier: "codex", labels: ["standard", "red-team"], iterations: [{ reviewReturned: [true, false, true, false] }] };
+	it("round-trips mixed participation and reads historical absence as unavailable", () => {
+		const raw = { schemaVersion: 2, ...fleetRecord(), participation };
+		const validated = validatePrReviewGateRecord(raw);
+		assert.ok(validated.schemaVersion === 2 && validated.producer === "fleet");
+		assert.deepEqual(validated.participation, participation);
+		const dir = root();
+		writePrReviewGateRecord(dir, { ...validated, elapsedMs: raw.elapsedMs });
+		assert.deepEqual(readPrReviewGateRecord(dir, 201, HEAD), validated);
+		assert.match(renderPrReviewParticipation(validated.participation), /1 provider \(codex\); degraded — 2\/4/);
+		const historical = validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord() });
+		assert.ok(historical.schemaVersion === 2 && historical.producer === "fleet");
+		assert.equal(historical.participation, undefined);
+		assert.match(renderPrReviewParticipation(historical.participation), /unavailable/);
+	});
+
+	it("rejects unknown fields, providers, labels and incomplete or non-boolean matrices", () => {
+		for (const invalid of [
+			{ ...participation, extra: true },
+			{ ...participation, configuredReviewers: ["future-provider"] },
+			{ ...participation, configuredVerifier: "future-provider" },
+			{ ...participation, labels: ["red-team", "standard"] },
+			{ ...participation, labels: ["standard", "standard"] },
+			{ ...participation, labels: [] },
+			{ ...participation, labels: null },
+			{ ...participation, iterations: [{ reviewReturned: [true] }] },
+			{ ...participation, iterations: [{ reviewReturned: [true, false, true, 1] }] },
+			{ ...participation, iterations: [{ reviewReturned: [true, true, true, true], extra: true }] },
+			{ ...participation, iterations: [{ reviewReturned: Array(4) }] },
+			{ ...participation, configuredReviewers: Array(2) },
+			{ ...participation, iterations: Array(1) },
+		])
+			assert.throws(() => validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord(), participation: invalid }), /participation/);
+	});
+
+	it("accepts not-run inspection failure without inventing a denominator or verifier participation", () => {
+		const validated = validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord({ gate: "block", ok: false }), participation: { ...participation, labels: null, iterations: [] } });
+		assert.ok(validated.schemaVersion === 2 && validated.producer === "fleet");
+		assert.match(renderPrReviewParticipation(validated.participation), /0 providers \(none\); not run/);
+	});
+
+	it("does not admit fleet participation as operator-adjudication evidence", () => {
+		assert.throws(() => validatePrReviewGateRecord({ schemaVersion: 2, ...operatorRecord(), participation }), /record/);
 	});
 });

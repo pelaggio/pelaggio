@@ -11,6 +11,28 @@ the pipeline's own work *in-context*, before ship. This gate is a fresh SDK sess
 that reads the PR diff cold — the same shape that has caught things the in-context
 review missed.
 
+## Configured intent and realized participation
+
+Gate comments separate configured reviewers and verifier intent from realized review
+participation. A reviewer participates only when it returns a valid parsed review of
+the supplied candidate scope; a valid review with no findings counts. Credentials,
+startup, schema echo, empty output, rejection and invalid output do not count.
+Verification is separate: verifier success does not establish reviewer participation,
+and verifier failure does not erase a valid discovery review.
+
+Fleet v2 records optionally persist `participation`: configured reviewer slots and
+verifier, selected labels, and a label-major, slot-major boolean vector for each begun
+iteration. A failed cell visibly degrades completeness even when another cell from
+the same provider succeeds. Preflight failures report no participation. Historical
+records without this field have unavailable participation evidence. The existing
+`providers=` marker describes configured intent. These statements do not change gate
+policy, findings, verification, convergence or blocker removal.
+
+Before this schema extension, the local gate corpus was fingerprinted on 2026-09-05
+as `9:4f21a09dbdf6` (9 records), using `npx tsx ci/review-metrics.ts` against the main
+worktree record store. This extension neither changes the metrics reader nor widens
+its corpus; the dated historical baseline is unchanged.
+
 ## In-cycle advisory pre-flight (#424)
 
 PR-mode cycles also run this same gate core **before** ship, from detached cold seats
