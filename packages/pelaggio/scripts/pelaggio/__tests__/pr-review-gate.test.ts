@@ -1222,6 +1222,46 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(review.agreement, "consensus-pass");
 	});
 
+	it("starts a provider's red-team cell without waiting for another provider's standard cell", async () => {
+		let releaseStandardGrok!: () => void;
+		const standardGrokHold = new Promise<void>((resolve) => {
+			releaseStandardGrok = resolve;
+		});
+		let redCodexEntered!: () => void;
+		const redCodexStarted = new Promise<void>((resolve) => {
+			redCodexEntered = resolve;
+		});
+		let standardGrokSettled = false;
+		const starts: string[] = [];
+		const gatePromise = runPrReviewGate({
+			pr: "1",
+			reviewDrivers: [driver("codex"), driver("grok")],
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: securityDiffExec(),
+			runStep: async (name, prompt, stepOpts) => {
+				if (name === "pr-review") {
+					const provider = stepOpts.executionOverride?.provider;
+					assert.ok(provider);
+					const lens = /Arguments:.*--red-team/.test(prompt) ? "red" : "standard";
+					starts.push(`${lens}:${provider}`);
+					if (lens === "standard" && provider === "grok") {
+						await standardGrokHold;
+						standardGrokSettled = true;
+					}
+					if (lens === "red" && provider === "codex") redCodexEntered();
+				}
+				return result();
+			},
+		});
+		await redCodexStarted;
+		assert.equal(standardGrokSettled, false, "the old complete-label barrier is gone");
+		assert.deepEqual(starts.slice(0, 3), ["standard:codex", "standard:grok", "red:codex"]);
+		releaseStandardGrok();
+		const review = await gatePromise;
+		assert.equal(review.gate, "pass");
+		assert.equal(review.agreement, "consensus-pass");
+	});
+
 	it("two clean multi-driver reports yield consensus-pass", async () => {
 		const review = await runPrReviewGate({
 			pr: "1",
@@ -1429,6 +1469,25 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(review.cost, 0.75, "counts completed child work");
 		assert.ok(!calls.some((c) => c.startsWith("pr-verify")), "no verify after park");
 		assert.equal(calls.filter((c) => c.startsWith("pr-review")).length, 2);
+	});
+
+	it("text-classified rate limit stops later discovery labels without a child park signal", async () => {
+		const calls: string[] = [];
+		const review = await runPrReviewGate({
+			pr: "1",
+			reviewDrivers: [driver("codex"), driver("grok")],
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 40, providerDiversity: "off" }),
+			execFileSync: securityDiffExec(),
+			runStep: async (name, prompt, stepOpts) => {
+				const lens = /Arguments:.*--red-team/.test(prompt) ? "red" : "standard";
+				const provider = stepOpts.executionOverride?.provider ?? "verify";
+				calls.push(`${name}:${lens}:${provider}`);
+				if (name === "pr-review" && lens === "standard" && provider === "codex") return result({ ok: false, subtype: "error_rate_limit" });
+				return result();
+			},
+		});
+		assert.equal(review.gate, "park");
+		assert.deepEqual(calls, ["pr-review:standard:codex", "pr-review:standard:grok"]);
 	});
 
 	it("provider-diversity require accepts a mixed pool and rejects a same-provider fleet", async () => {
