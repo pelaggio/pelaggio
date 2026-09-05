@@ -1090,3 +1090,10 @@ reduced to non-sensitive codes and source facts.
 ## Follow-ups (not in this gate)
 
 - **Notifications** — surface a red gate as a park-for-attention alert (issue #34).
+
+
+## Inspectable assessments and scoped answers
+
+The local PR-review answer/revision loop, capture commands, applicability limits and
+SARIF/site handoff are documented in [PR review clarification](agent-context/pr-review-clarification.md).
+An operator clarification is task input; it never grants permission to proceed or clears a review blocker.

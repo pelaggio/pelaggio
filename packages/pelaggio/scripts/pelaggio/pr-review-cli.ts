@@ -13,6 +13,7 @@ import { mainWorktree } from "./git.js";
 import { buildFailClosedComment, persistLocalGateEvidence, prReviewDeps, resolveCarryOptions, resolveReviewedHead, runPrReviewGate } from "./pr-review-gate.js";
 import { gateRecordsDir, listPrReviewGateRecords } from "./pr-review-gate-record.js";
 import { adjudicationSourcesDir } from "./review/adjudication.js";
+import type { AssessmentInput } from "./review/assessment.js";
 import { prFindingDispositionsDir } from "./review/carry.js";
 
 export async function main(argv: string[]): Promise<number> {
@@ -76,9 +77,18 @@ export async function main(argv: string[]): Promise<number> {
 		const priorGateRecords = !deps.isCi() && head.itemId ? listPrReviewGateRecords(gateRecordsRoot) : undefined;
 		// Policy/pool are intentionally not passed: runPrReviewGate resolves them through
 		// options → deps → CONFIG, so the same defaults apply and tests can pin the seam.
+		let assessmentInput: AssessmentInput | undefined;
+		if (!deps.isCi() && head.itemId) {
+			try {
+				assessmentInput = await deps.prepareAssessmentInput(REPO, Number(pr), head.itemId, reviewedSha);
+			} catch {
+				process.stderr.write("Assessment task context unavailable; existing review policy remains in force.\n");
+			}
+		}
 		const reviewStartedAt = deps.now();
 		const review = await runPrReviewGate({
 			pr,
+			...(assessmentInput ? { assessmentInput, assessmentMainRepo: mainWorktree(REPO) } : {}),
 			...(head.itemId ? { itemId: head.itemId } : {}),
 			profile,
 			cwd: REPO,

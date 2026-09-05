@@ -24,6 +24,9 @@ import { parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
 import { type NewPrReviewFleetGateRecord, PR_REVIEW_RECURRENCE_PATH_MAX, type PrReviewGateRecord, type PrReviewRecurrenceFinding, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { REVIEW_RESOURCE_CAPACITIES, REVIEW_SCHEDULING_PROFILES } from "./providers/review-resources.js";
 import { buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
+import { type AssessmentInput, assessmentTaskPrompt, buildAssessment, type PrAssessment, renderAssessment } from "./review/assessment.js";
+import { prepareAssessmentInput } from "./review/assessment-context.js";
+import { writeAssessmentRecord } from "./review/assessment-store.js";
 import {
 	buildCarryDispositionDraft,
 	canonicalRepoRelPath,
@@ -97,6 +100,7 @@ interface ReviewPass {
 }
 
 export interface PrReviewDeps {
+	prepareAssessmentInput: typeof prepareAssessmentInput;
 	runStep: RunStepFn;
 	execFileSync: typeof execFileSync;
 	upsertComment: (pr: string, body: string) => void;
@@ -125,6 +129,9 @@ export interface PrReviewDeps {
 }
 
 export interface RunPrReviewGateOptions {
+	assessmentInput?: AssessmentInput;
+	assessmentMainRepo?: string;
+	assessmentNow?: () => string;
 	pr: string;
 	/**
 	 * Skill argument string. Defaults to `--pr ${pr}`. Pre-flight passes `--preflight`
@@ -181,6 +188,7 @@ export interface PrReviewCarryInput {
 }
 
 export interface PrReviewGateResult {
+	assessment?: PrAssessment;
 	gate: "pass" | "block" | "park";
 	body: string;
 	cost: number;
@@ -207,6 +215,7 @@ export interface PrReviewGateResult {
 }
 
 let deps: PrReviewDeps = {
+	prepareAssessmentInput,
 	runStep,
 	execFileSync,
 	upsertComment: upsertCommentDefault,
@@ -923,6 +932,17 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	const poolProviders = [...reviewDrivers.map((driver) => driver.provider), verifySettings.provider];
 	const storeTrust = poolStoreTrust(poolProviders);
 	const carry = options.carry && storeTrust.trusted ? options.carry : undefined;
+	const assessmentBindingValid = options.assessmentInput && options.assessmentInput.headSha === options.reviewedSha && options.assessmentInput.task.prNumber === Number(options.pr) && options.assessmentInput.task.itemId === options.itemId;
+	const assessmentInput = assessmentBindingValid ? structuredClone(options.assessmentInput) : undefined;
+	if (assessmentInput && !storeTrust.trusted) {
+		assessmentInput.originalTask = assessmentInput.task;
+		assessmentInput.questions = [];
+		assessmentInput.supersedes = [];
+		assessmentInput.answers = [];
+		assessmentInput.checks = [];
+		assessmentInput.diagnostics.push("Stored clarification and check evidence withheld for an untrusted provider pool.");
+	}
+	const taskContext = assessmentInput ? assessmentTaskPrompt(assessmentInput) : "";
 	if (options.carry && !storeTrust.trusted) {
 		process.stderr.write(
 			`⚠ carry consumption refused — review pool contains store-writable provider(s) ${storeTrust.untrusted.join(", ")} without a proven harness-register store-write denial; running cold (records still written, not consumed)\n`,
@@ -961,7 +981,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		const fleetInputs = labels.flatMap((label, labelIndex) => {
 			const skillArgs = options.skillArguments ?? `--pr ${options.pr}`;
 			const args = label === "standard" ? skillArgs : `${skillArgs} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
-			const prompt = `${expandPackagedSkill("pr-review", args)}${discoveryContext}`;
+			const prompt = `${expandPackagedSkill("pr-review", args)}${discoveryContext}${taskContext}`;
 			return reviewDrivers.map((candidate, driverIndex) => ({
 				key: `${iteration}:${labelIndex}:${driverIndex}`,
 				group: labelIndex,
@@ -1039,7 +1059,15 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 		// Sequential verify per driver pass that has candidate blockers (scalar pr-verify).
 		for (const pass of iterationPasses) {
-			await runVerificationPass(pass, carried, profile, options.itemId, { cwd, runStep: runStepImpl, localContext, parkSignal: signal, verifySettings, foreignRootDenial: seatDenial, autoRefutable: carry?.autoRefutable });
+			await runVerificationPass(pass, carried, profile, options.itemId, {
+				cwd,
+				runStep: runStepImpl,
+				localContext: localContext + taskContext,
+				parkSignal: signal,
+				verifySettings,
+				foreignRootDenial: seatDenial,
+				autoRefutable: carry?.autoRefutable,
+			});
 			const parked = parkGateResult(signal, pass.verificationResult ?? pass.result, passes);
 			if (parked) return parked;
 		}
@@ -1199,7 +1227,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		observations: recurrenceFindings,
 	};
 	const advisory = findGuaranteeRecurrenceAdvisory(recurrenceRollsFromRecords(options.priorGateRecords ?? []), currentRoll);
-	const body = buildComment(
+	let body = buildComment(
 		gate,
 		passes,
 		securitySignal,
@@ -1214,8 +1242,28 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		},
 		advisory,
 	);
+	const assessment = assessmentInput
+		? buildAssessment(
+				assessmentInput,
+				passes.flatMap((pass) => (pass.report ? [{ actor: driverLabel(pass.driver), iteration: pass.iteration, report: pass.report, dispositions: pass.dispositions ?? [] }] : [])),
+				gate,
+				options.assessmentNow?.() ?? new Date().toISOString(),
+			)
+		: undefined;
+	if (options.assessmentInput && !assessmentBindingValid) body += "\n\nAssessment context unavailable: PR/item/revision binding mismatch. Contents were not admitted; existing review disposition is unchanged.";
+	if (assessment) {
+		body += `\n\n${renderAssessment(assessment)}`;
+		if (options.assessmentMainRepo) {
+			try {
+				writeAssessmentRecord(options.assessmentMainRepo, assessment);
+			} catch {
+				body += "\n\nAssessment persistence unavailable; do not treat this report as durable answer input.";
+			}
+		}
+	}
 	options.upsertComment?.(options.pr, body);
 	return {
+		...(assessment ? { assessment } : {}),
 		gate,
 		body,
 		cost,

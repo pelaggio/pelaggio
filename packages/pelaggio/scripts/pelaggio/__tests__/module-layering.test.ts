@@ -56,6 +56,11 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"artifact-root.ts": 0,
 	"review/taxonomy.ts": 0,
 	"review/document.ts": 0,
+	"review/qualification.ts": 0,
+	"review/assessment.ts": 1,
+	"review/assessment-store.ts": 1,
+	"review/assessment-context.ts": 2,
+	"review-assessment-cli.ts": 5,
 	"roadmap/types.ts": 0,
 	// L1 infra — writes a register, takes a lock, runs git, or confines; never policy.
 	"attempt-identity.ts": 1,

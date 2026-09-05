@@ -1,0 +1,47 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/cos02/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "pelaggio-pr-review"
+        }
+      },
+      "properties": {
+        "pelaggio/assessmentId": "203ea77c9f947f7873fa2bf405335fa47ecc02a215561d6fa3f9532ade8dce0c",
+        "pelaggio/revision": "2909b2dd08cf53355a8f16a581a4c54b735497d1",
+        "pelaggio/loss": "Code findings only. Questions, operator decisions, verification dispositions and evidence qualifications remain in the canonical assessment. No result means no projected code finding, not approval."
+      },
+      "results": [
+        {
+          "ruleId": "pelaggio/review-finding",
+          "level": "note",
+          "message": {
+            "text": "Blank input now displays Untitled."
+          },
+          "partialFingerprints": {
+            "pelaggio/finding/v1": "224b1e99cb5ed384cd6bd87d179ce1fe499703bbfc63310a738e484d5e7f763e"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "label.mjs"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ],
+          "properties": {
+            "pelaggio/assessmentId": "203ea77c9f947f7873fa2bf405335fa47ecc02a215561d6fa3f9532ade8dce0c",
+            "pelaggio/actor": "claude",
+            "pelaggio/iteration": 1
+          }
+        }
+      ]
+    }
+  ]
+}

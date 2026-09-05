@@ -1,4 +1,5 @@
 import type { StepResult } from "../types.js";
+import { parseQualification, parseQuestions, type ReviewQualification, type ReviewQuestion } from "./qualification.js";
 import { BASELINE_TAXONOMY, DEFAULT_SAFETY_PRECEDENCE, DEFAULT_SAFETY_SINK_CLASS, type FindingClassId, isSafetyClass, isWellFormedClassId, safetyClasses, type TaxonomyConfig } from "./taxonomy.js";
 
 export type { FindingClassId, TaxonomyConfig } from "./taxonomy.js";
@@ -11,6 +12,7 @@ export const REVIEW_FINDING_CLOSURES = ["patch", "construction", "authority", "p
 export type ReviewFindingClosure = (typeof REVIEW_FINDING_CLOSURES)[number];
 
 export interface ReviewFinding {
+	qualification?: ReviewQualification;
 	severity: ReviewFindingSeverity;
 	message: string;
 	path?: string;
@@ -19,6 +21,8 @@ export interface ReviewFinding {
 }
 
 export interface ReviewFindingsReport {
+	questions?: ReviewQuestion[];
+	contentsUnavailable?: true;
 	schemaVersion: 1;
 	summary: string;
 	findings: ReviewFinding[];
@@ -700,11 +704,24 @@ export function parseReviewFindings(text: string): ReviewFindingsReport {
 		throw new ReviewFindingsParseError("invalid-json", "review findings block is not valid JSON", { cause: error });
 	}
 	if (!isRecord(parsed)) throw new ReviewFindingsParseError("not-json-object", "review findings report must be a JSON object");
-	assertKeys(parsed, ["schemaVersion", "summary", "findings"], ["schemaVersion", "summary", "findings"], "review findings report");
+	assertKeys(parsed, ["schemaVersion", "summary", "findings", "questions"], ["schemaVersion", "summary", "findings"], "review findings report");
 	if (parsed.schemaVersion !== 1) throw new ReviewFindingsParseError("unsupported-schema-version", "unsupported review findings schemaVersion");
 	const summary = parseSingleLine(parsed.summary, "summary");
 	if (!Array.isArray(parsed.findings)) throw new ReviewFindingsParseError("findings-not-array", "review findings must be an array");
-	const findings = parsed.findings.map(parseFinding);
+	let contentsUnavailable = false;
+	const findings = parsed.findings.map((value, index) => {
+		const finding = parseFinding(value, index);
+		if (isRecord(value) && value.qualification !== undefined && !finding.qualification) contentsUnavailable = true;
+		return finding;
+	});
+	let questions: ReviewQuestion[] | undefined;
+	if (parsed.questions !== undefined) {
+		try {
+			questions = parseQuestions(parsed.questions);
+		} catch {
+			contentsUnavailable = true;
+		}
+	}
 	// Fail closed on the parroted cold-gate schema example (same exact-tuple guard as authoring).
 	assertNotSchemaExample(summary, findings, "review findings");
 
@@ -712,6 +729,8 @@ export function parseReviewFindings(text: string): ReviewFindingsReport {
 		schemaVersion: 1,
 		summary,
 		findings,
+		...(questions === undefined ? {} : { questions }),
+		...(contentsUnavailable ? { contentsUnavailable: true as const } : {}),
 	};
 }
 
@@ -788,8 +807,16 @@ function parseFindingFields(value: Record<string, unknown>, index: number): Revi
 
 function parseFinding(value: unknown, index: number): ReviewFinding {
 	if (!isRecord(value)) throw new ReviewFindingsParseError("not-json-object", `review finding ${index + 1} must be a JSON object`);
-	assertKeys(value, ["severity", "message", "path", "line", "closure"], ["severity", "message"], `review finding ${index + 1}`);
-	return parseFindingFields(value, index);
+	assertKeys(value, ["severity", "message", "path", "line", "closure", "qualification"], ["severity", "message"], `review finding ${index + 1}`);
+	const finding = parseFindingFields(value, index);
+	if (value.qualification !== undefined) {
+		try {
+			finding.qualification = parseQualification(value.qualification);
+		} catch {
+			/* Optional explanation cannot change the gate. */
+		}
+	}
+	return finding;
 }
 
 function parseVerificationDecision(value: unknown, index: number): ReviewVerificationReport["decisions"][number] {

@@ -22,6 +22,7 @@ Commands:
   roadmap Adapter-backed queries (list / get / claim / plan-path / publish-plan / mark-done / create-item / archive-plan / stale-scan / stale-list / stale-resolve / source). Used by skill bodies.
   decisions Lifecycle/projection for docs/decision-log/ (resolve, archive-resolved, migrate, rebuild-index).
   taxonomy Owner ritual for the ADR-0016 safety taxonomy (verify / sign / canonical).
+  review-assessment  Inspect/export PR assessments, record scoped operator answers, or capture a configured check.
   pr-review  Run the CI merge-gate review of a PR (--pr <n>); posts a comment and exits non-zero on a blocking finding.
   pr-adjudicate  Local-operator clearance of a findings-terminal review after a narrow fix (--pr <n>); posts success last.
   doc-review  Provider-diverse read-only review of a document (<path>); binds the report to its sha256 and exits non-zero on a blocking finding.
@@ -47,6 +48,7 @@ const routes = {
 	roadmap: ["scripts/pelaggio/roadmap-cli.ts"],
 	decisions: ["scripts/pelaggio/decisions-cli.ts"],
 	taxonomy: ["scripts/pelaggio/taxonomy-cli.ts"],
+	"review-assessment": ["scripts/pelaggio/review-assessment-cli.ts"],
 	"pr-review": ["scripts/pelaggio/pr-review-cli.ts"],
 	"pr-adjudicate": ["scripts/pelaggio/pr-adjudicate-cli.ts"],
 	"doc-review": ["scripts/pelaggio/doc-review-cli.ts"],
