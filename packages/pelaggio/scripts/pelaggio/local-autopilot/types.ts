@@ -20,7 +20,7 @@ export const PROTOCOL_PROBLEM_TYPES: ReadonlySet<ProblemType> = new Set(["config
 export const WORK_CONTRACT_SOURCE_KINDS = ["text", "file", "stdin"] as const;
 export type WorkContractSourceKind = (typeof WORK_CONTRACT_SOURCE_KINDS)[number];
 
-export const HARNESS_ADAPTERS = ["fake", "grok"] as const;
+export const HARNESS_ADAPTERS = ["fake", "grok", "codex"] as const;
 export type HarnessAdapterName = (typeof HARNESS_ADAPTERS)[number];
 
 export const EXECUTION_MODES = ["host", "contained"] as const;
@@ -151,6 +151,7 @@ export interface LocalConfig {
 		adapter: HarnessAdapterName;
 		fake?: { script: FakeStep[] };
 		grok?: { bin?: string; model?: string };
+		codex?: { bin?: string; model?: string };
 	};
 	autopilot?: {
 		maxRepairs?: number;

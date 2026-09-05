@@ -20,4 +20,4 @@ The run journal is authoritative. Snapshots and metrics are derived. Resume is c
 
 ## Adapters
 
-v0: `fake` (deterministic, packed-tarball suite) and `grok` (one real harness). Pelaggio does not scrape harness prose for the public result.
+v0: `fake` (deterministic, packed-tarball suite), `grok`, and `codex`. Codex auto mode uses its `--approve-for-me` review path with the `workspace-write` sandbox; Pelaggio still reports host execution because that provider-owned sandbox is not the v0 containment boundary. Pelaggio does not scrape harness prose for the public result.
