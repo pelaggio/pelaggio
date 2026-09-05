@@ -1,0 +1,34 @@
+{
+  "scenario": "csv",
+  "at": "2026-09-05T21:09:46.893Z",
+  "revision": "a48777f8ba7c599f83465c2e8af2bec4060105b8",
+  "gitStatus": "",
+  "evaluatorSha256": "6eb71f16f554ed5014147e5e0cdacc3f1b92164bc2778e66976ad0ff6e41359f",
+  "cases": [
+    {
+      "name": "AC-1: all 23 filtered rows across pages; source unchanged",
+      "result": "pass"
+    },
+    {
+      "name": "AC-2: exact Unicode, comma, quote and newline round-trip; CSV download headers",
+      "result": "pass"
+    },
+    {
+      "name": "AC-2: empty store produces header-only export",
+      "result": "pass"
+    },
+    {
+      "name": "AC-3: browser download uses changed filter after pagination",
+      "result": "pass"
+    },
+    {
+      "name": "AC-4: original status filtering and pagination remain functional",
+      "result": "pass"
+    },
+    {
+      "name": "Baseline tests and syntax checks",
+      "result": "pass"
+    }
+  ],
+  "passed": true
+}

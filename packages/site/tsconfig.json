@@ -1,0 +1,11 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"types": ["node"],
+		"allowImportingTsExtensions": true,
+		"moduleResolution": "Bundler",
+		"module": "ESNext"
+	},
+	"include": ["src/**/*", "scripts/**/*", "__tests__/**/*", "astro.config.mjs"]
+}

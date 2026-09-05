@@ -1,0 +1,69 @@
+---
+interface Props {
+	command: string;
+	wrap?: boolean;
+	label?: string;
+	class?: string;
+}
+
+const { command, wrap = false, label, class: className } = Astro.props;
+const copyLabel = label ?? `Copy ${command}`;
+---
+
+<button
+	type="button"
+	class:list={[
+		"copy-cmd group flex w-full gap-3 rounded-xl bg-deep px-4 py-3.5 text-left",
+		wrap ? "items-start" : "items-center justify-between",
+		"shadow-border-dark transition-[box-shadow,transform] duration-150 ease-out",
+		"hover:shadow-border-dark-hover active:scale-[0.99]",
+		"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-lit focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+		className,
+	]}
+	aria-label={copyLabel}
+	data-copy-label={copyLabel}
+>
+	<code class:list={["min-w-0 flex-1 font-mono text-xs text-foam-2 sm:text-sm", wrap ? "whitespace-pre-wrap leading-relaxed" : "leading-none"]}>
+		{command}
+	</code>
+	<span class:list={["relative size-5 shrink-0 text-signal-lit", wrap && "mt-0.5"]}>
+		<svg class="icon-copy absolute inset-0 size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+			<rect x="9" y="9" width="13" height="13" rx="2"></rect>
+			<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+		</svg>
+		<svg class="icon-check absolute inset-0 size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+			<path d="M20 6 9 17l-5-5"></path>
+		</svg>
+	</span>
+</button>
+
+<script>
+	const COPY_MS = 1600;
+
+	function bind(button: HTMLButtonElement) {
+		if (button.dataset.bound === "1") return;
+		button.dataset.bound = "1";
+		const label = button.dataset.copyLabel ?? "Copy";
+		button.addEventListener("click", async () => {
+			const text = button.querySelector("code")?.textContent ?? "";
+			try {
+				await navigator.clipboard.writeText(text);
+				button.classList.add("is-copied");
+				button.setAttribute("aria-label", "Copied");
+				window.setTimeout(() => {
+					button.classList.remove("is-copied");
+					button.setAttribute("aria-label", label);
+				}, COPY_MS);
+			} catch {
+				button.classList.remove("is-copied");
+			}
+		});
+	}
+
+	function bindAll() {
+		document.querySelectorAll<HTMLButtonElement>("button.copy-cmd").forEach(bind);
+	}
+
+	bindAll();
+	document.addEventListener("astro:page-load", bindAll);
+</script>

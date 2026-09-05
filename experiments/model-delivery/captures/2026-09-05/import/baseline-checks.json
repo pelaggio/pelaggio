@@ -1,0 +1,38 @@
+{
+  "scenario": "import",
+  "at": "2026-09-05T20:30:49.481Z",
+  "revision": "848a9377bec4dfedea687f6f5d2596a95c36e371",
+  "gitStatus": "",
+  "evaluatorSha256": "6eb71f16f554ed5014147e5e0cdacc3f1b92164bc2778e66976ad0ff6e41359f",
+  "cases": [
+    {
+      "name": "AC-1: SIGKILL after durable progress, restart without duplicates or lost existing rows",
+      "result": "fail",
+      "detail": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  [\n    {\n      id: 'W-1',\n      status: 'open',\n      title: 'Café \"notes\", then\\nship'\n...\n    {\n+     id: 'I-1',\n+     status: 'open',\n+     title: 'Imported 1'\n+   },\n+   {\n+     id: 'I-2',\n+     status: 'open',\n+     title: 'Imported 2'\n+   },\n+   {\n+     id: 'I-3',\n+     status: 'open',\n+     title: 'Imported 3'\n+   },\n+   {\n      id: 'I-4',\n      status: 'open',\n      title: 'Imported 4'\n    },\n    {\n"
+    },
+    {
+      "name": "AC-2: repeating a completed import is idempotent",
+      "result": "fail",
+      "detail": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  [\n    {\n      id: 'W-1',\n      status: 'open',\n      title: 'Café \"notes\", then\\nship'\n...\n    },\n+   {\n+     id: 'I-1',\n+     status: 'open',\n+     title: 'Imported 1'\n+   },\n+   {\n+     id: 'I-2',\n+     status: 'open',\n+     title: 'Imported 2'\n+   },\n+   {\n+     id: 'I-3',\n+     status: 'open',\n+     title: 'Imported 3'\n+   },\n+   {\n+     id: 'I-4',\n+     status: 'open',\n+     title: 'Imported 4'\n+   },\n+   {\n+     id: 'I-5',\n+     status: 'open',\n+     title: 'Imported 5'\n+   },\n+   {\n+     id: 'I-6',\n+     status: 'open',\n+     title: 'Imported 6'\n+   },\n+   {\n+     id: 'I-7',\n+     status: 'open',\n+     title: 'Imported 7'\n+   },\n+   {\n+     id: 'I-8',\n+     status: 'open',\n+     title: 'Imported 8'\n+   }\n  ]\n"
+    },
+    {
+      "name": "AC-3: conflicting identity fails visibly and preserves existing content",
+      "result": "fail",
+      "detail": "Expected \"actual\" to be strictly unequal to: 0"
+    },
+    {
+      "name": "AC-4: malformed JSON fails before writes",
+      "result": "pass"
+    },
+    {
+      "name": "AC-4: a later invalid record is detected before writing earlier valid rows",
+      "result": "fail",
+      "detail": "Expected \"actual\" to be strictly unequal to: 0"
+    },
+    {
+      "name": "Baseline tests and syntax checks",
+      "result": "pass"
+    }
+  ],
+  "passed": false
+}

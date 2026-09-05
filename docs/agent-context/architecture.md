@@ -7,6 +7,7 @@
 - `packages/pelaggio/`: published package `pelaggio`. The CLI entry is `packages/pelaggio/bin/pelaggio.js`, which runs `scripts/pelaggio.ts` through `tsx`.
 - `packages/server/`: private Hono daemon. It supervises `pnpm pelaggio` subprocesses, exposes run control endpoints, streams logs over SSE, persists state under `.dev/server-state.json`, and stores run logs under `.dev/server-logs/`.
 - `packages/web/`: private Astro 5 + React 19 static UI, built with `base: "/ui/"` and mounted by the daemon in production.
+- `packages/site/`: private Astro static marketing site. Public landing; not mounted by the daemon.
 
 ## Root Assets
 

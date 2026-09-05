@@ -15,18 +15,65 @@ image-gen prompts in the appendix below.
 
 ## 1. Positioning
 
-- **Tagline:** *Extend how much one developer can ship.*
+- **Tagline:** *Let the work run.*
+- **Supporting line:** Your process, across pull requests.
+- **Who it's for:** developers already using coding agents who want to delegate a
+  worthwhile change without becoming the full-time coordinator.
+- **Problem:** the developer keeps supplying the same working instructions, steering
+  the next step, and reconstructing what happened when an agent says it is done.
+- **Offer:** record the project's working instructions, review criteria, and check
+  commands, then use that process across work items with the configured coding agents.
+- **Desired benefit:** more attention available for work that needs the developer's
+  judgment. We have not measured time saved or reduced supervision in the demo runs.
 - **Category (for technical evaluators, second):** a control plane for coding agents.
-- **Core promise:** extend a developer's reach without requiring them to surrender control.
-- **Who it's for:** the solo developer (or small team) who has to live with the
-  result — where there's no one else to catch a bad merge and a runaway agent is
-  nobody's problem but yours.
+- **Claims:** lead readers to [`../trust/limitations.md`](../trust/limitations.md) for
+  current behavior, gaps, and failure modes. A configured process does not guarantee
+  a correct result.
 
-Reach is the outcome; automation is only the mechanism. **Reach** = the amount
-of consequential work a developer can responsibly set in motion beyond their
-immediate attention. It grows through delegated execution, bounded autonomy,
-independent review, recoverability, evidence, and intervention — not through
-maximizing code volume.
+### Campaign brief
+
+The founder's direction is **“codify the judgement in the harness, echo your process
+across pulls.”** Here, codifying judgment means making a person's criteria explicit
+and reusable in repository instructions, the quality rubric, and configuration.
+The harness runs the configured process and enforces its deterministic gates;
+workers interpret criteria and exercise judgment. This positioning does not change
+that architectural division or imply that every written instruction is enforced.
+It also does not imply automatic learning from earlier pull requests: improvements
+carry forward when someone updates the shared instructions or configuration.
+
+The campaign starts with the developer's repeated coordination work. Explain what
+they can put into the process and what returns for their inspection. Then show an
+actual execution, including where the person intervened. Invite them to try one
+bounded work item they can judge themselves.
+
+CSV export and interrupted import are ordinary supporting examples. Their value is
+showing how repository context and explicit charter choices travel through a run.
+Passing-check counts alone do not demonstrate the benefit. Preserve original inputs,
+actual outputs, and operator interventions; do not invent customer testimony or
+claim uninterrupted autonomy. Both demonstrations used local delivery, not GitHub
+pull requests. Repeatable process is the offer; consistent success remains unproven.
+
+### Show the process
+
+Use a small workflow diagram to make the repeated review visible: plan → shakedown,
+implement → shakedown, ship → PR review/revision when configured. Return arrows
+represent working through findings. “Ship-shake” is shorthand for the founder's
+process, not the name of a pipeline step. Planning depends on scope, and the PR loop
+requires repository setup. The two public demos used local delivery.
+
+The developer supplies the process and criteria; supported agents can be assigned
+per step. Keep that distinction visible in the diagram and example. “Interchangeable”
+means configurable providers at the supported step interface, not identical behavior,
+capabilities, or setup. This is a view of the implemented cycle, not a promise of an
+arbitrary graph editor.
+
+Describe measurement concretely: the run records name the realized provider/model,
+outcomes, attempts, turns, and available usage. Preserve missing measurements and
+estimated-cost labels. Compare recorded runs with their task and settings attached;
+do not turn two different demo tasks into a model ranking or a productivity claim.
+
+Use this brief as the positioning source; the
+[`voice strategy`](../../voice/00-strategy.md) describes how to apply it in copy.
 
 ## 2. The name
 

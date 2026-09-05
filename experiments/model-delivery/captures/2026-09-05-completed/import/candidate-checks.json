@@ -1,0 +1,34 @@
+{
+  "scenario": "import",
+  "at": "2026-09-05T21:10:38.394Z",
+  "revision": "b90f5d0f8420e819e6cda4be58ef0389659379bf",
+  "gitStatus": "",
+  "evaluatorSha256": "6eb71f16f554ed5014147e5e0cdacc3f1b92164bc2778e66976ad0ff6e41359f",
+  "cases": [
+    {
+      "name": "AC-1: SIGKILL after durable progress, restart without duplicates or lost existing rows",
+      "result": "pass"
+    },
+    {
+      "name": "AC-2: repeating a completed import is idempotent",
+      "result": "pass"
+    },
+    {
+      "name": "AC-3: conflicting identity fails visibly and preserves existing content",
+      "result": "pass"
+    },
+    {
+      "name": "AC-4: malformed JSON fails before writes",
+      "result": "pass"
+    },
+    {
+      "name": "AC-4: a later invalid record is detected before writing earlier valid rows",
+      "result": "pass"
+    },
+    {
+      "name": "Baseline tests and syntax checks",
+      "result": "pass"
+    }
+  ],
+  "passed": true
+}

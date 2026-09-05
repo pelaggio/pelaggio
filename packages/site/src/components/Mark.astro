@@ -1,0 +1,25 @@
+---
+interface Props {
+	class?: string;
+	title?: string;
+	decorative?: boolean;
+}
+
+const { class: className, title = "Pelaggio", decorative = false } = Astro.props;
+---
+
+<svg
+	viewBox="0 0 100 100"
+	fill="currentColor"
+	class:list={["text-accent", className]}
+	role={decorative ? "presentation" : "img"}
+	aria-hidden={decorative ? "true" : undefined}
+	aria-label={decorative ? undefined : title}
+>
+	{decorative ? null : <title>{title}</title>}
+	<rect x="14" y="58" width="11" height="30" rx="5.5" opacity="0.45"></rect>
+	<rect x="31" y="42" width="11" height="46" rx="5.5" opacity="0.7"></rect>
+	<rect x="48" y="26" width="11" height="62" rx="5.5"></rect>
+	<path d="M59 30c9-6 18-8 27-6 -6 5 -9 11 -9 18 -7-4 -13-8 -18-12z"></path>
+	<circle cx="72" cy="34" r="3" fill="var(--color-bg)"></circle>
+</svg>

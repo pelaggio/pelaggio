@@ -1,0 +1,348 @@
+diff --git a/package.json b/package.json
+index 2875dfe..07a8677 100644
+--- a/package.json
++++ b/package.json
+@@ -1 +1 @@
+-{"name":"pelaggio-workbench-demo","private":true,"type":"module","scripts":{"start":"node src/server.mjs","test":"node --test test/*.test.mjs","check":"node --check src/server.mjs && node --check src/store.mjs && node --check src/import.mjs"}}
++{"name":"pelaggio-workbench-demo","private":true,"type":"module","scripts":{"start":"node src/server.mjs","test":"node --test test/*.test.mjs","check":"node --check src/server.mjs && node --check src/store.mjs && node --check src/import.mjs && node --check src/csv.mjs"}}
+diff --git a/public/index.html b/public/index.html
+index 9359e1a..3dbbfed 100644
+--- a/public/index.html
++++ b/public/index.html
+@@ -1,8 +1,8 @@
+ <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Workbench</title>
+-<style>body{font:17px/1.6 system-ui;background:#f4f0e6;color:#071a2e;max-width:760px;margin:70px auto;padding:20px}h1{font-size:48px;letter-spacing:-2px}button,select{font:inherit;padding:8px;background:#fff;border:1px solid #0a6e60;border-radius:4px}li{padding:12px 0;border-bottom:1px solid #ccc}nav{display:flex;gap:15px;align-items:center}</style>
+-<h1>What’s on the workbench?</h1><label>Status <select id="status"><option value="">All</option><option>open</option><option>done</option></select></label><ul id="items"></ul><nav><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></nav>
++<style>body{font:17px/1.6 system-ui;background:#f4f0e6;color:#071a2e;max-width:760px;margin:70px auto;padding:20px}h1{font-size:48px;letter-spacing:-2px}button,select,a{font:inherit;padding:8px;background:#fff;border:1px solid #0a6e60;border-radius:4px}li{padding:12px 0;border-bottom:1px solid #ccc}nav{display:flex;gap:15px;align-items:center}</style>
++<h1>What’s on the workbench?</h1><label>Status <select id="status"><option value="">All</option><option>open</option><option>done</option></select></label><a id="export" href="/api/items.csv" download="items.csv">Export CSV</a><ul id="items"></ul><nav><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></nav>
+ <script type="module">
+ let page=1;const status=document.querySelector('#status');
+-async function render(){const data=await fetch(`/api/items?status=${encodeURIComponent(status.value)}&page=${page}`).then(r=>r.json());const list=document.querySelector('#items');list.replaceChildren();for(const item of data.items){const li=document.createElement('li');li.textContent=`${item.id} — ${item.title} · ${item.status}`;list.append(li)}document.querySelector('#page').textContent=`Page ${page} · ${data.total} items`;document.querySelector('#previous').disabled=page===1;document.querySelector('#next').disabled=page*10>=data.total;}
++async function render(){document.querySelector('#export').href=`/api/items.csv?status=${encodeURIComponent(status.value)}`;const data=await fetch(`/api/items?status=${encodeURIComponent(status.value)}&page=${page}`).then(r=>r.json());const list=document.querySelector('#items');list.replaceChildren();for(const item of data.items){const li=document.createElement('li');li.textContent=`${item.id} — ${item.title} · ${item.status}`;list.append(li)}document.querySelector('#page').textContent=`Page ${page} · ${data.total} items`;document.querySelector('#previous').disabled=page===1;document.querySelector('#next').disabled=page*10>=data.total;}
+ status.onchange=()=>{page=1;render()};document.querySelector('#previous').onclick=()=>{page--;render()};document.querySelector('#next').onclick=()=>{page++;render()};render();
+ </script></html>
+diff --git a/src/csv.mjs b/src/csv.mjs
+new file mode 100644
+index 0000000..c34c028
+--- /dev/null
++++ b/src/csv.mjs
+@@ -0,0 +1,10 @@
++/**
++ * @param {{id: string, title: string, status: 'open' | 'done'}[]} items
++ * @returns {string}
++ */
++export function itemsToCsv(items) {
++  const quote = field => `"${String(field).replaceAll('"', '""')}"`;
++  return 'id,title,status\r\n' + items.map(item =>
++    [item.id, item.title, item.status].map(quote).join(',') + '\r\n'
++  ).join('');
++}
+diff --git a/src/server.mjs b/src/server.mjs
+index 254835e..c7673b1 100644
+--- a/src/server.mjs
++++ b/src/server.mjs
+@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
+ import { readFileSync } from 'node:fs';
+ import { resolve } from 'node:path';
+ import { matchingItems, pageOf, readItems } from './store.mjs';
++import { itemsToCsv } from './csv.mjs';
+ const store = process.env.DEMO_STORE || resolve('data/items.json');
+ const server = createServer((request, response) => {
+   const url = new URL(request.url, 'http://localhost');
+@@ -10,6 +11,11 @@ const server = createServer((request, response) => {
+     const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
+     response.setHeader('Content-Type', 'application/json');
+     response.end(JSON.stringify({items: pageOf(items, page), total: items.length, page, pageSize:10}));
++  } else if (url.pathname === '/api/items.csv') {
++    const items = matchingItems(readItems(store), url.searchParams.get('status') || '');
++    response.setHeader('Content-Type', 'text/csv; charset=utf-8');
++    response.setHeader('Content-Disposition', 'attachment; filename="items.csv"');
++    response.end(itemsToCsv(items));
+   } else if (url.pathname === '/') {
+     response.setHeader('Content-Type', 'text/html; charset=utf-8');
+     response.end(readFileSync(new URL('../public/index.html', import.meta.url)));
+diff --git a/test/csv.test.mjs b/test/csv.test.mjs
+new file mode 100644
+index 0000000..0e74f07
+--- /dev/null
++++ b/test/csv.test.mjs
+@@ -0,0 +1,22 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { itemsToCsv } from '../src/csv.mjs';
++import { fixture } from '../src/store.mjs';
++
++test('empty CSV retains the unquoted header and CRLF', () => {
++  assert.equal(itemsToCsv([]), 'id,title,status\r\n');
++});
++
++test('fixture punctuation and embedded newline have exact CSV bytes', () => {
++  assert.equal(itemsToCsv(fixture.slice(0, 1)),
++    'id,title,status\r\n"W-1","Read ""notes"", then\nship","open"\r\n');
++});
++
++test('CSV selects named columns and preserves empty text, Unicode, and line breaks', () => {
++  const items = [
++    { extra: 'never export', status: 'done', title: '', id: '雪,"\n\r\n\r' },
++    { id: '', title: 'café 😀,"\n\r\n\r', status: 'open' },
++  ];
++  assert.equal(itemsToCsv(items),
++    'id,title,status\r\n"雪,""\n\r\n\r","","done"\r\n"","café 😀,""\n\r\n\r","open"\r\n');
++});
+diff --git a/test/export.test.mjs b/test/export.test.mjs
+new file mode 100644
+index 0000000..e40e415
+--- /dev/null
++++ b/test/export.test.mjs
+@@ -0,0 +1,155 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { spawn } from 'node:child_process';
++import { mkdtemp, readFile, writeFile, rm, access } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { fixture } from '../src/store.mjs';
++
++// Independent decoder: quoted line breaks are field text, not row boundaries.
++function decodeCsv(csv) {
++  const rows = [];
++  let row = [], field = '', quoted = false;
++  for (let i = 0; i < csv.length; i++) {
++    const char = csv[i];
++    if (quoted) {
++      if (char !== '"') field += char;
++      else if (csv[i + 1] === '"') { field += '"'; i++; }
++      else quoted = false;
++    } else if (char === '"') {
++      assert.equal(field, '');
++      quoted = true;
++    } else if (char === ',') {
++      row.push(field); field = '';
++    } else if (char === '\r') {
++      assert.equal(csv[++i], '\n');
++      row.push(field); rows.push(row); row = []; field = '';
++    } else {
++      assert.notEqual(char, '\n');
++      field += char;
++    }
++  }
++  assert.equal(quoted, false);
++  assert.equal(field, '');
++  assert.deepEqual(row, []);
++  assert.deepEqual(rows.shift(), ['id', 'title', 'status']);
++  return rows;
++}
++
++async function temporaryStore(t, items) {
++  const directory = await mkdtemp(join(tmpdir(), 'workbench-export-'));
++  t.after(() => rm(directory, { recursive: true, force: true }));
++  const path = join(directory, 'items.json');
++  if (items !== undefined) await writeFile(path, JSON.stringify(items, null, 2) + '\n');
++  return path;
++}
++
++async function startServer(t, store) {
++  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/server.mjs', import.meta.url))], {
++    env: { ...process.env, DEMO_STORE: store, PORT: '0' },
++    stdio: ['ignore', 'pipe', 'pipe'],
++  });
++  const closed = new Promise(resolve => child.once('close', resolve));
++  let stderr = '';
++  child.stderr.on('data', chunk => { stderr += chunk; });
++  const stop = async () => {
++    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
++    let timer;
++    try {
++      await Promise.race([closed, new Promise((_, reject) => {
++        timer = setTimeout(() => reject(new Error('Server did not stop')), 3000);
++      })]);
++    } finally { clearTimeout(timer); }
++  };
++  t.after(stop);
++  const port = await new Promise((resolve, reject) => {
++    let stdout = '';
++    const timer = setTimeout(() => finish(new Error(`Server startup timed out: ${stderr}`)), 5000);
++    const onError = error => finish(error);
++    const onExit = code => finish(new Error(`Server exited before listening (${code}): ${stderr}`));
++    const onData = chunk => {
++      stdout += chunk;
++      const match = stdout.match(/^listening (\d+)\r?$/m);
++      if (match) finish(null, match[1]);
++    };
++    function finish(error, port) {
++      clearTimeout(timer);
++      child.off('error', onError);
++      child.off('exit', onExit);
++      child.stdout.off('data', onData);
++      if (error) reject(error); else resolve(port);
++    }
++    child.once('error', onError);
++    child.once('exit', onExit);
++    child.stdout.on('data', onData);
++  });
++  return {
++    stop,
++    get: path => fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(3000) }),
++  };
++}
++
++async function csvResponse(server, query = '') {
++  const response = await server.get(`/api/items.csv${query}`);
++  assert.equal(response.status, 200);
++  assert.equal(response.headers.get('content-type'), 'text/csv; charset=utf-8');
++  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="items.csv"');
++  return response.text();
++}
++
++const columns = items => items.map(({ id, title, status }) => [id, title, status]);
++
++test('HTTP export includes all filtered pages and leaves persisted bytes unchanged across restart', { timeout: 20000 }, async t => {
++  const store = await temporaryStore(t, fixture);
++  const before = await readFile(store);
++  const server = await startServer(t, store);
++  const openCsv = await csvResponse(server, '?status=open');
++  assert.deepEqual(decodeCsv(openCsv), columns(fixture.slice(0, 23)));
++  for (const page of [1, 2, 3]) {
++    assert.equal(await csvResponse(server, `?status=open&page=${page}`), openCsv);
++    const response = await server.get(`/api/items?status=open&page=${page}`);
++    assert.equal(response.status, 200);
++    assert.deepEqual(await response.json(), {
++      items: fixture.slice((page - 1) * 10, Math.min(page * 10, 23)), total: 23, page, pageSize: 10,
++    });
++  }
++  assert.deepEqual(decodeCsv(await csvResponse(server, '?status=done')), columns(fixture.slice(23)));
++  assert.deepEqual(await (await server.get('/api/items?status=done')).json(), {
++    items: fixture.slice(23), total: 7, page: 1, pageSize: 10,
++  });
++  for (const query of ['', '?status=']) {
++    assert.deepEqual(decodeCsv(await csvResponse(server, query)), columns(fixture));
++  }
++  for (const status of ['OPEN', 'open,done']) {
++    assert.equal(await csvResponse(server, `?status=${encodeURIComponent(status)}`), 'id,title,status\r\n');
++  }
++  assert.equal((await server.get('/api/items.csv/extra')).status, 404);
++  assert.deepEqual(await readFile(store), before);
++  await server.stop();
++  const restarted = await startServer(t, store);
++  assert.equal(await csvResponse(restarted, '?status=open&page=3'), openCsv);
++  assert.deepEqual(await readFile(store), before);
++});
++
++test('HTTP CSV round-trips punctuation, Unicode, empty fields and all line break forms', { timeout: 15000 }, async t => {
++  const items = [
++    { id: '雪,"\n\r\n\r', title: '', status: 'open', extra: 'private extra' },
++    { id: '', title: 'café 😀,"\n\r\n\r', status: 'done' },
++    { id: 'third', title: '<img src=x onerror=alert(1)>', status: 'open' },
++  ];
++  const store = await temporaryStore(t, items);
++  const server = await startServer(t, store);
++  assert.deepEqual(decodeCsv(await csvResponse(server)), columns(items));
++  await writeFile(store, '[]');
++  assert.equal(await csvResponse(server), 'id,title,status\r\n');
++  assert.equal(await csvResponse(server, '?status=open'), 'id,title,status\r\n');
++  assert.equal(await readFile(store, 'utf8'), '[]');
++});
++
++test('export from a missing store uses the fixture without creating a file', { timeout: 15000 }, async t => {
++  const store = await temporaryStore(t);
++  const server = await startServer(t, store);
++  assert.deepEqual(decodeCsv(await csvResponse(server)), columns(fixture));
++  await assert.rejects(access(store), { code: 'ENOENT' });
++});
+diff --git a/test/ui.test.mjs b/test/ui.test.mjs
+new file mode 100644
+index 0000000..3ba72ab
+--- /dev/null
++++ b/test/ui.test.mjs
+@@ -0,0 +1,90 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { readFileSync } from 'node:fs';
++import { Script, createContext } from 'node:vm';
++
++const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
++const script = new Script(html.match(/<script type="module">([\s\S]*?)<\/script>/)[1]);
++
++function browserDouble() {
++  const anchor = html.match(/<a\b([^>]*\bid="export"[^>]*)>([^<]*)<\/a>/);
++  assert.ok(anchor, 'visible static export anchor');
++  assert.equal(anchor[2], 'Export CSV');
++  assert.match(anchor[1], /\bdownload="items.csv"/);
++  const href = anchor[1].match(/\bhref="([^"]*)"/)[1];
++  assert.equal(href, '/api/items.csv');
++  const nodes = {
++    '#status': { value: '' },
++    '#export': { href },
++    '#items': {
++      children: [],
++      replaceChildren() { this.children = []; },
++      append(child) { this.children.push(child); },
++    },
++    '#page': {}, '#previous': {}, '#next': {},
++  };
++  const requests = [];
++  const context = createContext({
++    encodeURIComponent,
++    document: {
++      querySelector(selector) { assert.ok(nodes[selector], selector); return nodes[selector]; },
++      createElement(tag) {
++        assert.equal(tag, 'li');
++        return {
++          textContent: '',
++          set innerHTML(_) { assert.fail('Item text must not be inserted as HTML'); },
++        };
++      },
++    },
++    fetch(url) {
++      return new Promise(resolve => requests.push({ url, resolve }));
++    },
++  });
++  const initial = script.runInContext(context);
++  async function finish(data = { items: [], total: 30, page: 1, pageSize: 10 }) {
++    assert.equal(requests.length, 1);
++    const request = requests.shift();
++    request.resolve({ json: async () => data });
++    await new Promise(resolve => setImmediate(resolve));
++    return request.url;
++  }
++  return { nodes, requests, initial, finish };
++}
++
++test('export href tracks selection synchronously and ignores pagination', async () => {
++  const { nodes, requests, initial, finish } = browserDouble();
++  assert.equal(nodes['#export'].href, '/api/items.csv?status=');
++  assert.equal(requests[0].url, '/api/items?status=&page=1');
++  await finish();
++  await initial;
++  assert.equal(nodes['#previous'].disabled, true);
++  assert.equal(nodes['#next'].disabled, false);
++  for (const status of ['open', 'done', '', 'open&other=雪']) {
++    nodes['#status'].value = status;
++    nodes['#status'].onchange();
++    const expected = `/api/items.csv?status=${encodeURIComponent(status)}`;
++    assert.equal(nodes['#export'].href, expected);
++    assert.equal(await finish(), `/api/items?status=${encodeURIComponent(status)}&page=1`);
++    for (const [control, page] of [['#next', 2], ['#next', 3], ['#previous', 2]]) {
++      nodes[control].onclick();
++      assert.equal(nodes['#export'].href, expected);
++      assert.equal(new URL(expected, 'http://localhost').searchParams.has('page'), false);
++      assert.equal(await finish(), `/api/items?status=${encodeURIComponent(status)}&page=${page}`);
++    }
++  }
++});
++
++test('render preserves safe item text and pagination controls', async () => {
++  const { nodes, initial, finish } = browserDouble();
++  const item = { id: 'W-1', title: '<img src=x onerror=alert(1)> "雪"\nnext', status: 'done' };
++  await finish({ items: [item], total: 1, page: 1, pageSize: 10 });
++  await initial;
++  assert.deepEqual(nodes['#items'].children.map(li => li.textContent),
++    [`${item.id} — ${item.title} · ${item.status}`]);
++  assert.equal(nodes['#page'].textContent, 'Page 1 · 1 items');
++  assert.equal(nodes['#previous'].disabled, true);
++  assert.equal(nodes['#next'].disabled, true);
++  nodes['#status'].onchange();
++  await finish({ items: [], total: 0, page: 1, pageSize: 10 });
++  assert.deepEqual(nodes['#items'].children, []);
++});

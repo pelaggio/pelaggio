@@ -6,6 +6,7 @@ This directory is Pelaggio's trust surface: what the orchestrator can touch, wha
 
 | Doc | What it answers | Claim center |
 |---|---|---|
+| [`limitations.md`](./limitations.md) | Start here: current behavior, gaps, and failure modes. | `TC-001`, `TC-002`, `TC-003`, `TC-006`, `TC-011` through `TC-015`, `TC-018` |
 | [`overview.md`](./overview.md) | The top five evaluator questions. | `TC-001` through `TC-018` |
 | [`threat-model.md`](./threat-model.md) | Prompt injection, STRIDE, LINDDUN, and residual risk. | `TC-015`, `TC-006`, `TC-014`, `TC-018` |
 | [`permission-model.md`](./permission-model.md) | Permission tiers and step capabilities. | `TC-003`, `TC-011`, `TC-012`, `TC-013` |

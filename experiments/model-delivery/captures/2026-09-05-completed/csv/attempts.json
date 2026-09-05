@@ -1,0 +1,133 @@
+[
+  {
+    "at": "2026-09-05T20:32:06.838Z",
+    "outcome": "blocked",
+    "reason": "Harness-owned roadmap lookup and branch/worktree creation are required to complete /pick ITEM-1.",
+    "revision": null,
+    "steps": [
+      {
+        "name": "pick",
+        "provider": "codex",
+        "model": "default",
+        "ok": false,
+        "subtype": "blocked",
+        "detail": "Harness-owned roadmap lookup and branch/worktree creation are required to complete /pick ITEM-1.",
+        "outputTail": "Harness-owned roadmap lookup and branch/worktree creation are required to complete /pick ITEM-1."
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T20:34:03.733Z",
+    "outcome": "failed",
+    "reason": "pick failed",
+    "revision": null,
+    "steps": [
+      {
+        "name": "pick",
+        "provider": "claude",
+        "model": "claude-sonnet-5",
+        "ok": false,
+        "subtype": "error_sdk",
+        "detail": "Claude Code returned an error result: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access",
+        "outputTail": "Claude Code returned an error result: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access"
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T20:37:22.695Z",
+    "outcome": "failed",
+    "reason": "shakedown-plan failed: confinement violation",
+    "revision": "859f3c148d47d16ce633e4cb7ff7c88e1bfa4331",
+    "steps": [
+      {
+        "name": "plan",
+        "provider": "codex",
+        "model": "default",
+        "ok": true,
+        "outputTail": "wn branch-slug convention. The harness owns commits and publication.\n\nRun `/shakedown` for an independent review, or say **go** to start building. When done, run `/shakedown` again to review the code.",
+        "decisions": [
+          {
+            "id": "d2ff16e9-f820-4ed0-bce3-5656d5b8df7e",
+            "contentFingerprint": "146c5623a07bbeac4f5ea8abe95545097147848049a2554105298d529952cee0",
+            "decision": {
+              "fork": "CSV status-query semantics",
+              "chosen": "preserve the list endpoint’s exact-match semantics; missing or empty selects all, unknown values produce a header-only 200 response",
+              "alternatives": "reject unknown statuses with 400, introducing a different filtering contract"
+            }
+          }
+        ],
+        "executionReceipt": {
+          "path": ".dev/execution-receipts/cycle-1-ITEM-1-a1/plan-1.json",
+          "sha256": "6a15d9bf18f5a50cbf5a060faef6574ae9fbf37a5e6fa862cf09d74dd318bb72"
+        }
+      },
+      {
+        "name": "shakedown-plan",
+        "provider": "grok",
+        "model": "default",
+        "ok": false,
+        "subtype": "error_confinement",
+        "detail": "Grok sandbox requires Landlock, but this Linux kernel does not expose it; set providers.grok.allow-unsandboxed-fallback: true only for a supervised run with an external containment boundary"
+      }
+    ]
+  },
+  {
+    "at": "2026-09-05T21:08:38.568Z",
+    "outcome": "completed",
+    "revision": "44f334801414aeab0b3d29362f9543d2d07cb995",
+    "steps": [
+      {
+        "name": "shakedown-plan",
+        "provider": "grok",
+        "model": "default",
+        "ok": true,
+        "outputTail": "ering contract\n\nDECISION: CSV field quoting | chose: quote every data field; leave the header unquoted | alternatives: quote a field only when it contains comma, quote, or line break\n\nVerdict: APPROVE",
+        "decisions": [
+          {
+            "id": "a5c8d73b-4cd2-4838-9fcf-e2a10fa7d15a",
+            "contentFingerprint": "ae8fde63f0fcf56336b97cecfb85ca7d0ffdc638dd94b72bd1d07c302b3b567e",
+            "decision": {
+              "fork": "CSV status-query semantics",
+              "chosen": "preserve the list endpoint's exact-match semantics: missing or empty selects all, unknown values match nothing and produce a header-only 200 response",
+              "alternatives": "reject unknown statuses with 400, which would introduce a different filtering contract"
+            }
+          },
+          {
+            "id": "4821dfb3-6467-40c2-8ae2-4b2cf61bf0da",
+            "contentFingerprint": "0fc844da3241a1317184978fb9970e6ac0fa8be4e24de6bdc09a804b7b49bc6c",
+            "decision": {
+              "fork": "CSV field quoting",
+              "chosen": "quote every data field; leave the header unquoted",
+              "alternatives": "quote a field only when it contains comma, quote, or line break"
+            }
+          }
+        ]
+      },
+      {
+        "name": "implement",
+        "provider": "codex",
+        "model": "default",
+        "ok": true,
+        "outputTail": "gle-writer UTF-8 interchange; spreadsheet formula handling is unassessed.\n\nThe plan was left untouched. Implementation files await the harness-owned commit, so they do not yet appear in `main...HEAD`.",
+        "executionReceipt": {
+          "path": ".dev/execution-receipts/cycle-1-ITEM-1-a2/implement-1.json",
+          "sha256": "93be00bffc5a5e06328efddbf8324ddb927d0d3b5f29c1311fa928b60da532aa"
+        }
+      },
+      {
+        "name": "shakedown-code",
+        "provider": "grok",
+        "model": "default",
+        "ok": true,
+        "outputTail": "SMOKE_OK`: served `Export CSV` control, open export is 23 rows with the fixture punctuation/newline title, `page=3` does not change CSV, done=7, all=30, JSON pagination still 10/10/3\n\nVerdict: APPROVE"
+      },
+      {
+        "name": "ship",
+        "provider": "grok",
+        "model": "default",
+        "ok": true,
+        "outputTail": "** (from MAIN_REPO on `main`):\n- `npm test` — 9 passed, 0 failed\n- `npm run check` — exit 0\n\nPipeline hand-off: mark-done, archive, push, and worktree/branch cleanup were not run.\n\nship-merged: ITEM-1"
+      }
+    ]
+  }
+]
