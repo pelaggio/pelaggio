@@ -383,4 +383,62 @@ describe("PR review gate record store", () => {
 		assert.equal(readPrReviewGateRecord(dir, 202, HEAD), null);
 		assert.deepEqual(listPrReviewGateRecords(dir), []);
 	});
+
+	it("reads historical v2 fleet records without securityReview and round-trips when present", () => {
+		const historical = { schemaVersion: 2, ...fleetRecord() } as Record<string, unknown>;
+		delete historical.securityReview;
+		const validated = validatePrReviewGateRecord(historical);
+		assert.ok(validated.schemaVersion === 2 && validated.producer === "fleet");
+		assert.equal(validated.securityReview, undefined);
+
+		const telemetry = {
+			triggered: true,
+			reasons: ["path:packages/server/src/config.ts"],
+			standardMustFixDigests: [DIGEST],
+			redTeamMustFixDigests: ["b".repeat(64)],
+		};
+		const dir = root();
+		const path = writePrReviewGateRecord(dir, fleetRecord({ prNumber: 501, securityReview: telemetry }));
+		const stored = readPrReviewGateRecord(dir, 501, HEAD);
+		assertFleet(stored);
+		assert.deepEqual(stored.securityReview, telemetry);
+		assert.equal(JSON.parse(readFileSync(path, "utf8")).securityReview.triggered, true);
+
+		const notTriggered = {
+			triggered: false,
+			reasons: [] as string[],
+			standardMustFixDigests: [] as string[],
+			redTeamMustFixDigests: [] as string[],
+		};
+		writePrReviewGateRecord(dir, fleetRecord({ prNumber: 502, headSha: SECOND_HEAD, securityReview: notTriggered }));
+		const storedOff = readPrReviewGateRecord(dir, 502, SECOND_HEAD);
+		assertFleet(storedOff);
+		assert.deepEqual(storedOff.securityReview, notTriggered);
+	});
+
+	it("fails closed on malformed securityReview telemetry", () => {
+		const valid = {
+			schemaVersion: 2 as const,
+			...fleetRecord(),
+			securityReview: { triggered: true, reasons: ["path:x.ts"], standardMustFixDigests: [DIGEST], redTeamMustFixDigests: [] as string[] },
+		};
+		const tooManyReasons = Array.from({ length: 9 }, (_, i) => `path:f${i}.ts`);
+		const tooManyDigests = Array.from({ length: 65 }, (_, i) => i.toString(16).padStart(64, "0"));
+		const invalid: unknown[] = [
+			{ ...valid, securityReview: "nope" },
+			{ ...valid, securityReview: { ...valid.securityReview, extra: true } },
+			{ ...valid, securityReview: { triggered: "yes", reasons: ["path:x.ts"], standardMustFixDigests: [], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: false, reasons: ["path:x.ts"], standardMustFixDigests: [], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: true, reasons: [], standardMustFixDigests: [], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: false, reasons: [], standardMustFixDigests: [], redTeamMustFixDigests: [DIGEST] } },
+			{ ...valid, securityReview: { triggered: true, reasons: ["path:x.ts", "path:x.ts"], standardMustFixDigests: [], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: true, reasons: [""], standardMustFixDigests: [], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: true, reasons: tooManyReasons, standardMustFixDigests: [], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: true, reasons: ["path:x.ts"], standardMustFixDigests: [DIGEST.toUpperCase()], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: true, reasons: ["path:x.ts"], standardMustFixDigests: [DIGEST, DIGEST], redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: true, reasons: ["path:x.ts"], standardMustFixDigests: tooManyDigests, redTeamMustFixDigests: [] } },
+			{ ...valid, securityReview: { triggered: true, reasons: ["path:x.ts"], standardMustFixDigests: [DIGEST.slice(0, 63)], redTeamMustFixDigests: [] } },
+		];
+		for (const value of invalid) assert.throws(() => validatePrReviewGateRecord(value));
+	});
 });

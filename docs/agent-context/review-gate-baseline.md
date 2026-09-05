@@ -100,6 +100,52 @@ Absence is compatibility state, not a fifth classification. Do not retrospective
 modes from historical prose. This is the honest pre-change baseline for A-1/A-2 rather
 than a fabricated classification of the frozen rolls.
 
+## 21-PR classifier replay (2026-09-05)
+
+The #746 replay uses 21 PRs: the 17 distinct PRs in the recovered main-clone
+fleet store, plus #713, #722, #730 and #736. This is separate from the frozen
+82-roll baseline above. Committed fixture SHA-256:
+`5b199f1d129cc0ec8c54716a4956443a3e25558549abbfdc63cc9b06cb65c3c6`.
+Merged paths were reconstructed from squash commits. Guard-config diffs are
+preserved; #722's actual live head/base diff was recovered on 2026-09-05.
+
+| Measure | Legacy path + keyword | Guarantee paths + guard deltas |
+|---|---|---|
+| Triggered PRs | 19 / 21 | 16 / 21 |
+| Fire set | #690, #691, #693, #694, #695, #697, #698, #699, #700, #704, #710, #713, #717, #719, #722, #730, #736, #748, #762 | #689, #690, #691, #693, #694, #695, #697, #699, #700, #710, #713, #719, #722, #730, #736, #762 |
+| Known verified red-team-only losses | — | 0 among the two preserved reports |
+| Skips with unresolved survivor attribution | — | #708, #748 |
+
+The original ≤7 cap was falsified: restoring #722 alone made the charter's exact
+path set fire 8/21. The operator approved 16/21 on 2026-09-05 to retain known
+red-team-only verified findings in #693 and #700. Their hash-bound reports and
+candidate SHAs are committed beside the cohort fixture. The two exact addbacks
+are `ci/__tests__/shadow-assurance.test.ts` (consumer-root admission) and
+`ci/assurance-observations.ts` (observation identity). No general assurance-directory
+or incidental keyword trigger was added. Required #713/#722/#730/#736 all fire.
+
+Aggregate subtypes can mask red-team attribution; absence of `red-team:` is not
+proof of zero loss. The replay proves retention of the known report evidence,
+while #708/#748 remain unobserved. Future per-label telemetry supplies additional
+evidence; historical missing arrays are never invented as empty observations.
+
+## Fleet telemetry coverage (2026-09-05)
+
+Before the recovered reader/schema revision, the main-clone store fingerprint was
+`27:34ed1b30999a`. The final reader reproduces that same corpus with:
+
+```bash
+npx tsx ci/review-metrics.ts --until 2026-09-06 /home/chris/workspace/pelaggio-run-graph/.dev/pr-review-gate-records
+```
+
+It contains 27 rolls for 17 PRs (2026-08-28 through 2026-09-01), with **0/27
+instrumented rolls**. Trigger rate and red-team-only yield are unavailable, even
+though the CLI displays zero numerators over its empty instrumented subset.
+Historical absence and digest-set overflow are excluded from coverage; neither
+means “not triggered.” Complete sets of at most64 digests per label are recorded;
+overflow omits telemetry without changing gate survivors. This is the single
+recovery restamp; the historical82-roll baseline remains unchanged.
+
 ## Known gap: wall-clock is not instrumented
 
 This document calls wall-clock the scarce resource and then does not measure it. That matters most

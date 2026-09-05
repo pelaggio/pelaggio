@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type PrReviewSecurityTelemetry, validatePrReviewSecurityTelemetry } from "../packages/pelaggio/scripts/pelaggio/pr-review-gate-record.js";
 import { REVIEW_FINDING_CLOSURES, type ReviewFindingClosure } from "../packages/pelaggio/scripts/pelaggio/review/findings.js";
 
 export interface GateRecord {
@@ -33,6 +34,7 @@ export interface GateRecord {
 	schemaVersion?: number;
 	producer?: string;
 	recurrenceFindings?: readonly { closure?: string }[];
+	securityReview?: unknown;
 }
 
 export function repoRoot(): string {
@@ -120,6 +122,13 @@ export interface Baseline {
 	mislabelledSplits: number;
 	/** Classified confirmed-survivor observations only. Absence is not a fifth mode. */
 	closureModes: Record<ReviewFindingClosure, number>;
+	/** Well-shaped `securityReview` objects only. Historical absence is not “not triggered”. */
+	securityReview: {
+		fleetRolls: number;
+		instrumented: number;
+		triggered: number;
+		redTeamOnlyMustFixes: number;
+	};
 }
 
 export function summarize(records: readonly GateRecord[]): Baseline {
@@ -134,16 +143,33 @@ export function summarize(records: readonly GateRecord[]): Baseline {
 	}
 	const div = (n: number, d: number): number => (d === 0 ? 0 : Number((n / d).toFixed(2)));
 	const closureModes = Object.fromEntries(REVIEW_FINDING_CLOSURES.map((mode) => [mode, 0])) as Record<ReviewFindingClosure, number>;
+	let fleetRolls = 0;
+	let instrumented = 0;
+	let triggered = 0;
+	let redTeamOnlyMustFixes = 0;
 	for (const r of records) {
 		if (r.schemaVersion !== 2 || r.producer !== "fleet") continue;
+		fleetRolls++;
 		const observations = r.recurrenceFindings;
-		if (!Array.isArray(observations)) continue;
-		for (const observation of observations) {
-			if (!observation || typeof observation !== "object") continue;
-			const mode = observation.closure;
-			if (typeof mode !== "string" || !(REVIEW_FINDING_CLOSURES as readonly string[]).includes(mode)) continue;
-			closureModes[mode as ReviewFindingClosure] += 1;
+		if (Array.isArray(observations)) {
+			for (const observation of observations) {
+				if (!observation || typeof observation !== "object") continue;
+				const mode = observation.closure;
+				if (typeof mode !== "string" || !(REVIEW_FINDING_CLOSURES as readonly string[]).includes(mode)) continue;
+				closureModes[mode as ReviewFindingClosure] += 1;
+			}
 		}
+		const securityReview = validatedSecurityReview(r.securityReview);
+		if (!securityReview) continue;
+		instrumented++;
+		if (securityReview.triggered) triggered++;
+		const standard = new Set(securityReview.standardMustFixDigests);
+		const redTeamOnly = new Set<string>();
+		for (const digest of securityReview.redTeamMustFixDigests) {
+			if (standard.has(digest)) continue;
+			redTeamOnly.add(digest);
+		}
+		redTeamOnlyMustFixes += redTeamOnly.size;
 	}
 	return {
 		prs: rollups.length,
@@ -162,7 +188,16 @@ export function summarize(records: readonly GateRecord[]): Baseline {
 		agreements,
 		mislabelledSplits: records.filter((r) => r.ok && r.breakerReason === "invalid-pass" && r.agreement === "disagreement").length,
 		closureModes,
+		securityReview: { fleetRolls, instrumented, triggered, redTeamOnlyMustFixes },
 	};
+}
+
+function validatedSecurityReview(value: unknown): PrReviewSecurityTelemetry | undefined {
+	try {
+		return validatePrReviewSecurityTelemetry(value);
+	} catch {
+		return undefined;
+	}
 }
 
 /** Stable CLI table rows. Existing rows stay in order; the closure row is appended. */
@@ -179,6 +214,9 @@ export function formatBaselineRows(s: Baseline): string {
 			.join("")}`,
 		`  mislabelled splits       ${s.mislabelledSplits}  (ok=true + disagreement stamped invalid-pass)`,
 		`  closure modes            patch=${s.closureModes.patch} construction=${s.closureModes.construction} authority=${s.closureModes.authority} policy=${s.closureModes.policy}   (classified confirmed-survivor observations)`,
+		`  security-review coverage  ${s.securityReview.instrumented} / ${s.securityReview.fleetRolls} instrumented fleet rolls`,
+		`  red-team trigger rate     ${s.securityReview.triggered} / ${s.securityReview.instrumented} (${s.securityReview.instrumented === 0 ? "0" : ((100 * s.securityReview.triggered) / s.securityReview.instrumented).toFixed(0)}%)`,
+		`  red-team-only must-fixes  ${s.securityReview.redTeamOnlyMustFixes}   (verified surviving digest set-difference)`,
 	].join("\n");
 }
 

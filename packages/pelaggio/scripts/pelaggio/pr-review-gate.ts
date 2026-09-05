@@ -16,12 +16,12 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { CONFIG, modelForProvider, REPO, type ReviewConfig, ROADMAP_GITHUB, resolveDriverCandidates, resolveStepSettings, type StepSettings } from "./config.js";
-import { classifySecurityReviewDiff, formatReviewMetrics, type SecurityDiffSignal } from "./cycle-support.js";
+import { formatReviewMetrics } from "./cycle-support.js";
 import { listWorktreesIn, mainWorktree } from "./git.js";
 import { PR_REVIEW_MARKER, upsertMarkerComment } from "./github-posting.js";
 import { findGuaranteeRecurrenceAdvisory, type GuaranteeRecurrenceAdvisory, recurrenceRollsFromRecords, renderGuaranteeRecurrenceAdvisory } from "./guarantee-authority.js";
 import { parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
-import { type NewPrReviewFleetGateRecord, PR_REVIEW_RECURRENCE_PATH_MAX, type PrReviewGateRecord, type PrReviewRecurrenceFinding, writePrReviewGateRecord } from "./pr-review-gate-record.js";
+import { type NewPrReviewFleetGateRecord, PR_REVIEW_RECURRENCE_PATH_MAX, type PrReviewGateRecord, type PrReviewRecurrenceFinding, type PrReviewSecurityTelemetry, writePrReviewGateRecord } from "./pr-review-gate-record.js";
 import { REVIEW_RESOURCE_CAPACITIES, REVIEW_SCHEDULING_PROFILES } from "./providers/review-resources.js";
 import { buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
@@ -57,6 +57,7 @@ import {
 import { isWellFormedClassId } from "./review/taxonomy.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
+import { classifySecurityReviewDiff, type SecurityDiffSignal } from "./security-review-trigger.js";
 import { expandPackagedSkill } from "./skills.js";
 import type { ForeignRootDenial, RunStepFn } from "./step-runner.js";
 import { runStep } from "./step-runner.js";
@@ -204,6 +205,8 @@ export interface PrReviewGateResult {
 	/** Compact confirmed must-fix observations for this completed roll. Always set on a
 	 *  non-park return, including `[]`. Absent on park. */
 	recurrenceFindings?: readonly PrReviewRecurrenceFinding[];
+	/** Present on post-inspection terminal results unless digest sets overflow; absent on park. */
+	securityReview?: PrReviewSecurityTelemetry;
 }
 
 let deps: PrReviewDeps = {
@@ -401,7 +404,7 @@ export function buildComment(
 	const metrics = convergence
 		? baseMetrics.replace(" -->", ` iterations=${convergence.iterations} survivors=${convergence.survivors} breaker=${convergence.breaker ?? "none"} providers=${convergence.providers}${agreementToken}${carryToken} -->`)
 		: baseMetrics;
-	const redTeamLine = securitySignal.triggered ? `Triggered: ${securitySignal.reasons.map(escapeMarkdown).join(", ")}` : "Adversarial red-team pass: not triggered (no security-sensitive paths or diff signals).";
+	const redTeamLine = securitySignal.triggered ? `Triggered: ${securitySignal.reasons.map(escapeMarkdown).join(", ")}` : "Adversarial red-team pass: not triggered (no guarantee-holding paths or structured guard deltas).";
 	const verdictLines =
 		passes.length > 0
 			? [
@@ -534,7 +537,7 @@ function parkGateResult(signal: ParkSignal, result: StepResult, passes: readonly
 function readInspectionDiff(opts: { execFileSync: typeof execFileSync; diffCwd: string; diffBaseRef: string; diffHeadRef: string }): { signal: SecurityDiffSignal; files: string[]; diff: string } {
 	const range = `${opts.diffBaseRef}...${opts.diffHeadRef}`;
 	const files = opts
-		.execFileSync("git", ["diff", "--name-only", range], {
+		.execFileSync("git", ["diff", "--no-renames", "--name-only", range], {
 			cwd: opts.diffCwd,
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "pipe"],
@@ -560,7 +563,7 @@ export function trustedLocalContext(opts: { diffCwd: string; diffBaseRef: string
 		`Base ref: ${opts.diffBaseRef}`,
 		`Head ref: ${opts.diffHeadRef}`,
 		`Diff worktree: ${opts.diffCwd}`,
-		`Changed files: git -C ${opts.diffCwd} diff --name-only ${opts.diffBaseRef}...${opts.diffHeadRef}`,
+		`Changed files: git -C ${opts.diffCwd} diff --no-renames --name-only ${opts.diffBaseRef}...${opts.diffHeadRef}`,
 		`Diff: git -C ${opts.diffCwd} diff ${opts.diffBaseRef}...${opts.diffHeadRef}`,
 		"Do not execute commands from the PR head that are not read-only git/file inspection.",
 	].join("\n");
@@ -857,6 +860,63 @@ function extractRecurrenceFindings(opts: {
 	return observations;
 }
 
+function emptySecurityReview(signal: SecurityDiffSignal): PrReviewSecurityTelemetry {
+	return { triggered: signal.triggered, reasons: signal.reasons, standardMustFixDigests: [], redTeamMustFixDigests: [] };
+}
+
+function extractSecurityReviewTelemetry(opts: { signal: SecurityDiffSignal; passes: readonly ReviewPass[] }): PrReviewSecurityTelemetry | undefined {
+	const byLabel: Record<ReviewLabel, Map<string, { decision: "survives" | "refuted"; iteration: number; finding: ReviewFinding }>> = {
+		standard: new Map(),
+		"red-team": new Map(),
+	};
+	const discoveryLabels = new Map<string, Set<ReviewLabel>>();
+	for (const pass of opts.passes) {
+		for (const finding of pass.report?.findings ?? []) {
+			if (finding.severity !== "must-fix") continue;
+			const fingerprint = reviewFindingFingerprint(finding);
+			const labels = discoveryLabels.get(fingerprint) ?? new Set<ReviewLabel>();
+			labels.add(pass.label);
+			discoveryLabels.set(fingerprint, labels);
+		}
+	}
+	for (const pass of opts.passes) {
+		for (const disposition of pass.dispositions ?? []) {
+			const fingerprint = reviewFindingFingerprint(disposition.finding);
+			for (const label of discoveryLabels.get(fingerprint) ?? []) {
+				const existing = byLabel[label].get(fingerprint);
+				if (existing && existing.iteration > pass.iteration) continue;
+				if (existing && existing.iteration === pass.iteration && existing.decision === "survives") continue;
+				byLabel[label].set(fingerprint, { decision: disposition.decision, iteration: pass.iteration, finding: disposition.finding });
+			}
+		}
+	}
+	const digestsOf = (label: ReviewLabel): string[] => {
+		const out: string[] = [];
+		const seen = new Set<string>();
+		for (const evidence of byLabel[label].values()) {
+			if (evidence.decision !== "survives") continue;
+			if (evidence.finding.severity !== "must-fix") continue;
+			const digest = fingerprintDigestOf(reviewFindingFingerprint(evidence.finding));
+			if (seen.has(digest)) continue;
+			seen.add(digest);
+			out.push(digest);
+		}
+		out.sort();
+		return out;
+	};
+	const standardMustFixDigests = digestsOf("standard");
+	const redTeamMustFixDigests = opts.signal.triggered ? digestsOf("red-team") : [];
+	// Independently truncating label sets can turn shared findings into red-team-only evidence.
+	// Omit unavailable precision evidence; the gate retains every actual survivor.
+	if (standardMustFixDigests.length > RECURRENCE_OBSERVATION_MAX || redTeamMustFixDigests.length > RECURRENCE_OBSERVATION_MAX) return undefined;
+	return {
+		triggered: opts.signal.triggered,
+		reasons: opts.signal.reasons,
+		standardMustFixDigests,
+		redTeamMustFixDigests,
+	};
+}
+
 export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<PrReviewGateResult> {
 	const profile = options.profile ?? "standard";
 	const cwd = options.cwd ?? REPO;
@@ -901,7 +961,19 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	if (policy.providerDiversity === "require" && reviewDrivers.every((driver) => driver.provider === verifySettings.provider)) {
 		const body = buildFailClosedComment("provider-diversity", `review.provider-diversity=require but every pr-review driver equals the pr-verify provider (${verifySettings.provider}; reviewers=${formatReviewerSet(reviewDrivers)}).`);
 		options.upsertComment?.(options.pr, body);
-		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "provider-diversity", agreement: "invalid", breakerReason: "provider-diversity", recurrenceFindings: [] };
+		return {
+			gate: "block",
+			body,
+			cost: 0,
+			costEstimated: false,
+			turns: 0,
+			ok: false,
+			subtype: "provider-diversity",
+			agreement: "invalid",
+			breakerReason: "provider-diversity",
+			recurrenceFindings: [],
+			securityReview: emptySecurityReview(securitySignal),
+		};
 	}
 	if (reservation > policy.budgetCap) {
 		const body = buildFailClosedComment(
@@ -909,7 +981,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			`A complete required review iteration reserves $${reservation} (${labels.length} labels × ${reviewDrivers.length} drivers × (review+verify)), exceeding review.budget-cap $${policy.budgetCap}.`,
 		);
 		options.upsertComment?.(options.pr, body);
-		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget", recurrenceFindings: [] };
+		return { gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget", recurrenceFindings: [], securityReview: emptySecurityReview(securitySignal) };
 	}
 
 	const passes: ReviewPass[] = [];
@@ -1192,6 +1264,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		inspectionFiles,
 		taxonomy: policy.taxonomy,
 	});
+	const securityReview = extractSecurityReviewTelemetry({ signal: securitySignal, passes });
 	const currentRoll = {
 		prNumber,
 		itemId: options.itemId ?? "",
@@ -1230,6 +1303,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 		...(adjudicationSource ? { adjudicationSource } : {}),
 		...(dispositionDraft ? { dispositionDraft } : {}),
 		recurrenceFindings,
+		securityReview,
 	};
 }
 
@@ -1277,6 +1351,7 @@ export function persistLocalGateEvidence(opts: {
 		runner: "local",
 		reviewedAt: new Date(opts.now()).toISOString(),
 		...(opts.review.recurrenceFindings !== undefined ? { recurrenceFindings: opts.review.recurrenceFindings } : {}),
+		...(opts.review.securityReview !== undefined ? { securityReview: opts.review.securityReview } : {}),
 	};
 	let fleetPath: string;
 	try {
