@@ -64,7 +64,7 @@ containment. Pelaggio itself does not push, open a PR, merge, release, or deploy
 mkdir -p .pelaggio
 cat > .pelaggio/pelaggio.yml <<'YAML'
 harness:
-  adapter: grok
+  adapter: codex
 execution:
   mode: host
 autopilot:
@@ -82,6 +82,10 @@ the reported worktree for review. `show <runId>` inspects it, `resume <runId>` c
 paused run, and `cancel <runId>` cancels one. Add `--json` for one machine-readable result;
 `--non-interactive` never prompts. As a one-run alternative to committed policy, omit
 `execution.mode` and pass `--allow-host-execution`.
+
+The Codex adapter uses Codex's approval-review auto mode with its `workspace-write`
+sandbox. Select Grok with `harness.adapter: grok`. Both remain host execution in the
+preview's reported assurance: provider sandboxing is not Pelaggio-contained execution.
 
 Dogfood pipeline flags (`--item`, `--cycles`, `--parallel`, …) still select the existing
 `pelaggio run` pipeline.

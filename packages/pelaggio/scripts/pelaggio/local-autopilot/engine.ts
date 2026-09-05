@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ulid } from "ulid";
 import { tryWithFileLock, withFileLock } from "../file-lock.js";
+import { codexAdapter } from "./codex-adapter.js";
 import { loadLocalConfig } from "./config-load.js";
 import { fakeAdapter } from "./fake-adapter.js";
 import { foldRunEvents } from "./fold.js";
@@ -19,12 +20,12 @@ import { buildWorkContract, digestOf } from "./work-contract.js";
 
 export interface EngineDeps {
 	now?: () => string;
-	adapters?: Record<LocalConfig["harness"]["adapter"], HarnessAdapter>;
+	adapters?: Partial<Record<LocalConfig["harness"]["adapter"], HarnessAdapter>>;
 	readStdin?: () => string;
 	signal?: AbortSignal;
 }
 
-const defaultAdapters = { fake: fakeAdapter, grok: grokAdapter };
+const defaultAdapters = { fake: fakeAdapter, grok: grokAdapter, codex: codexAdapter };
 
 function nowIso(deps: EngineDeps): string {
 	return deps.now?.() ?? new Date().toISOString();
@@ -46,7 +47,7 @@ function snapshotOf(cwd: string, runId: string): ParseResult<RunSnapshot> {
 }
 
 function adaptersFor(deps: EngineDeps): Record<LocalConfig["harness"]["adapter"], HarnessAdapter> {
-	return deps.adapters ?? defaultAdapters;
+	return { ...defaultAdapters, ...deps.adapters };
 }
 
 export function getRun(cwd: string, runId: string): ParseResult<RunSnapshot> {

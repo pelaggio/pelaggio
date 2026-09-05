@@ -115,6 +115,14 @@ function doctorCommand(argv: string[]): number {
 		if (config.value.harness.adapter === "grok") {
 			const bin = config.value.harness.grok?.bin ?? join(homedir(), ".grok", "bin", "grok");
 			checks.push({ name: "harness", ok: existsSync(bin), detail: bin });
+		} else if (config.value.harness.adapter === "codex") {
+			const bin = config.value.harness.codex?.bin ?? "codex";
+			try {
+				execFileSync(bin, ["--version"], { encoding: "utf8", stdio: "ignore" });
+				checks.push({ name: "harness", ok: true, detail: bin });
+			} catch {
+				checks.push({ name: "harness", ok: false, detail: `${bin} is not executable` });
+			}
 		} else checks.push({ name: "harness", ok: true, detail: "fake" });
 	}
 	const ok = checks.every((check) => check.ok);

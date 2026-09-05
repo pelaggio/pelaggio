@@ -40,6 +40,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"local-autopilot/run-worktree.ts": 1,
 	"local-autopilot/fake-adapter.ts": 3,
 	"local-autopilot/grok-adapter.ts": 3,
+	"local-autopilot/codex-adapter.ts": 3,
 	"local-autopilot/engine.ts": 4,
 	"config.ts": 0,
 	"cli.ts": 0,
