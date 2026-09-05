@@ -5,11 +5,12 @@ import { join, resolve } from 'node:path';
 const [metadataFile, outputDirectory] = process.argv.slice(2);
 if(!metadataFile||!outputDirectory)throw new Error('Usage: node capture.mjs <execution.json> <new-output-directory>');
 const execution=JSON.parse(readFileSync(metadataFile,'utf8'));
+if(!Array.isArray(execution.operatorInterventions)||!execution.operatorInterventions.every(entry=>typeof entry==='string'&&entry.trim()))throw new Error('execution.json must contain operatorInterventions: an array of recorded interventions (use [] when none occurred)');
 const out=resolve(outputDirectory);
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const git=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8'}).trim();
 mkdirSync(out,{recursive:true});
-const report={capturedAt:new Date().toISOString(),harnessSha:execution.harnessSha,shippingMode:'direct-push to local bare repositories; no GitHub PR',operatorInterventions:['Changed the initial single-provider configuration to use a distinct review provider after preflight refusal.','Changed coordination from Codex to Claude after Codex pick refused prohibited mutations.','Claude subscription access was disabled; claimed both local items through the roadmap CLI and resumed at plan.','The user authorized Codex/Grok-only supervised execution with Grok unsandboxed fallback; configuration changes are committed in both local repos.'],scenarios:{}};
+const report={capturedAt:new Date().toISOString(),harnessSha:execution.harnessSha,shippingMode:'direct-push to local bare repositories; no GitHub PR',operatorInterventions:execution.operatorInterventions,scenarios:{}};
 for(const [name,info] of Object.entries(execution.scenarios)) {
  const candidate=existsSync(info.repo+'-item-1') ? info.repo+'-item-1' : info.repo;
  const directory=join(out,name);mkdirSync(directory,{recursive:true});

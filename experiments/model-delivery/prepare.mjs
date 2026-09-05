@@ -15,7 +15,7 @@ execFileSync('pnpm', ['install', '--frozen-lockfile', '--offline', '--ignore-scr
 const cli=join(harness,'packages/pelaggio/bin/pelaggio.js');
 const config=`roadmap:\n  source: markdown\nship:\n  target: direct-push\npark:\n  auto-resume: false\nreview:\n  authoring:\n    enabled: off\nmodels:\n  profiles:\n    standard:\n      providers:\n        pick: grok\n        plan: codex\n        shakedown-plan: grok\n        implement: codex\n        shakedown-code: grok\n        ship: grok\n        shipwreck: grok\n`;
 const rubric=`# Workbench quality rubric\n\n## Correct\nMeet docs/charter.md acceptance criteria without changing their meaning. Existing list filtering and pagination stay correct. Preserve stored data. Conflicts must be visible. State verification limits.\n\n## Well-tested\nExercise observable behavior, real temporary files, HTTP, and process restart where relevant. Include empty and malformed inputs. A test must fail on an incorrect implementation.\n\n## Well-factored\nReuse the existing status-filter helper. Keep HTTP/UI adapters thin. Avoid extra dependencies.\n\n## Well-typed\nValidate imported records and external inputs; use JSDoc where useful in this small JavaScript app.\n\n## Idiomatic and concise\nNode ESM and built-in modules. Safe browser text rendering. No unrelated changes.\n\n## Verification\n\n\`\`\`bash\nnpm test\nnpm run check\n\`\`\`\n`;
-const result={root,harness,harnessSha,createdAt:new Date().toISOString(),scenarios:{}};
+const result={root,harness,harnessSha,createdAt:new Date().toISOString(),operatorInterventions:[],scenarios:{}};
 for(const name of ['csv','import']) {
  const repo=join(root,name); cpSync(join(source,'seed'),repo,{recursive:true});
  mkdirSync(join(repo,'docs'),{recursive:true});

@@ -122,6 +122,12 @@ kernel Landlock is unavailable. No implementation or shipping had occurred at th
 outcomes. Bubblewrap availability alone was checked, but no custom containment path or
 unsandboxed fallback was introduced.
 
+Preparation initializes `execution.json` with `operatorInterventions: []`. Record any
+operator changes, manual claims, or resumes in that execution's list as they occur.
+Capture requires this field and copies only those entries. For older runtime metadata,
+reconstruct the list from that run's records before capturing; use `[]` only when no
+interventions occurred. Existing frozen captures retain their original history.
+
 Once an execution has exited, capture selected evidence into a fresh destination:
 
 ```sh
