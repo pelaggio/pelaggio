@@ -168,6 +168,17 @@ h2 { font-size: clamp(32px, 4vw, 46px); line-height: 1.12; letter-spacing: -.035
 .working { display: grid; grid-template-columns: 1fr 1fr; gap: 70px; padding-block: 85px; }
 .working-copy { color: var(--color-ink-soft); font-size: 17px; }
 .working-copy p { margin-bottom: 20px; }
+.workflow { grid-column: 1 / -1; min-width: 0; }
+.workflow figcaption { font-size: 20px; font-weight: 600; margin-bottom: 22px; }
+.workflow-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; list-style: none; padding: 0; }
+.workflow-stages li { border-top: 2px solid var(--color-accent); padding-top: 20px; min-width: 0; }
+.workflow-pair { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 17px; }
+.workflow-pair > span { color: var(--color-accent); }
+.workflow-return { margin: 10px 12px 16px; border-bottom: 1px solid var(--color-accent); border-right: 1px solid var(--color-accent); border-radius: 0 0 10px 0; color: var(--color-accent); font: 12px var(--font-mono); padding-bottom: 7px; }
+.workflow-return > span { font-size: 20px; margin-right: 8px; }
+.workflow-stages p, .workflow-note { color: var(--color-ink-soft); font-size: 14px; line-height: 1.6; }
+.workflow-note { margin-top: 22px; max-width: 680px; }
+@media (max-width: 700px) { .workflow-stages { grid-template-columns: 1fr; gap: 26px; } }
 .install { display: grid; grid-template-columns: 1fr 1.25fr; gap: 90px; padding-block: 60px 90px; border-top: 1px solid #071a2e25; }
 .install-intro > p:not(.eyebrow) { color: var(--color-ink-soft); font-size: 15px; margin-top: 25px; }
 .install-steps { list-style: none; padding: 0; margin: 0; counter-reset: install; }

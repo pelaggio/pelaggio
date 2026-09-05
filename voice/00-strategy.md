@@ -7,11 +7,27 @@ plane for coding agents**. Describe the work a user can delegate and what comes
 back for them to inspect. Use the category to orient technical evaluators and
 readers comparing Pelaggio with adjacent tooling.
 
-The public story follows a charter through delivery: the intended outcome, the
-change, the checks and review, and the decision to land. Review contributes evidence
-to that journey. Keep concrete operating behavior beside its limits; “guarantees”
-must name the property and conditions. Use real deliveries with attributed records
-and visible gaps. Richer handoffs that are still being built belong in the roadmap.
+The [brand campaign brief](../docs/brand/README.md#campaign-brief) owns the audience,
+problem, offer, and evidence boundaries. The supporting line is **Your process,
+across pull requests.** Lead with the developer's repeated coordination work and
+explain how their instructions and criteria become reusable. Show what they supply,
+what returns, and where they still need to intervene.
+
+Use “codify your judgment” only with a concrete explanation: write the working
+instructions, review criteria, and check commands into the repository. Workers
+exercise judgment; the harness runs the process and enforces deterministic gates.
+Avoid suggesting that it learns the developer's preferences automatically from past
+pull requests, enforces arbitrary prose, or eliminates supervision.
+
+When describing orchestration, draw the work and its review/revision paths. Name
+the agents assigned to steps separately from the process. Use concrete recorded
+measurements; avoid “graph-powered,” automatic optimization, or unsupported model
+rankings. The [brand brief](../docs/brand/README.md#show-the-process) defines the scope.
+
+Checks support a specific result. Keep the full evidence accessible without making
+the number of passing checks the campaign's central benefit. Use real deliveries
+with attributed records and visible gaps. Richer handoffs still being built belong
+in the roadmap. “Guarantees” must name the property and conditions.
 
 Public behavior and trust claims lead to
 [`../docs/trust/limitations.md`](../docs/trust/limitations.md), where defaults,
@@ -23,12 +39,10 @@ it, recovers it, and moves it toward a delivery outcome.
 
 ## Core promise
 
-Pelaggio extends a developer's reach **without requiring them to surrender
-control**. Reach is the amount of consequential work a person can responsibly set
-in motion beyond their immediate attention. Autonomy without trustworthy bounds is
-exposure, not reach; observability without delegated execution is monitoring, not
-reach. Pelaggio combines delegated execution with the evidence and controls needed
-to trust it.
+Let a developer reuse their way of working across delegated changes. Explain the
+setup honestly: someone has to articulate the criteria, choose the checks, and
+update the process when it falls short. More available attention is the desired
+benefit; claims about time saved or fewer interventions require measured evidence.
 
 ## Trust model
 

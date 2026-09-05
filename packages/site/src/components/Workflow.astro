@@ -1,0 +1,18 @@
+---
+const stages = [
+  { work: "Plan", review: "Shakedown", note: "Review the approach and revise it." },
+  { work: "Implement", review: "Shakedown", note: "Review the change and work through findings." },
+  { work: "Ship", review: "PR review", note: "Review and revise on the pull request, when configured." },
+];
+---
+<figure class="workflow" aria-labelledby="workflow-caption">
+  <figcaption id="workflow-caption">The work includes review and revision.</figcaption>
+  <ol class="workflow-stages">
+    {stages.map(stage => <li>
+      <div class="workflow-pair"><strong>{stage.work}</strong><span aria-hidden="true">→</span><strong>{stage.review}</strong></div>
+      <div class="workflow-return" aria-hidden="true"><span>↶</span> revise</div>
+      <p>{stage.note}</p>
+    </li>)}
+  </ol>
+  <p class="workflow-note">Planning depends on item scope. PR review needs repository setup; the demos below delivered to local git remotes.</p>
+</figure>
