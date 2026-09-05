@@ -98,7 +98,10 @@ request only; it does not mutate the harness-owned candidate class. Full taxonom
 The `prefer` diversity policy records the run as softened whenever the author,
 reviewers, and Judge span fewer than three distinct providers (a same-provider
 degrade). It reflects the configured seats, not a runtime credential probe. Each run
-writes an atomic, unbound `.dev/review-records/<run-id>.json`; PR targets append the
+writes an atomic, unbound `.dev/review-records/<run-id>.json` under the main worktree,
+so the structured record and its repo-relative decision source survive claim-worktree
+removal. Historical records lost before this root correction remain unavailable;
+#788 documents the inspected references without reconstructing evidence. PR targets append the
 same deterministic record to the PR body. This is a review record, not an
 identity-bound attestation.
 
@@ -1129,3 +1132,5 @@ reduced to non-sensitive codes and source facts.
 The local PR-review answer/revision loop, capture commands, applicability limits and
 SARIF/site handoff are documented in [PR review clarification](agent-context/pr-review-clarification.md).
 An operator clarification is task input; it never grants permission to proceed or clears a review blocker.
+
+Authoring attempt identities allocate under the same main-worktree namespace as durable review records. On an existing linked-checkout resume, previously issued local counters contribute a read-only floor before any new allocation. Unreadable prior counters preserve state and refuse allocation until access is restored; legacy counters and receipt/effect writers are unchanged. This supports completed prior allocations, not concurrent old-version allocators still writing separate namespaces.

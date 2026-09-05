@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -158,4 +158,69 @@ describe("attempt-identity", () => {
 		for (const name of readdirSync(dir)) if (/^\d+\.json$/.test(name)) rmSync(join(dir, name), { force: true });
 		assert.equal(allocateAttempt(repo, item), highest + 1, `reissued a used attempt after pruning; issued ${got.join(", ")}`);
 	});
+});
+
+describe("attempt identity root transition (#788)", () => {
+	it("uses the greater durable floor and never writes or deletes the previous root", () => {
+		const canonical = join(repo, "canonical");
+		const previous = join(repo, "previous");
+		const item = "upgrade";
+		for (let n = 1; n <= 4; n++) assert.equal(allocateAttempt(previous, item), n);
+		rmSync(join(attemptsDir(previous), item, "4.json"));
+		const before = readdirSync(attemptsDir(previous), { recursive: true }).sort();
+		assert.equal(allocateAttempt(canonical, item, previous), 5);
+		assert.equal(currentAttempt(previous, item), 4);
+		assert.deepEqual(readdirSync(attemptsDir(previous), { recursive: true }).sort(), before);
+		assert.equal(allocateAttempt(canonical, item, previous), 6, "canonical high-water wins after migration");
+		assert.equal(allocateAttempt(canonical, item, canonical), 7, "same root does not double allocate");
+		assert.equal(allocateAttempt(canonical, item, join(repo, "absent")), 8, "absent previous root adds no floor");
+		assert.equal(currentAttempt(join(repo, "absent"), item), 0);
+		assert.equal(allocateAttempt(canonical, "new-item", previous), 1, "unrelated legacy item adds no floor");
+	});
+	it("allocates distinct canonical identities concurrently above the same legacy floor", async () => {
+		const canonical = join(repo, "parallel-canonical");
+		const previous = join(repo, "parallel-previous");
+		const item = "upgrade";
+		for (let n = 1; n <= 3; n++) allocateAttempt(previous, item);
+		const file = join(repo, "allocate-upgrade.mts");
+		writeFileSync(
+			file,
+			`import {allocateAttempt} from ${JSON.stringify(join(import.meta.dirname, "..", "attempt-identity.ts"))}; process.stdout.write(String(allocateAttempt(${JSON.stringify(canonical)},${JSON.stringify(item)},${JSON.stringify(previous)})));`,
+		);
+		const run = promisify(execFile);
+		const values = (await Promise.all([run("npx", ["tsx", file]), run("npx", ["tsx", file])])).map((r) => Number(r.stdout));
+		assert.deepEqual(
+			values.sort((a, b) => a - b),
+			[4, 5],
+		);
+		assert.equal(currentAttempt(previous, item), 3);
+	});
+});
+
+describe("required previous-root floor reads (#788)", () => {
+	for (const surface of ["records", "marks", "legacy"] as const)
+		it(`preserves state when ${surface} is unreadable`, (t) => {
+			if (process.getuid?.() === 0) {
+				t.skip("root bypasses filesystem mode denial");
+				return;
+			}
+			const previous = join(repo, `denied-${surface}`);
+			const canonical = join(repo, `target-${surface}`);
+			const item = "upgrade";
+			allocateAttempt(previous, item);
+			const dir = join(attemptsDir(previous), item);
+			const path = surface === "records" ? dir : join(dir, surface === "marks" ? ".marks" : ".high-water");
+			if (surface === "legacy") writeFileSync(path, "4\n");
+			chmodSync(path, 0);
+			try {
+				assert.throws(
+					() => allocateAttempt(canonical, item, previous),
+					(error) => error instanceof Error && (error.cause as NodeJS.ErrnoException)?.code === "EACCES" && /existing artifacts remain intact.*resume item upgrade/.test(error.message),
+				);
+				assert.equal(existsSync(attemptsDir(canonical)), false, "refusal must happen before canonical mutation");
+			} finally {
+				chmodSync(path, surface === "legacy" ? 0o600 : 0o700);
+			}
+			assert.equal(currentAttempt(previous, item), surface === "legacy" ? 4 : 1);
+		});
 });
