@@ -18,6 +18,7 @@ const ref = (def: string) => ajv.compile({ $ref: `${schema.$id}#/$defs/${def}` }
 const validators = {
 	workContract: ref("workContract"),
 	startRunRequest: ref("startRunRequest"),
+	runIdRequest: ref("runIdRequest"),
 	runSnapshot: ref("runSnapshot"),
 	event: ref("event"),
 	metrics: ref("metrics"),
@@ -29,6 +30,10 @@ const validators = {
 const parsers = {
 	workContract: parseWorkContract,
 	startRunRequest: parseStartRunRequest,
+	runIdRequest: (value: unknown) => {
+		const valid = validators.runIdRequest(value);
+		return valid ? { ok: true as const, value } : { ok: false as const };
+	},
 	runSnapshot: parseRunSnapshot,
 	event: parseRunEvent,
 	metrics: parseMetrics,
@@ -67,6 +72,8 @@ describe("local autopilot JSON Schema 2020-12", () => {
 	it("rejects invalid fixtures; parser agrees", () => {
 		const pairs: Array<[keyof typeof validators, string]> = [
 			["startRunRequest", "invalid-start-unknown-field.json"],
+			["runSnapshot", "invalid-snapshot-paused-without-reason.json"],
+			["runSnapshot", "invalid-snapshot-ready-with-blocker.json"],
 			["runSnapshot", "invalid-snapshot-accepted.json"],
 			["metrics", "invalid-metrics-path.json"],
 			["localConfig", "invalid-config-effect.json"],

@@ -1658,7 +1658,7 @@
 			]
 		},
 		{
-			"id": "CTR-0024",
+			"id": "CTR-0025",
 			"kind": "realization",
 			"slug": "local-autopilot-contract-v0",
 			"statement": "Local Autopilot Contract v0 schemas, fail-closed parsers, and lifecycle validator.",
@@ -2072,22 +2072,22 @@
 			"to": "CLM-0023"
 		},
 		{
-			"from": "CTR-0024",
+			"from": "CTR-0025",
 			"relation": "derived-from",
 			"to": "DEC-0022"
 		},
 		{
-			"from": "CTR-0024",
+			"from": "CTR-0025",
 			"relation": "implements",
 			"to": "CLM-0023"
 		},
 		{
-			"from": "CTR-0024",
+			"from": "CTR-0025",
 			"relation": "implements",
 			"to": "CON-0031"
 		},
 		{
-			"from": "CTR-0024",
+			"from": "CTR-0025",
 			"relation": "implements",
 			"to": "CON-0032"
 		},
@@ -2732,7 +2732,7 @@
 			"CLM-0023",
 			"CON-0031",
 			"CON-0032",
-			"CTR-0024",
+			"CTR-0025",
 			"DEC-0022"
 		]
 	},

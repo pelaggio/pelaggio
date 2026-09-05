@@ -100,6 +100,18 @@
 				"nonInteractive": { "type": "boolean" }
 			}
 		},
+		"runIdRequest": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["schemaVersion", "runId"],
+			"properties": {
+				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
+				"runId": { "$ref": "#/$defs/opaqueId" }
+			}
+		},
+		"getRunRequest": { "$ref": "#/$defs/runIdRequest" },
+		"continueRunRequest": { "$ref": "#/$defs/runIdRequest" },
+		"cancelRunRequest": { "$ref": "#/$defs/runIdRequest" },
 		"problem": {
 			"type": "object",
 			"additionalProperties": true,
@@ -185,7 +197,40 @@
 				"artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
 				"problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } },
 				"metrics": { "$ref": "#/$defs/metrics" }
-			}
+			},
+			"allOf": [
+				{
+					"if": { "properties": { "state": { "const": "paused" } }, "required": ["state"] },
+					"then": {
+						"properties": { "pauseReason": {}, "disposition": {} },
+						"required": ["pauseReason"],
+						"not": { "properties": { "disposition": {} }, "required": ["disposition"] }
+					},
+					"else": { "not": { "properties": { "pauseReason": {} }, "required": ["pauseReason"] } }
+				},
+				{
+					"if": { "properties": { "state": { "const": "completed" } }, "required": ["state"] },
+					"then": { "properties": { "disposition": {} }, "required": ["disposition"] },
+					"else": { "not": { "properties": { "disposition": {} }, "required": ["disposition"] } }
+				},
+				{
+					"if": { "properties": { "disposition": { "const": "ready_for_review" } }, "required": ["disposition"] },
+					"then": {
+						"properties": {
+							"problems": {
+								"type": "array",
+								"not": {
+									"contains": {
+										"type": "object",
+										"properties": { "type": { "enum": ["config", "decision", "verification", "harness"] } },
+										"required": ["type"]
+									}
+								}
+							}
+						}
+					}
+				}
+			]
 		},
 		"event": {
 			"type": "object",

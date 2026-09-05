@@ -55,6 +55,15 @@ export interface StartRunRequest {
 	nonInteractive: boolean;
 }
 
+export interface RunIdRequest {
+	schemaVersion: 1;
+	runId: OpaqueId;
+}
+
+export type GetRunRequest = RunIdRequest;
+export type ContinueRunRequest = RunIdRequest;
+export type CancelRunRequest = RunIdRequest;
+
 export interface Problem {
 	schemaVersion: 1;
 	type: ProblemType;
