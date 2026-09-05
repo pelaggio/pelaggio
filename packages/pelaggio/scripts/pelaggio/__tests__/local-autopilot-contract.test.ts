@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { applyTransition, canTransition, nextState } from "../local-autopilot/lifecycle.js";
 import { parseArtifact, parseLocalConfig, parseMetrics, parseProblem, parseRunEvent, parseRunSnapshot, parseStartRunRequest, parseWorkContract } from "../local-autopilot/parse.js";
 import { encodeJsonStdout, looksLikeAnsi } from "../local-autopilot/transport.js";
-import { PROTOCOL_PROBLEM_TYPES, type RunSnapshot } from "../local-autopilot/types.js";
+import { DISPOSITIONS, type Disposition, PROTOCOL_PROBLEM_TYPES, type RunSnapshot } from "../local-autopilot/types.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures/local-autopilot");
 const load = (name: string): unknown => JSON.parse(readFileSync(join(FIXTURES, name), "utf8"));
@@ -96,12 +96,28 @@ describe("local autopilot contract parsers", () => {
 });
 
 describe("local autopilot lifecycle", () => {
-	const running = (): RunSnapshot => {
-		const parsed = parseRunSnapshot(load("snapshot-running.json"));
+	const loadSnapshot = (name: string): RunSnapshot => {
+		const parsed = parseRunSnapshot(load(name));
 		assert.equal(parsed.ok, true);
 		if (!parsed.ok) throw new Error("fixture");
 		return parsed.value;
 	};
+	const running = (): RunSnapshot => loadSnapshot("snapshot-running.json");
+	const paused = (): RunSnapshot => loadSnapshot("snapshot-paused-decision.json");
+	const completed = (): RunSnapshot => loadSnapshot("snapshot-ready-for-review.json");
+	const queued = (): RunSnapshot => ({ ...running(), state: "queued" });
+	const verifiedRunning = (): RunSnapshot => ({
+		...running(),
+		artifacts: [
+			{
+				kind: "verification",
+				uri: "file:.pelaggio/verification.json",
+				mediaType: "application/json",
+				digest: { algorithm: "sha256" as const, value: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" },
+			},
+		],
+	});
+	const conflictingDispositions = DISPOSITIONS.filter((disposition): disposition is Exclude<Disposition, "cancelled"> => disposition !== "cancelled");
 
 	it("allows the documented transitions and no others", () => {
 		assert.equal(canTransition("queued", "start"), true);
@@ -131,17 +147,7 @@ describe("local autopilot lifecycle", () => {
 	});
 
 	it("completes to ready_for_review only without blocking findings", () => {
-		const verified = {
-			...running(),
-			artifacts: [
-				{
-					kind: "verification",
-					uri: "file:.pelaggio/verification.json",
-					mediaType: "application/json",
-					digest: { algorithm: "sha256" as const, value: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" },
-				},
-			],
-		};
+		const verified = verifiedRunning();
 		const ok = applyTransition(verified, "complete", { updatedAt: "2026-09-04T12:01:00.000Z", disposition: "ready_for_review" });
 		assert.equal(ok.ok, true);
 		if (!ok.ok) return;
@@ -153,12 +159,54 @@ describe("local autopilot lifecycle", () => {
 		assert.equal(blocked.ok, false);
 	});
 
-	it("cancel yields cancelled", () => {
-		const result = applyTransition(running(), "cancel", { updatedAt: "2026-09-04T12:02:00.000Z" });
-		assert.equal(result.ok, true);
-		if (!result.ok) return;
-		assert.equal(result.value.state, "completed");
-		assert.equal(result.value.disposition, "cancelled");
+	it("complete still honors the supplied disposition", () => {
+		const at = "2026-09-04T12:01:00.000Z";
+		const ready = applyTransition(verifiedRunning(), "complete", { updatedAt: at, disposition: "ready_for_review" });
+		assert.equal(ready.ok, true);
+		if (!ready.ok) return;
+		assert.equal(ready.value.state, "completed");
+		assert.equal(ready.value.disposition, "ready_for_review");
+
+		for (const disposition of ["failed", "blocked", "budget_exhausted", "cancelled"] as const) {
+			const result = applyTransition(running(), "complete", { updatedAt: at, disposition });
+			assert.equal(result.ok, true, disposition);
+			if (!result.ok) continue;
+			assert.equal(result.value.state, "completed");
+			assert.equal(result.value.disposition, disposition);
+		}
+	});
+
+	it("cancel yields cancelled from queued, running, and paused even with a conflicting disposition", () => {
+		const at = "2026-09-04T12:02:00.000Z";
+		for (const snapshot of [queued(), running(), paused()]) {
+			const omitted = applyTransition(snapshot, "cancel", { updatedAt: at });
+			assert.equal(omitted.ok, true, `${snapshot.state} without override`);
+			if (!omitted.ok) continue;
+			assert.equal(omitted.value.state, "completed");
+			assert.equal(omitted.value.disposition, "cancelled");
+			assert.equal(omitted.value.pauseReason, undefined);
+
+			for (const disposition of conflictingDispositions) {
+				const result = applyTransition(snapshot, "cancel", { updatedAt: at, disposition });
+				assert.equal(result.ok, true, `${snapshot.state} + ${disposition}`);
+				if (!result.ok) continue;
+				assert.equal(result.value.state, "completed");
+				assert.equal(result.value.disposition, "cancelled");
+				assert.equal(result.value.pauseReason, undefined);
+			}
+		}
+	});
+
+	it("completed cannot cancel", () => {
+		const result = applyTransition(completed(), "cancel", {
+			updatedAt: "2026-09-04T12:03:00.000Z",
+			disposition: "cancelled",
+		});
+		assert.equal(result.ok, false);
+		if (result.ok) return;
+		assert.equal(result.problem.code, "illegal-transition");
+		assert.equal(completed().state, "completed");
+		assert.equal(completed().disposition, "ready_for_review");
 	});
 });
 

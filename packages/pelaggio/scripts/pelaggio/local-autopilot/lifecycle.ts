@@ -56,7 +56,8 @@ export function applyTransition(
 ): ParseResult<RunSnapshot> {
 	const next = nextState(snapshot.state, event);
 	if (!next.ok) return next;
-	const disposition = next.value === "completed" ? (update.disposition ?? TERMINAL_DISPOSITION_FOR[event]) : undefined;
+	// Forced terminals (cancel → cancelled) win over an optional override.
+	const disposition = next.value === "completed" ? (TERMINAL_DISPOSITION_FOR[event] ?? update.disposition) : undefined;
 	const pauseReason = next.value === "paused" ? update.pauseReason : undefined;
 	if (next.value === "paused" && !pauseReason) {
 		return { ok: false, problem: protocolProblem("pause-reason", "pausing requires a pauseReason") };
