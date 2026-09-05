@@ -1,0 +1,28 @@
+{
+	"name": "@pelaggio/site",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Public marketing site for pelaggio.",
+	"license": "AGPL-3.0-or-later",
+	"type": "module",
+	"scripts": {
+		"dev": "astro dev",
+		"build": "tsx scripts/gen-icons.ts && astro build",
+		"preview": "astro preview",
+		"check:types": "astro check",
+		"test": "tsx --test --test-timeout=60000 __tests__/*.test.ts"
+	},
+	"dependencies": {
+		"@fontsource-variable/outfit": "^5.2.8",
+		"@tailwindcss/vite": "^4.3.3",
+		"astro": "^7.1.6",
+		"tailwindcss": "^4.3.3"
+	},
+	"devDependencies": {
+		"@astrojs/check": "^0.9.10",
+		"@resvg/resvg-js": "^2.6.2",
+		"@types/node": "^24.13.3",
+		"tsx": "^4.23.1",
+		"typescript": "^6.0.3"
+	}
+}

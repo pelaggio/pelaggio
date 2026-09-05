@@ -6,10 +6,11 @@ Keep this file short. Put always-needed rules here; put detailed architecture, w
 
 ## Orientation
 
-- Workspace: pnpm monorepo with three packages.
+- Workspace: pnpm monorepo with four packages.
 - `packages/pelaggio/`: published CLI package `pelaggio`. TypeScript runs through `tsx`; there is no build step.
 - `packages/server/`: private Hono control-plane daemon for supervised pelaggio runs.
 - `packages/web/`: private Astro/React static UI served by the daemon under `/ui/`.
+- `packages/site/`: private Astro static marketing site. Not served by the daemon.
 - Root `.claude/skills/`: canonical workflow skills. They are copied into the published package during `prepack`.
 - Root `.agents/skills`: Codex-visible alias for the same skills.
 - Root `.claude-templates/`: consumer bootstrap templates.

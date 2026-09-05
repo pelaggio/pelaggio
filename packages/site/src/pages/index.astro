@@ -1,0 +1,156 @@
+---
+import CopyCommand from "../components/CopyCommand.astro";
+import Mark from "../components/Mark.astro";
+import Base from "../layouts/Base.astro";
+import { FIT_PROMPT, INIT_COMMAND, PIPELINE_STEPS, REPO_URL, RUN_COMMAND } from "../lib/copy.ts";
+
+const facts = [
+	{
+		title: "Own worktree",
+		body: "Each item runs on its own branch, isolated from main and from other work.",
+	},
+	{
+		title: "Pull request by default",
+		body: "Human review is the shipped path. Direct-push to main is an explicit opt-in.",
+	},
+	{
+		title: "Bring your own agent",
+		body: "Claude Code, Codex, Grok Build, or OpenCode. Model, budget, and effort are config.",
+	},
+	{
+		title: "On your machine",
+		body: "No telemetry. Known secrets are scrubbed from prompts and logs.",
+	},
+] as const;
+
+const btn =
+	"inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-[color,background-color,box-shadow,transform,opacity] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg active:scale-[0.96] h-12 min-h-12 px-5 text-base";
+---
+
+<Base>
+	<div class="flex min-h-dvh flex-col">
+		<a
+			href="#main"
+			class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-surface focus:px-3 focus:py-2 focus:text-sm focus:text-ink focus:shadow-border"
+		>
+			Skip to content
+		</a>
+
+		<header class="px-5 sm:px-8">
+			<div class="mx-auto flex h-16 max-w-5xl items-center justify-between gap-4">
+				<a href="/" class="flex items-center gap-2.5 text-ink" aria-label="Pelaggio home">
+					<Mark class="size-8" />
+					<span class="text-sm font-semibold tracking-tight">Pelaggio</span>
+				</a>
+				<a href={REPO_URL} class="inline-flex min-h-11 items-center gap-1.5 text-sm font-medium text-ink-soft transition-colors duration-150 hover:text-ink">
+					GitHub
+					<svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+						<path d="M7 17 17 7M7 7h10v10" stroke-linecap="round" stroke-linejoin="round"></path>
+					</svg>
+				</a>
+			</div>
+		</header>
+
+		<main id="main" class="flex-1 px-5 sm:px-8">
+			<div class="mx-auto max-w-5xl">
+				<section class="grid items-end gap-10 pb-16 pt-10 sm:gap-12 sm:pb-24 sm:pt-16 lg:grid-cols-[minmax(0,36rem)_1fr] lg:gap-16 lg:pt-20">
+					<div class="flex flex-col gap-8 sm:gap-10">
+						<div>
+							<p class="font-mono text-xs font-medium uppercase tracking-widest text-accent">peh-LAH-joh</p>
+							<h1 class="mt-4 text-display font-semibold leading-tight tracking-tighter text-ink">Extend how much one developer can ship.</h1>
+							<p class="mt-6 max-w-xl text-base leading-relaxed text-ink-soft">
+								Pelaggio is a CLI that runs each work item through a fixed pipeline, in its own git worktree. Bring your own agent. Work ships as a pull
+								request.
+							</p>
+						</div>
+
+						<div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+							<a class:list={[btn, "bg-accent text-on-accent shadow-border hover:bg-accent/90"]} href={REPO_URL}>
+								View the source
+								<svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+									<path d="M7 17 17 7M7 7h10v10" stroke-linecap="round" stroke-linejoin="round"></path>
+								</svg>
+							</a>
+							<a class:list={[btn, "bg-transparent text-ink shadow-border hover:bg-surface hover:shadow-border-hover"]} href="#install">Install</a>
+						</div>
+					</div>
+
+					<div class="hidden justify-self-end lg:block">
+						<Mark class="size-44 xl:size-52" decorative />
+					</div>
+				</section>
+
+				<section aria-labelledby="pipeline-heading" class="pb-16 sm:pb-24">
+					<h2 id="pipeline-heading" class="sr-only">Pipeline</h2>
+					<ol class="grid gap-px overflow-hidden rounded-2xl bg-ink/10 shadow-border sm:grid-cols-2 lg:grid-cols-6">
+						{
+							PIPELINE_STEPS.map((step, i) => (
+								<li class="flex min-h-11 items-center gap-3 bg-surface px-4 py-3 sm:min-h-24 sm:flex-col sm:items-start sm:justify-center sm:gap-1 sm:py-5">
+									<span class="font-mono text-xs tabular-nums text-ink-soft">{String(i + 1).padStart(2, "0")}</span>
+									<span class="font-mono text-sm text-ink">{step}</span>
+								</li>
+							))
+						}
+					</ol>
+				</section>
+
+				<section aria-labelledby="facts-heading" class="pb-16 sm:pb-24">
+					<h2 id="facts-heading" class="sr-only">How it works</h2>
+					<dl class="grid gap-px overflow-hidden rounded-2xl bg-ink/10 shadow-border sm:grid-cols-2">
+						{
+							facts.map((fact) => (
+								<div class="bg-surface px-5 py-6 sm:px-6 sm:py-7">
+									<dt class="text-sm font-semibold tracking-tight text-ink">{fact.title}</dt>
+									<dd class="mt-2 text-sm leading-relaxed text-ink-soft">{fact.body}</dd>
+								</div>
+							))
+						}
+					</dl>
+				</section>
+
+				<section id="install" aria-labelledby="install-heading" class="pb-20 sm:pb-28">
+					<div class="max-w-xl">
+						<h2 id="install-heading" class="text-section font-semibold tracking-tight text-ink">Start in the repo</h2>
+						<p class="mt-3 text-base leading-relaxed text-ink-soft">
+							Needs Node 20.6+, a git repository, and at least one agent CLI signed in. <code class="font-mono text-sm text-ink">gh</code> is required to
+							open pull requests. Init writes the scaffold. Your agent fits it to the project, and you read the diff.
+						</p>
+					</div>
+
+					<ol class="mt-10 max-w-xl space-y-10">
+						<li>
+							<p class="text-sm font-semibold tracking-tight text-ink">Scaffold</p>
+							<p class="mt-1 text-sm leading-relaxed text-ink-soft">
+								Writes the pipeline skills, a blank quality rubric, a sample roadmap, and <code class="font-mono text-ink">.pelaggio.yml</code>.
+							</p>
+							<CopyCommand class="mt-4" command={INIT_COMMAND} />
+						</li>
+						<li>
+							<p class="text-sm font-semibold tracking-tight text-ink">Fit</p>
+							<p class="mt-1 text-sm leading-relaxed text-ink-soft">
+								Paste this to your agent in the repo. It fills those files from the code. Later changes are the same files, edited again.
+							</p>
+							<CopyCommand class="mt-4" command={FIT_PROMPT} wrap label="Copy the fit prompt" />
+						</li>
+						<li>
+							<p class="text-sm font-semibold tracking-tight text-ink">One cycle</p>
+							<p class="mt-1 text-sm leading-relaxed text-ink-soft">Watch the first item go through the pipeline.</p>
+							<CopyCommand class="mt-4" command={RUN_COMMAND} />
+						</li>
+					</ol>
+				</section>
+			</div>
+		</main>
+
+		<footer class="border-t border-ink/10 px-5 py-8 sm:px-8">
+			<div class="mx-auto flex max-w-5xl flex-col gap-3 text-sm text-ink-soft sm:flex-row sm:items-center sm:justify-between">
+				<p>
+					<span class="font-medium text-ink">Pelaggio</span>
+					<span class="mx-2 text-ink/25" aria-hidden="true">·</span>
+					AGPL-3.0
+				</p>
+				<p>© 2026 Chris Horne</p>
+			</div>
+		</footer>
+	</div>
+</Base>

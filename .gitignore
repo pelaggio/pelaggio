@@ -16,4 +16,8 @@ packages/web/dist/
 packages/web/.astro/
 packages/web/public/icon-*.png
 packages/web/public/apple-touch-icon.png
+packages/site/dist/
+packages/site/.astro/
+packages/site/public/icon-*.png
+packages/site/public/apple-touch-icon.png
 docs/assurance/generated/explorer.html

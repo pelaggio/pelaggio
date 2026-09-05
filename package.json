@@ -10,7 +10,7 @@
 		"pelaggio": "pnpm --filter pelaggio pelaggio",
 		"test": "pnpm -r test",
 		"test:ci": "bash ci/test-realization-mutation.sh && bash ci/test-assurance.test.sh && bash ci/test-assurance.sh",
-		"typecheck": "pnpm --filter pelaggio typecheck && pnpm --filter @pelaggio/server typecheck && pnpm --filter @pelaggio/web check:types",
+		"typecheck": "pnpm --filter pelaggio typecheck && pnpm --filter @pelaggio/server typecheck && pnpm --filter @pelaggio/web check:types && pnpm --filter @pelaggio/site check:types",
 		"typecheck:ratchet": "node --import tsx ci/typecheck-ratchet.ts",
 		"check": "biome check",
 		"check:skills": "pnpm --filter pelaggio check:skills",

@@ -46,6 +46,7 @@ jobs:
       - run: pnpm typecheck:ratchet
         if: github.event_name != 'pull_request'
       - run: pnpm --filter @pelaggio/web build
+      - run: pnpm --filter @pelaggio/site build
       - run: pnpm check
       - run: pnpm check:skills
       - run: pnpm check:trust
