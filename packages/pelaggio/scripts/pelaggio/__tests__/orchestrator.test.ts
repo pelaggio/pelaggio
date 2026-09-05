@@ -2953,7 +2953,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 					main,
 					runReviewGate: async (opts) => {
 						seenPriors = opts.priorGateRecords;
-						return { ...(await passGate()), recurrenceFindings: [] };
+						return { ...(await passGate()), recurrenceFindings: [], participation: { configuredReviewers: ["codex", "grok"], configuredVerifier: "codex", labels: ["standard"], iterations: [{ reviewReturned: [true, false] }] } };
 					},
 				}),
 			},
@@ -2964,6 +2964,7 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		const stored = readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD);
 		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "fleet");
 		assert.deepEqual(stored.recurrenceFindings, []);
+		assert.deepEqual(stored.participation, { configuredReviewers: ["codex", "grok"], configuredVerifier: "codex", labels: ["standard"], iterations: [{ reviewReturned: [true, false] }] });
 	});
 
 	it("persists block and crash outcomes fail-closed", async (t) => {
