@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { AuthoringReviewConfig, ReviewSlot } from "../config.js";
+import { REVIEW_RESOURCE_CAPACITIES, REVIEW_SCHEDULING_PROFILES } from "../providers/review-resources.js";
 import { makeSecretScrubber } from "../secret-hygiene.js";
 import type { ParkSignal, ProviderName, ReviewOutcome, StepResult } from "../types.js";
+import { buildDiscoveryFleetPlan, executeDiscoveryFleet } from "./discovery-fleet.js";
 import {
 	type AuthoringReviewFinding,
 	type ClassificationContextBase,
@@ -252,8 +254,33 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		const phaseReservation = configuredReviewers.length * 5 + 5;
 		if (cost + phaseReservation > policy.budgetCap) return withFloor({ outcome: "budget", diversity, passes, survivors: carried, notes, cost });
 		const reviewerJobs = configuredReviewers.map((slot) => ({ slot, parkSignal: childSignal() }));
-		const settled = await Promise.allSettled(reviewerJobs.map(({ slot, parkSignal }) => options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal })));
-		for (const job of reviewerJobs) if (job.parkSignal.parked) Object.assign(options.parkSignal, job.parkSignal);
+		const fleetPlan = buildDiscoveryFleetPlan({
+			cells: reviewerJobs.map((job, index) => ({ key: `${pass}:${index}`, group: 0, provider: job.slot.provider, payload: job })),
+			profiles: REVIEW_SCHEDULING_PROFILES,
+			capacities: REVIEW_RESOURCE_CAPACITIES,
+			maxConcurrent: Math.max(1, configuredReviewers.length),
+		});
+		const mergeParking = (): void => {
+			// Configured-order winner, including absent optional metadata, independent of completion order.
+			const winner = reviewerJobs.filter((job) => job.parkSignal.parked).at(-1)?.parkSignal;
+			if (!winner) return;
+			delete options.parkSignal.rateLimit;
+			Object.assign(options.parkSignal, winner);
+		};
+		const settled = await executeDiscoveryFleet({
+			plan: fleetPlan,
+			launch: ({ payload: { slot, parkSignal } }) => {
+				if (options.parkSignal.parked) return Promise.reject(new Error("reviewer not started: review parked"));
+				return options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal });
+			},
+			shouldStop: ({ payload }, result) => {
+				if (result.status === "fulfilled" && result.value.subtype === "error_rate_limit" && !payload.parkSignal.parked) {
+					Object.assign(payload.parkSignal, { parked: true, limitType: "rate_limit", triggerWorker: payload.slot.id, rateLimit: { provider: payload.slot.provider, window: null } });
+				}
+				mergeParking();
+				return options.parkSignal.parked;
+			},
+		});
 		const reviewerRecords: ReviewPassRecord["reviewers"] = [];
 		// Carried candidates already have harness-owned class + classification reason.
 		const discovered: Array<{ finding: AuthoringReviewFinding; source: string }> = carried.map((candidate) => ({ finding: candidate.finding, source: "carried" }));
@@ -262,7 +289,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			if (!job) return;
 			const slot = job.slot;
 			const reviewerIdentity = identity("reviewer", slot, pass);
-			if (result.status === "rejected") {
+			if (result.status !== "fulfilled") {
 				reviewerRecords.push({ identity: reviewerIdentity, ok: false, cost: 0, turns: 0, diagnostic: scrubDiagnostic(String(result.reason)), attempts: [rejectedAttempt()] });
 				return;
 			}
@@ -334,6 +361,11 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			diversity = softenDiversity(diversity, explanation);
 		}
 		if (!reviewerRecords.some((record) => record.ok)) {
+			if (options.parkSignal.parked) {
+				const retained = deduplicateCandidates(discovered, taxonomy);
+				carried = retained.filter((candidate) => candidate.finding.severity === "must-fix");
+				notes = retained.filter((candidate) => candidate.finding.severity !== "must-fix");
+			}
 			// No reviewer seat completed. Persist the pass so each seat's `diagnostic` (WHY it failed —
 			// parse error, provider crash, max-turns) survives in the review record, instead of returning
 			// `passes:[]` with no reason (the #268/#269 diagnosis black hole). Judge is skipped; carried

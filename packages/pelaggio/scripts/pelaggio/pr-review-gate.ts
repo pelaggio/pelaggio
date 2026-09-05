@@ -22,7 +22,7 @@ import { PR_REVIEW_MARKER, upsertMarkerComment } from "./github-posting.js";
 import { findGuaranteeRecurrenceAdvisory, type GuaranteeRecurrenceAdvisory, recurrenceRollsFromRecords, renderGuaranteeRecurrenceAdvisory } from "./guarantee-authority.js";
 import { parseWaitFlag, resolveParkReset } from "./outcome-classify.js";
 import { type NewPrReviewFleetGateRecord, PR_REVIEW_RECURRENCE_PATH_MAX, type PrReviewGateRecord, type PrReviewRecurrenceFinding, writePrReviewGateRecord } from "./pr-review-gate-record.js";
-import { REVIEW_RESOURCE_CAPACITIES, REVIEW_SCHEDULING_PROFILES } from "./providers/index.js";
+import { REVIEW_RESOURCE_CAPACITIES, REVIEW_SCHEDULING_PROFILES } from "./providers/review-resources.js";
 import { buildAdjudicationSourceDraft, fleetRecordDigestOf, normalizeGitPath, type PrAdjudicationSourceDraft, writeAdjudicationSourceRecord } from "./review/adjudication.js";
 import {
 	buildCarryDispositionDraft,

@@ -95,6 +95,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"review/adjudication.ts": 2,
 	"review/bench.ts": 2,
 	"review/discovery-fleet.ts": 2,
+	"providers/review-resources.ts": 2,
 	"ship/assisted-by.ts": 2,
 	"ship/auto-merge-pr.ts": 2,
 	"ship/bookkeeping.ts": 2,
