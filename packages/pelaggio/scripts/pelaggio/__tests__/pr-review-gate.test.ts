@@ -190,7 +190,7 @@ async function runCli(
 		const extra = opts.gitExtra?.(a);
 		if (extra !== undefined) return extra;
 		if (opts.diffError) throw opts.diffError;
-		if (a === `diff --name-only origin/main...${REVIEWED_SHA}`) return opts.files ?? "docs/readme.md\n";
+		if (a === `diff --no-renames --name-only origin/main...${REVIEWED_SHA}`) return opts.files ?? "docs/readme.md\n";
 		if (a === `diff origin/main...${REVIEWED_SHA}`) return opts.diff ?? "+Clarify docs.\n";
 		throw new Error(`unexpected command: ${cmd} ${a}`);
 	}) as typeof import("node:child_process").execFileSync;
@@ -315,7 +315,7 @@ describe("pr-review CLI aggregation", () => {
 		assert.match(out.calls[0].prompt, new RegExp(`Head ref: ${REVIEWED_SHA}`));
 		assert.doesNotMatch(out.calls[0].prompt, /Arguments: .*--red-team/);
 		assert.match(out.calls[1].prompt, /Arguments: .*--red-team/);
-		assert.match(out.calls[1].prompt, /--security-reasons "path:packages\/server\/src\/config\.ts, keyword:127\., keyword:host"/);
+		assert.match(out.calls[1].prompt, /--security-reasons "path:packages\/server\/src\/config\.ts"/);
 		assert.match(out.comments[0], /## Standard Review/);
 		assert.match(out.comments[0], /## Adversarial Red-Team Review/);
 		assert.match(out.comments[0], /Triggered: path:packages\/server\/src\/config\\\.ts/);
@@ -581,7 +581,7 @@ describe("pr-review CLI aggregation", () => {
 		const execFileSync = ((cmd: string, args: readonly string[], opts?: { cwd?: string }) => {
 			assert.equal(cmd, "git");
 			gitCalls.push({ args, cwd: opts?.cwd });
-			if (args.join(" ") === "diff --name-only origin/main...refs/pull/123/head") return "packages/server/src/config.ts\n";
+			if (args.join(" ") === "diff --no-renames --name-only origin/main...refs/pull/123/head") return "packages/server/src/config.ts\n";
 			if (args.join(" ") === "diff origin/main...refs/pull/123/head") return "+CONTROL_PLANE_TOKEN\n";
 			throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
 		}) as typeof import("node:child_process").execFileSync;
@@ -611,14 +611,44 @@ describe("pr-review CLI aggregation", () => {
 		assert.equal(calls[0].cwd, "/trusted/main");
 		assert.match(calls[0].prompt, /Trusted local review context/);
 		assert.match(calls[0].prompt, /supersedes the checkout-at-PR-head wording/);
-		assert.match(calls[0].prompt, /git -C \/tmp\/pr-head diff --name-only origin\/main\.\.\.refs\/pull\/123\/head/);
+		assert.match(calls[0].prompt, /git -C \/tmp\/pr-head diff --no-renames --name-only origin\/main\.\.\.refs\/pull\/123\/head/);
 		assert.deepEqual(
 			gitCalls.map((c) => ({ args: c.args.join(" "), cwd: c.cwd })),
 			[
-				{ args: "diff --name-only origin/main...refs/pull/123/head", cwd: "/tmp/pr-head" },
+				{ args: "diff --no-renames --name-only origin/main...refs/pull/123/head", cwd: "/tmp/pr-head" },
 				{ args: "diff origin/main...refs/pull/123/head", cwd: "/tmp/pr-head" },
 			],
 		);
+	});
+
+	it("preserves the source path when a guarantee holder is renamed away", async () => {
+		const calls: RunCall[] = [];
+		const source = "packages/pelaggio/scripts/pelaggio/providers/claude.ts";
+		const destination = "packages/pelaggio/scripts/pelaggio/providers/pool-label.ts";
+		const execFileSync = ((cmd: string, args: readonly string[]) => {
+			assert.equal(cmd, "git");
+			if (args.join(" ") === "diff --no-renames --name-only origin/main...HEAD") return `${source}\n${destination}\n`;
+			if (args.join(" ") === "diff origin/main...HEAD") {
+				return [`diff --git a/${source} b/${destination}`, `similarity index 100%`, `rename from ${source}`, `rename to ${destination}`].join("\n");
+			}
+			throw new Error(`unexpected command: ${cmd} ${args.join(" ")}`);
+		}) as typeof import("node:child_process").execFileSync;
+
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync,
+			runStep: async (name, prompt, stepOpts) => {
+				calls.push({ name, prompt, cwd: stepOpts.cwd, parkSignal: stepOpts.parkSignal, executionOverride: stepOpts.executionOverride });
+				return result();
+			},
+		});
+
+		assert.equal(calls.length, 2, "rename-away of a holder must convene the red-team pass");
+		assert.ok(review.securityReview?.reasons.includes(`path:${source}`));
+		assert.equal(review.securityReview?.reasons.includes(`path:${destination}`), false);
 	});
 
 	it("defaults skill arguments to --pr <n> and accepts a --preflight override", async () => {
@@ -2821,5 +2851,236 @@ describe("finding closure mode (#756)", () => {
 		});
 		assert.equal(mixed.recurrenceFindings?.length, 1);
 		assert.equal(mixed.recurrenceFindings?.[0]?.closure, "construction");
+	});
+});
+
+describe("security-review telemetry (#746)", () => {
+	const findingStd = { severity: "must-fix" as const, message: "Standard-only leak.", path: "src/a.ts", line: 10 };
+	const findingRt = { severity: "must-fix" as const, message: "Red-team-only bypass.", path: "src/a.ts", line: 20 };
+	const findingBoth = { severity: "must-fix" as const, message: "Shared finding.", path: "src/a.ts", line: 30 };
+
+	function digestOf(finding: ReviewFinding): string {
+		return createHash("sha256").update(reviewFindingFingerprint(finding), "utf8").digest("hex");
+	}
+
+	it("records an untriggered clean run with empty digest sets", async () => {
+		const review = await runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: plainDiffExec(),
+			runStep: async () => result(),
+		});
+		assert.deepEqual(review.securityReview, { triggered: false, reasons: [], standardMustFixDigests: [], redTeamMustFixDigests: [] });
+	});
+
+	it("does not fan out red-team for keyword-only diffs on a non-guarantee path", async () => {
+		const out = await runCli({
+			files: "docs/setup.md\n",
+			diff: ["diff --git a/docs/setup.md b/docs/setup.md", "@@ -1 +1 @@", "+CONTROL_PLANE_TOKEN host 127. auth"].join("\n"),
+		});
+		assert.equal(out.code, 0);
+		assert.equal(out.calls.length, 1);
+		const keywordCall = out.calls[0];
+		const keywordComment = out.comments[0];
+		assert.ok(keywordCall);
+		assert.ok(keywordComment);
+		assert.doesNotMatch(keywordCall.prompt, /Arguments: .*--red-team/);
+		assert.match(keywordComment, /no guarantee-holding paths or structured guard deltas/);
+		const stored = readPrReviewGateRecord(out.gateRecordsRoot, 123, REVIEWED_SHA);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "fleet");
+		assert.deepEqual(stored.securityReview, { triggered: false, reasons: [], standardMustFixDigests: [], redTeamMustFixDigests: [] });
+	});
+
+	it("partitions verified must-fix digests by label, de-duplicates, and sorts", async () => {
+		const queued: Array<StepResult | Error> = [
+			result({ text: report("Standard block.", [findingStd, findingBoth]) }),
+			result({ text: report("Red-team block.", [findingRt, findingBoth]) }),
+			verification([
+				{ candidateId: "C1", decision: "survives", rationale: "Std still present." },
+				{ candidateId: "C2", decision: "survives", rationale: "Overlap still present." },
+			]),
+			verification([
+				{ candidateId: "C1", decision: "survives", rationale: "Rt still present." },
+				{ candidateId: "C2", decision: "survives", rationale: "Overlap still present." },
+			]),
+		];
+		const review = await runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: securityDiffExec(),
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next, "unexpected extra runStep call");
+				if (next instanceof Error) throw next;
+				return next;
+			},
+		});
+		assert.equal(review.securityReview?.triggered, true);
+		assert.ok(review.securityReview?.reasons.includes("path:packages/server/src/config.ts"));
+		assert.equal(
+			review.securityReview?.reasons.some((reason) => reason.startsWith("keyword:")),
+			false,
+		);
+		const expectedStd = [digestOf(findingStd), digestOf(findingBoth)].sort();
+		const expectedRt = [digestOf(findingRt), digestOf(findingBoth)].sort();
+		assert.deepEqual(review.securityReview?.standardMustFixDigests, expectedStd);
+		assert.deepEqual(review.securityReview?.redTeamMustFixDigests, expectedRt);
+		assert.equal(review.securityReview?.standardMustFixDigests.includes(digestOf(findingRt)), false);
+		assert.match(review.securityReview?.standardMustFixDigests[0] ?? "", /^[a-f0-9]{64}$/);
+	});
+
+	it("omits incomplete precision telemetry instead of inventing red-team uniqueness at the digest bound", async () => {
+		for (const count of [64, 65]) {
+			const findings = Array.from({ length: count }, (_, index) => ({ ...findingStd, message: `Finding ${index}` }));
+			const overlap = findings.at(-1)!;
+			const queued = [
+				result({ text: report("Standard findings.", findings) }),
+				result({ text: report("Red-team overlap.", [overlap]) }),
+				verification(findings.map((_, index) => ({ candidateId: `C${index + 1}`, decision: "survives" as const, rationale: "Confirmed." }))),
+				verification([{ candidateId: "C1", decision: "survives", rationale: "Confirmed overlap." }]),
+			];
+			const review = await runPrReviewGate({
+				pr: "123",
+				itemId: "123",
+				reviewedSha: REVIEWED_SHA,
+				reviewDrivers: [driver("claude")],
+				verifySettings: driver("claude"),
+				policy: reviewPolicy(),
+				execFileSync: securityDiffExec(),
+				runStep: async () => {
+					const next = queued.shift();
+					assert.ok(next);
+					return next;
+				},
+			});
+			assert.equal(review.gate, "block");
+			assert.equal(review.survivorCount, count);
+			if (count === 65) assert.equal(review.securityReview, undefined, "partial label sets must not become precision evidence");
+			else {
+				assert.equal(review.securityReview?.standardMustFixDigests.length, 64);
+				assert.deepEqual(review.securityReview?.redTeamMustFixDigests, [digestOf(overlap)]);
+				assert.equal(review.securityReview?.standardMustFixDigests.includes(digestOf(overlap)), true);
+			}
+		}
+	});
+
+	it("keeps carried findings attributed to their discovery label across iterations", async () => {
+		const queued: Array<StepResult | Error> = [
+			result({ text: report("Standard block.", [findingStd]) }),
+			result({ text: report("Red-team block.", [findingRt]) }),
+			verification([{ candidateId: "C1", decision: "survives", rationale: "Std still present." }]),
+			verification([{ candidateId: "C1", decision: "survives", rationale: "Rt still present." }]),
+			result({ text: report("Standard block again.", [findingStd]) }),
+			result({ text: report("Red-team block again.", [findingRt]) }),
+			verification([
+				{ candidateId: "C1", decision: "survives", rationale: "Std still present." },
+				{ candidateId: "C2", decision: "survives", rationale: "Carried rt still present." },
+			]),
+			verification([
+				{ candidateId: "C1", decision: "survives", rationale: "Carried std still present." },
+				{ candidateId: "C2", decision: "survives", rationale: "Rt still present." },
+			]),
+		];
+		const review = await runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy({ maxPasses: 2 }),
+			execFileSync: securityDiffExec(),
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next, "unexpected extra runStep call");
+				if (next instanceof Error) throw next;
+				return next;
+			},
+		});
+		assert.deepEqual(review.securityReview?.standardMustFixDigests, [digestOf(findingStd)]);
+		assert.deepEqual(review.securityReview?.redTeamMustFixDigests, [digestOf(findingRt)]);
+		assert.equal(review.securityReview?.standardMustFixDigests.includes(digestOf(findingRt)), false);
+	});
+
+	it("does not count verifier failures as verified must-fixes", async () => {
+		const queued: Array<StepResult | Error> = [
+			result({ text: report("Standard block.", [findingStd]) }),
+			result({ text: report("Red-team block.", [findingRt]) }),
+			verification([{ candidateId: "C1", decision: "survives", rationale: "Std still present." }]),
+			result({ text: "not a verification report", ok: false, subtype: "error_invalid_output" }),
+		];
+		const review = await runPrReviewGate({
+			pr: "123",
+			itemId: "123",
+			reviewedSha: REVIEWED_SHA,
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: securityDiffExec(),
+			runStep: async () => {
+				const next = queued.shift();
+				assert.ok(next, "unexpected extra runStep call");
+				if (next instanceof Error) throw next;
+				return next;
+			},
+		});
+		assert.equal(review.securityReview?.triggered, true);
+		assert.deepEqual(review.securityReview?.standardMustFixDigests, [digestOf(findingStd)]);
+		assert.deepEqual(review.securityReview?.redTeamMustFixDigests, []);
+	});
+
+	it("carries empty digest telemetry on post-inspection budget and diversity early returns", async () => {
+		const diversity = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 20, providerDiversity: "require" }),
+			execFileSync: securityDiffExec(),
+			runStep: async () => {
+				throw new Error("should not run");
+			},
+		});
+		assert.equal(diversity.breakerReason, "provider-diversity");
+		assert.equal(diversity.securityReview?.triggered, true);
+		assert.deepEqual(diversity.securityReview?.standardMustFixDigests, []);
+		assert.deepEqual(diversity.securityReview?.redTeamMustFixDigests, []);
+		assert.ok((diversity.securityReview?.reasons.length ?? 0) > 0);
+
+		const budget = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: twoDrivers,
+			verifySettings: driver("claude"),
+			policy: reviewPolicy({ maxPasses: 1, budgetCap: 20, providerDiversity: "off" }),
+			execFileSync: securityDiffExec(),
+			runStep: async () => {
+				throw new Error("should not run");
+			},
+		});
+		assert.equal(budget.breakerReason, "budget");
+		assert.equal(budget.securityReview?.triggered, true);
+		assert.deepEqual(budget.securityReview?.standardMustFixDigests, []);
+		assert.deepEqual(budget.securityReview?.redTeamMustFixDigests, []);
+	});
+
+	it("omits telemetry on pre-inspection diff failure", async () => {
+		const review = await runPrReviewGate({
+			pr: "123",
+			reviewDrivers: [driver("claude")],
+			verifySettings: driver("claude"),
+			policy: reviewPolicy(),
+			execFileSync: (() => {
+				throw new Error("diff failed");
+			}) as typeof import("node:child_process").execFileSync,
+			runStep: async () => result(),
+		});
+		assert.equal(review.subtype, "standard:error_diff");
+		assert.equal(review.securityReview, undefined);
 	});
 });

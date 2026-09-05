@@ -492,7 +492,7 @@ the ordinary `pelaggio run` pipeline.
    so different providers overlap while one provider's cells remain serial. When
    the pool contains both Claude and Grok, every Grok cell waits for every Claude
    discovery in the iteration to finish, not merely to boot. If the deterministic classifier sees
-   security-sensitive paths or diff keywords, the CLI runs a second fresh
+   guarantee-holding paths or structured guard-config deltas, the CLI runs a second fresh
    `pr-review --red-team` discovery label and fans that label across the same
    drivers. After discovery, every driver pass with `must-fix` candidates gets its
    own sequential fresh `pr-verify` session (verifier stays scalar). The verifier
@@ -639,13 +639,17 @@ never be pushed. The CLI, not the agent, owns comment posting.
 ### Adversarial red-team pass
 
 Security-sensitive diffs get a second independent pass. The classifier is deterministic
-and conservative: it triggers on security-adjacent paths such as `.github/workflows/**`,
-server auth/config/app files, pelaggio step runners, ship/roadmap tooling, and review /
-ship / implement skills; it also triggers when added or removed diff lines (not context
-lines or diff metadata) contain terms such as `auth`,
-`token`, `secret`, `host`, `loopback`, `127.`, `localhost`, `fetch`, `exec`, `spawn`,
-`shell`, `workflow`, `prompt injection`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, or
-`CONTROL_PLANE_TOKEN`.
+and conservative: it triggers on a change to a module that holds a named security
+guarantee (`.github/workflows/**`, `infra/**`, `lefthook.yml`, `ci/guards-staged.sh`,
+server `auth`/`app`/`config`, `packages/server/scripts/**`, confinement,
+the Claude provider, the register table, the merge-gate body, the findings schema,
+`ship/**`, layering conformance, `ci/__tests__/shadow-assurance.test.ts`,
+`ci/assurance-observations.ts`, and the review / verify / ship / implement skills) or a
+structured guard-config delta (`guard:register`, `guard:layer`, or self-modification of
+the selector module). It does **not** scan changed lines for credential or bind
+keywords. This is **additive seat selection** — an extra review label convened before
+reservation and spawn — never content-based gate tiering of findings or verdicts
+(ADR-0013/0016/0017/0024).
 
 The red-team mode assumes the change is wrong and tries concrete bypasses and fail-open
 paths: hostname tricks like `127.example.com`, IPv6 loopback, wildcard binds, malformed
@@ -694,6 +698,12 @@ turns, a subtype that identifies the blocking pass (`standard:<subtype>`,
 (reviewer-set/verifier pairing), and convergence counters when multi-pass is active.
 The comment body labels each section with its driver and lists per-driver effective
 verdicts so duplicate standard/red-team sections stay attributable.
+
+Local fleet-v2 records may also carry digest-only `securityReview` telemetry: whether
+the extra label was triggered, the bounded deterministic reasons, and SHA-256 digests
+of verified surviving must-fixes observed by each label. Historical records omit the
+field; that absence is coverage state, not “not triggered”. Operator adjudications are
+outside this denominator. This is seat-selection evidence, not a verdict tier.
 
 ## Configuration
 

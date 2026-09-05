@@ -1,0 +1,16 @@
+[
+  {
+    "pr": 693,
+    "headSha": "5ef6f442f731d535188ae3861ad9c705597bf760",
+    "report": "security-review-known-693.md",
+    "sha256": "8671f4740ae9587da6583248ef2dc43cb6d01775fa88d6d257044aea8bd5855a",
+    "uniquePhrase": "traversal"
+  },
+  {
+    "pr": 700,
+    "headSha": "e1c3e2f4b063c40e2f76eca4e1397efc92b9eaa7",
+    "report": "security-review-known-700.md",
+    "sha256": "d5fa2fdd5a4fa9fb07d129abc8bfd49e48b5d6c85a04940b79b325dcffe2b39c",
+    "uniquePhrase": "Observation keys concatenate"
+  }
+]

@@ -116,6 +116,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"flow-snapshot.ts": 2,
 	"cycle-outcome.ts": 2,
 	"guarantee-authority.ts": 2,
+	"security-review-trigger.ts": 2,
 	"pick-parse.ts": 2,
 	"ship/freshness.ts": 2,
 	"continuous.ts": 2,

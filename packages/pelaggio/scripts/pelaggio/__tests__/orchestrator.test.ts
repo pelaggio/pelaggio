@@ -2744,6 +2744,12 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 		};
 		dispositionDraft?: PrCarryDispositionDraft;
 		recurrenceFindings?: Array<{ fingerprintDigest: string; path?: string; findingClass: string }>;
+		securityReview?: {
+			triggered: boolean;
+			reasons: readonly string[];
+			standardMustFixDigests: readonly string[];
+			redTeamMustFixDigests: readonly string[];
+		};
 	};
 	type GateFn = (opts: { parkSignal?: { parked: boolean; resetsAt: number; limitType: string }; reviewedSha?: string; itemId?: string; priorGateRecords?: unknown }) => Promise<GateResult>;
 
@@ -2868,6 +2874,40 @@ describe("runOrchestrator — mid-run review drain (#387)", () => {
 			runner: "local",
 			reviewedAt: "2026-08-03T12:05:03.456Z",
 		});
+	});
+
+	it("copies returned securityReview telemetry through the local drain unchanged", async (t) => {
+		t.mock.method(console, "log", () => {});
+		const main = mainDir();
+		const gh: GhRunner = (args) => {
+			if (args[0] === "pr" && args[1] === "list") return { stdout: "[]", stderr: "", status: 0 };
+			if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ labels: [{ name: "autopilot" }] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1] === `repos/o/r/commits/${HEAD}/status`) return { stdout: JSON.stringify({ statuses: [] }), stderr: "", status: 0 };
+			if (args[0] === "api" && args[1]?.includes("/comments")) return { stdout: "[]", stderr: "", status: 0 };
+			return { stdout: "", stderr: "", status: 0 };
+		};
+		const telemetry = {
+			triggered: true,
+			reasons: ["path:packages/server/src/config.ts"],
+			standardMustFixDigests: ["a".repeat(64)],
+			redTeamMustFixDigests: ["b".repeat(64)],
+		};
+		enqueueReviewRequest(main, record());
+		const { runPipeline } = createMockRunPipeline({ default: { completed: false, cost: 0, error: "pick:queue-empty" } });
+		await runOrchestrator(
+			{ ...baseFlags, target: "pull-request", cycles: "1" },
+			{
+				runPipeline,
+				review: reviewDeps({
+					gh,
+					main,
+					runReviewGate: async () => ({ ...(await passGate()), securityReview: telemetry }),
+				}),
+			},
+		);
+		const stored = readPrReviewGateRecord(gateRecordsDir(main), 201, HEAD);
+		assert.ok(stored && stored.schemaVersion === 2 && stored.producer === "fleet");
+		assert.deepEqual(stored.securityReview, telemetry);
 	});
 
 	it("injects listed history, persists observations including empty, and does not change posted status", async (t) => {

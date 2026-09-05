@@ -1267,6 +1267,7 @@ export async function runOrchestrator(flags: Flags, deps: OrchestratorDeps = {},
 							runner: "local",
 							reviewedAt: new Date(review.now()).toISOString(),
 							...(gateResult.recurrenceFindings !== undefined ? { recurrenceFindings: gateResult.recurrenceFindings } : {}),
+							...(gateResult.securityReview !== undefined ? { securityReview: gateResult.securityReview } : {}),
 						}
 					: {
 							producer: "fleet",

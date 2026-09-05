@@ -7,12 +7,10 @@ import { describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import {
 	buildReviewDiffBlock,
-	classifySecurityReviewDiff,
 	computeImplementTurns,
 	countPlanFiles,
 	formatChangesUnderReview,
 	formatReviewMetrics,
-	guardConfigDelta,
 	REVIEW_DIFF_MAX_BYTES,
 	readRuntimeVersions,
 	resolveClaudeSdkManifestPath,
@@ -237,122 +235,6 @@ describe("computeImplementTurns", () => {
 	});
 });
 
-describe("classifySecurityReviewDiff", () => {
-	const hunk = (...lines: string[]): string => ["diff --git a/docs/setup.md b/docs/setup.md", "--- a/docs/setup.md", "+++ b/docs/setup.md", "@@ -1 +1 @@", ...lines].join("\n");
-
-	it("triggers for security-sensitive server config paths", () => {
-		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], "diff --git a/packages/server/src/config.ts b/packages/server/src/config.ts\n");
-
-		assert.equal(signal.triggered, true);
-		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
-	});
-
-	it("triggers for the merge-gate body and the helpers.ts split even without a security keyword (path-only)", () => {
-		for (const file of [
-			"packages/pelaggio/scripts/pelaggio/pr-review-gate.ts",
-			"packages/pelaggio/scripts/pelaggio/pr-review-cli.ts",
-			"packages/pelaggio/scripts/pelaggio/git.ts",
-			"packages/pelaggio/scripts/pelaggio/outcome-classify.ts",
-			"packages/pelaggio/scripts/pelaggio/cycle-support.ts",
-			"packages/pelaggio/scripts/pelaggio/confinement/roots.ts",
-			"packages/pelaggio/scripts/pelaggio/text.ts",
-			"packages/pelaggio/scripts/pelaggio/providers/claude.ts",
-			"packages/pelaggio/scripts/pelaggio/providers/codex.ts",
-		]) {
-			const signal = classifySecurityReviewDiff([file], `diff --git a/${file} b/${file}\n+const label = "standard";\n`);
-			assert.equal(signal.triggered, true, file);
-			assert.ok(signal.reasons.includes(`path:${file}`), file);
-		}
-	});
-
-	it("triggers for security keywords on added and removed hunk lines", () => {
-		const signal = classifySecurityReviewDiff(["docs/setup.md"], hunk("-CONTROL_PLANE_TOKEN allowed loopback access.", "+Reject hosts under 127.0.0.1.example.com."));
-
-		assert.equal(signal.triggered, true);
-		assert.ok(signal.reasons.includes("keyword:CONTROL_PLANE_TOKEN"));
-		assert.ok(signal.reasons.includes("keyword:127."));
-		assert.ok(signal.reasons.includes("keyword:loopback"));
-	});
-
-	it("triggers for the #102 hostname-prefix bypass shape", () => {
-		const signal = classifySecurityReviewDiff(["packages/server/src/config.ts"], hunk("+function isLoopbackHost(host: string): boolean {", '+\treturn host === "localhost" || host.startsWith("127.");', "+}"));
-
-		assert.equal(signal.triggered, true);
-		assert.ok(signal.reasons.includes("path:packages/server/src/config.ts"));
-		assert.ok(signal.reasons.some((reason) => reason === "keyword:host" || reason === "keyword:loopback" || reason === "keyword:127."));
-	});
-
-	it("triggers for workflow and exec/tool changes", () => {
-		const signal = classifySecurityReviewDiff([".github/workflows/pr-review.yml", "packages/pelaggio/scripts/pelaggio/git.ts"], hunk("+execFileSync('gh', ['workflow', 'run'])", "+spawn('bash', ['-lc', command])"));
-
-		assert.equal(signal.triggered, true);
-		assert.ok(signal.reasons.includes("path:.github/workflows/pr-review.yml"));
-		assert.ok(signal.reasons.includes("path:packages/pelaggio/scripts/pelaggio/git.ts"));
-		assert.ok(signal.reasons.includes("keyword:exec"));
-	});
-
-	it("triggers for the verification contract and skill paths", () => {
-		for (const path of ["packages/pelaggio/scripts/pelaggio/review/findings.ts", ".claude/skills/pr-verify/SKILL.md"]) {
-			const signal = classifySecurityReviewDiff([path], hunk("+benign text"));
-			assert.equal(signal.triggered, true);
-			assert.ok(signal.reasons.includes(`path:${path}`));
-		}
-	});
-
-	it("does not trigger for benign docs-only diffs without security keywords", () => {
-		const signal = classifySecurityReviewDiff(["docs/readme.md"], hunk("+Clarify installation examples."));
-
-		assert.deepEqual(signal, { triggered: false, reasons: [] });
-	});
-
-	it("ignores security keywords on unchanged context lines", () => {
-		const signal = classifySecurityReviewDiff(["docs/readme.md"], hunk(" CONTROL_PLANE_TOKEN grants authentication permission.", "-Old copy.", "+New copy."));
-
-		assert.deepEqual(signal, { triggered: false, reasons: [] });
-	});
-
-	it("ignores diff metadata and security-looking path headers", () => {
-		const metadataOnly = ["diff --git a/docs/auth-token.md b/docs/auth-token.md", "similarity index 100%", "rename from docs/auth-token.md", "rename to docs/secret-url.md", "--- a/docs/auth-token.md", "+++ b/docs/secret-url.md"].join("\n");
-		const signal = classifySecurityReviewDiff(["docs/secret-url.md"], metadataOnly);
-
-		assert.deepEqual(signal, { triggered: false, reasons: [] });
-	});
-
-	it("does not trigger for routine changed-line mentions of git, gh, and url", () => {
-		const signal = classifySecurityReviewDiff(["docs/readme.md"], hunk("-Use git and gh to inspect the old url.", "+Use the git CLI and gh command with this url variable."));
-
-		assert.deepEqual(signal, { triggered: false, reasons: [] });
-	});
-
-	it("retains specific GH_TOKEN and other credential signals", () => {
-		const signal = classifySecurityReviewDiff(["docs/setup.md"], hunk("+Set GH_TOKEN as the authentication secret."));
-
-		assert.equal(signal.triggered, true);
-		assert.ok(signal.reasons.includes("keyword:GH_TOKEN"));
-		assert.ok(signal.reasons.includes("keyword:auth"));
-		assert.ok(signal.reasons.includes("keyword:secret"));
-	});
-
-	it("returns deterministic, de-duplicated, capped reasons", () => {
-		const signal = classifySecurityReviewDiff(
-			["packages/server/src/config.ts", "packages/server/src/config.ts", ".github/workflows/review.yml"],
-			hunk("+auth token secret permission host loopback localhost 0.0.0.0 127. ::1 fetch network exec spawn shell bash workflow", "+CONTROL_PLANE_TOKEN ANTHROPIC_API_KEY GH_TOKEN prompt injection ignore instructions"),
-		);
-
-		assert.equal(signal.triggered, true);
-		assert.deepEqual(signal.reasons, [
-			"path:packages/server/src/config.ts",
-			"path:.github/workflows/review.yml",
-			"keyword:CONTROL_PLANE_TOKEN",
-			"keyword:ANTHROPIC_API_KEY",
-			"keyword:GH_TOKEN",
-			"keyword:prompt injection",
-			"keyword:ignore instructions",
-			"keyword:0.0.0.0",
-		]);
-	});
-});
-
 describe("formatReviewMetrics", () => {
 	it("emits the exact marker string for a clean PASS", () => {
 		assert.equal(formatReviewMetrics("pass", true, "success", 1.234, 42), "<!-- pr-review-metrics gate=pass ok=true subtype=success cost=1.23 turns=42 -->");
@@ -484,67 +366,5 @@ describe("cycle provenance helpers", () => {
 		writeFileSync(caller, "export {};\n");
 		const found = resolveClaudeSdkManifestPath(pathToFileURL(caller).href);
 		assert.equal(found, manifestPath);
-	});
-});
-
-describe("guard config in the security signal", () => {
-	const LAYERING = "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts";
-	const LAYERS_FILE = LAYERING;
-	const REGISTERS = "packages/pelaggio/scripts/pelaggio/registers.ts";
-	const fileDiff = (file: string, ...lines: string[]): string => [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -1 +1 @@", ...lines].join("\n");
-
-	it("guard config files are security paths even without a keyword (path-only)", () => {
-		for (const file of [LAYERING, REGISTERS, "lefthook.yml", "ci/guards-staged.sh"]) {
-			const signal = classifySecurityReviewDiff([file], fileDiff(file, "+// comment"));
-			assert.equal(signal.triggered, true, file);
-			assert.ok(signal.reasons.includes(`path:${file}`), file);
-		}
-	});
-
-	it("renders a layer reclassification, an added module and a removed module as guard reasons", () => {
-		const diff = fileDiff(LAYERING, '-\t"text.ts": 0,', '+\t"text.ts": 4,', '+\t"steps/plan.ts": 4,', '-\t"helpers.ts": 4,');
-		assert.deepEqual(guardConfigDelta(diff), ["guard:layer text.ts L0→L4", "guard:layer helpers.ts removed", "guard:layer steps/plan.ts added L4"]);
-		const signal = classifySecurityReviewDiff([LAYERING], diff);
-		assert.ok(signal.reasons.includes("guard:layer text.ts L0→L4"));
-		// Guard deltas outrank path reasons under the limit.
-		assert.ok(signal.reasons.indexOf("guard:layer text.ts L0→L4") < signal.reasons.indexOf(`path:${LAYERING}`));
-	});
-
-	it("renders a register kind change, including the agentReads bit", () => {
-		const diff = fileDiff(
-			REGISTERS,
-			'-\t{ name: "effects", kind: "harness", shape: "dir" },',
-			'+\t{ name: "effects", kind: "agent", shape: "dir" },',
-			'-\t{ name: "attempts", kind: "harness", shape: "dir" },',
-			'+\t{ name: "attempts", kind: "harness", shape: "dir", agentReads: true },',
-		);
-		assert.deepEqual(guardConfigDelta(diff), ["guard:register attempts harness/dir→harness/dir+agentReads", "guard:register effects harness/dir→agent/dir"]);
-	});
-
-	it("renders a register shape change (dir→file narrows a write denial to one path)", () => {
-		const diff = fileDiff(REGISTERS, '-\t{ name: "sessions", kind: "harness", shape: "dir" },', '+\t{ name: "sessions", kind: "harness", shape: "file" },');
-		assert.deepEqual(guardConfigDelta(diff), ["guard:register sessions harness/dir→harness/file"]);
-	});
-
-	it("a trailing comment on a LAYERS row does not hide its delta, and register deltas outrank added layer rows", () => {
-		const diff = [
-			fileDiff(LAYERS_FILE, '-\t"text.ts": 0,', '+\t"text.ts": 4, // moved', '+\t"a.ts": 4,', '+\t"b.ts": 4,'),
-			fileDiff(REGISTERS, '-\t{ name: "effects", kind: "harness", shape: "dir" },', '+\t{ name: "effects", kind: "agent", shape: "dir" },'),
-		].join("\n");
-		assert.deepEqual(guardConfigDelta(diff), ["guard:register effects harness/dir→agent/dir", "guard:layer text.ts L0→L4", "guard:layer a.ts added L4", "guard:layer b.ts added L4"]);
-	});
-
-	it("does not fire on edits to the guard files that change no table entry (no false fire)", () => {
-		const diff = [
-			fileDiff(LAYERING, "-\t// L0 foundation — old comment", "+\t// L0 foundation — new comment", '+\t\tassert.ok(true, "text.ts: 4");'),
-			fileDiff(REGISTERS, '+// a comment that mentions name: "effects", kind: "agent" in prose'),
-			fileDiff("packages/pelaggio/scripts/pelaggio/text.ts", '-\t"text.ts": 0,', '+\t"text.ts": 4,'),
-		].join("\n");
-		assert.deepEqual(guardConfigDelta(diff), []);
-	});
-
-	it("an unchanged entry that merely moves within the table is not a delta", () => {
-		const diff = fileDiff(LAYERING, '-\t"text.ts": 0,', '+\t"text.ts": 0,');
-		assert.deepEqual(guardConfigDelta(diff), []);
 	});
 });

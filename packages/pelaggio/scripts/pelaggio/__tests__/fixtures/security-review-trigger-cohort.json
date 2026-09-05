@@ -1,0 +1,645 @@
+{
+  "id": "21-pr-classifier-replay",
+  "asOf": "2026-09-01",
+  "grain": "pr",
+  "notes": "Squash-merged PRs reconstructed as git diff <squash>^ <squash> from origin/main subject (#N). Unified diff stored only for guard-config paths (registers.ts, module-layering.test.ts). #722 reconstructed from live PR head/base and full diff on 2026-09-05.",
+  "entries": [
+    {
+      "pr": 699,
+      "files": [
+        "docs/agent-context/pipeline.md",
+        "docs/decision-log/647.md",
+        "packages/pelaggio/bin/pelaggio.js",
+        "packages/pelaggio/package.json",
+        "packages/pelaggio/scripts/pelaggio/__tests__/authoring-review-cold-start.test.js",
+        "packages/pelaggio/scripts/pelaggio/__tests__/authoring-review-seat.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/bin-signal-forwarding.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/cycle-outcome.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/fixtures/bin-signal-hold.cjs",
+        "packages/pelaggio/scripts/pelaggio/__tests__/mocks.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/orchestrator.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/registers.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/review-seats.test.ts",
+        "packages/pelaggio/scripts/pelaggio/cycle-outcome.ts",
+        "packages/pelaggio/scripts/pelaggio/pipeline.ts",
+        "packages/pelaggio/scripts/pelaggio/review/seat-deps-core.d.ts",
+        "packages/pelaggio/scripts/pelaggio/review/seat-deps-core.js",
+        "packages/pelaggio/scripts/pelaggio/review/seat-deps.ts",
+        "packages/pelaggio/scripts/pelaggio/review/seats.ts",
+        "packages/pelaggio/scripts/pelaggio/step-executor.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/context.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/shakedown-code.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/ship.ts",
+        "packages/pelaggio/tsconfig.json"
+      ],
+      "diff": "diff --git a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\nindex 69ace14..d2de4d3 100644\n--- a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n+++ b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n@@ -9,7 +9,7 @@\n  * default-allow.\n  */\n import assert from \"node:assert/strict\";\n-import { readdirSync, readFileSync, statSync } from \"node:fs\";\n+import { existsSync, readdirSync, readFileSync, statSync } from \"node:fs\";\n import { dirname, join, normalize, relative } from \"node:path\";\n import { describe, it } from \"node:test\";\n import { fileURLToPath } from \"node:url\";\n@@ -50,6 +50,8 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {\n \t\"review/record.ts\": 1,\n \t\"review/loop-result.ts\": 1,\n \t\"review/seats.ts\": 1,\n+\t\"review/seat-deps.ts\": 1,\n+\t\"review/seat-deps-core.js\": 1,\n \t\"github-posting.ts\": 1,\n \t\"confinement/roots.ts\": 1,\n \t\"confinement/sessions.ts\": 1,\n@@ -95,6 +97,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {\n \t\"worktree-deps.ts\": 2,\n \t\"run-lifecycle.ts\": 2,\n \t\"run-lifecycle-worker.ts\": 2,\n+\t\"run-lifecycle-worker.mjs\": 2,\n \t// L3 execution \u2014 spawns or talks to a model/agent process.\n \t\"step-runner.ts\": 3,\n \t\"step-runner-shared.ts\": 3,\n@@ -152,13 +155,14 @@ function listModules(dir = ROOT): string[] {\n \t\tconst full = join(dir, name);\n \t\tif (name === \"__tests__\" || name === \"node_modules\") continue;\n \t\tif (statSync(full).isDirectory()) out.push(...listModules(full));\n-\t\telse if (name.endsWith(\".ts\") && !name.endsWith(\".d.ts\")) out.push(relative(ROOT, full));\n+\t\telse if ((name.endsWith(\".ts\") || name.endsWith(\".js\") || name.endsWith(\".mjs\")) && !name.endsWith(\".d.ts\")) out.push(relative(ROOT, full));\n \t}\n \treturn out.sort();\n }\n \n /**\n- * Relative import specifiers in one module's source, resolved to module paths (`.js` \u2192 `.ts`).\n+ * Relative import specifiers in one module's source, resolved to module paths (`.js` \u2192 `.ts`\n+ * only when that TypeScript source exists; genuine `.js`/`.mjs` modules keep their own paths).\n  * Uses the TypeScript parser, so comments, string contents and template text can never create\n  * or hide an edge \u2014 only real `import`/`export \u2026 from`, `import \"x\"`, `import(\"x\")` (type or\n  * dynamic, anywhere in the tree) and `require(\"x\")` do.\n@@ -200,8 +204,11 @@ export function edgesFromSource(from: string, src: string): Array<[string, strin\n \t\t}\n \t\tif (!spec.startsWith(\".\")) continue;\n \t\tlet to = normalize(join(dirname(from), spec));\n-\t\tif (to.endsWith(\".js\")) to = `${to.slice(0, -3)}.ts`;\n-\t\tif (to.endsWith(\".mjs\")) to = `${to.slice(0, -4)}.ts`;\n+\t\t// A `.js`/`.mjs` specifier that names an actual JavaScript file on disk is that module\n+\t\t// (e.g. review/seat-deps-core.js), so the guard covers it; otherwise it names the\n+\t\t// transpiled TS module and is rewritten to its `.ts` source.\n+\t\tif (to.endsWith(\".js\") && !existsSync(join(ROOT, to))) to = `${to.slice(0, -3)}.ts`;\n+\t\tif (to.endsWith(\".mjs\") && !existsSync(join(ROOT, to))) to = `${to.slice(0, -4)}.ts`;\n \t\tedges.push([from, to]);\n \t}\n \treturn edges;\n@@ -214,7 +221,7 @@ function importEdges(modules: string[]): Array<[string, string]> {\n function violations(modules: string[], edges: Array<[string, string]>): string[] {\n \tconst out = new Set<string>();\n \tfor (const [from, to] of edges) {\n-\t\tif (!modules.includes(to)) continue; // non-.ts sibling (e.g. worker .mjs shim) \u2014 not a module edge\n+\t\tif (!modules.includes(to)) continue; // not a module file (e.g. a `.d.ts` sibling) \u2014 not a module edge\n \t\tconst lf = LAYERS[from];\n \t\tconst lt = LAYERS[to];\n \t\tif (lf === undefined || lt === undefined) continue; // reported by the unlisted-module test\n",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "verdict-split",
+          "gate": "block",
+          "survivorCount": 3,
+          "recurrenceCount": 3
+        }
+      ]
+    },
+    {
+      "pr": 762,
+      "files": [
+        ".claude/skills/_project-context.md.example",
+        ".claude/skills/_rubric.md",
+        "docs/decision-log/745.md",
+        "packages/pelaggio/scripts/pelaggio/__tests__/fixtures/guarantee-authority/pr-699.json",
+        "packages/pelaggio/scripts/pelaggio/__tests__/guarantee-authority.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/orchestrator.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pr-review-gate-record.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pr-review-gate.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/skills.test.ts",
+        "packages/pelaggio/scripts/pelaggio/guarantee-authority.ts",
+        "packages/pelaggio/scripts/pelaggio/orchestrator.ts",
+        "packages/pelaggio/scripts/pelaggio/pr-review-cli.ts",
+        "packages/pelaggio/scripts/pelaggio/pr-review-gate-record.ts",
+        "packages/pelaggio/scripts/pelaggio/pr-review-gate.ts",
+        "packages/pelaggio/scripts/pelaggio/skills.ts"
+      ],
+      "diff": "diff --git a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\nindex 55c247b..69ace14 100644\n--- a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n+++ b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n@@ -83,6 +83,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {\n \t\"flow-policy.ts\": 2,\n \t\"flow-snapshot.ts\": 2,\n \t\"cycle-outcome.ts\": 2,\n+\t\"guarantee-authority.ts\": 2,\n \t\"pick-parse.ts\": 2,\n \t\"ship/freshness.ts\": 2,\n \t\"continuous.ts\": 2,\n",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 719,
+      "files": [
+        "docs/agent-context/pipeline.md",
+        "docs/config.md",
+        "docs/decision-log/672.md",
+        "packages/pelaggio/scripts/pelaggio/__tests__/codex-provider.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/cycle-outcome.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/flow-events.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/grok-provider.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/mocks.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/notify.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/opencode-provider.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/orchestrator.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/outcome-classify.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/revise-cli.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/ship.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/stats.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/step-runner.test.ts",
+        "packages/pelaggio/scripts/pelaggio/cycle-errors.ts",
+        "packages/pelaggio/scripts/pelaggio/cycle-outcome.ts",
+        "packages/pelaggio/scripts/pelaggio/cycle-result.ts",
+        "packages/pelaggio/scripts/pelaggio/flow-events.ts",
+        "packages/pelaggio/scripts/pelaggio/index.ts",
+        "packages/pelaggio/scripts/pelaggio/notify.ts",
+        "packages/pelaggio/scripts/pelaggio/orchestrator.ts",
+        "packages/pelaggio/scripts/pelaggio/outcome-classify.ts",
+        "packages/pelaggio/scripts/pelaggio/pipeline.ts",
+        "packages/pelaggio/scripts/pelaggio/providers/claude.ts",
+        "packages/pelaggio/scripts/pelaggio/providers/codex.ts",
+        "packages/pelaggio/scripts/pelaggio/providers/grok.ts",
+        "packages/pelaggio/scripts/pelaggio/providers/opencode.ts",
+        "packages/pelaggio/scripts/pelaggio/stats.ts",
+        "packages/pelaggio/scripts/pelaggio/step-runner-shared.ts",
+        "packages/pelaggio/scripts/pelaggio/step-runner.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/context.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/implement.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/pick.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/plan.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/shakedown-code.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/shakedown-plan.ts",
+        "packages/pelaggio/scripts/pelaggio/steps/ship.ts",
+        "packages/pelaggio/scripts/pelaggio/types.ts",
+        "packages/server/__tests__/external-runs.test.ts",
+        "packages/server/src/external-runs.ts",
+        "packages/web/src/components/StatsView.tsx"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "verdict-split",
+          "gate": "block",
+          "survivorCount": 2,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "verdict-split",
+          "gate": "block",
+          "survivorCount": 1,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "verdict-split",
+          "gate": "block",
+          "survivorCount": 4,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "verdict-split",
+          "gate": "block",
+          "survivorCount": 1,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 748,
+      "files": [
+        ".gitignore",
+        "ci/__tests__/assurance-explorer.test.ts",
+        "ci/assurance-explorer.ts",
+        "ci/assurance-graph.ts",
+        "ci/assurance-views.ts",
+        "docs/assurance/README.md",
+        "docs/decision-log/742.md",
+        "package.json"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "verdict-split",
+          "gate": "block",
+          "survivorCount": 2,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "verdict-split",
+          "gate": "block",
+          "survivorCount": 2,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 717,
+      "files": [
+        "docs/decision-log/574.md",
+        "docs/pr-review.md",
+        "packages/pelaggio/scripts/pelaggio/__tests__/orchestrator.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts",
+        "packages/pelaggio/scripts/pelaggio/pipeline.ts",
+        "packages/pelaggio/scripts/pelaggio/review-findings-archive.ts"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 710,
+      "files": [
+        "docs/agent-context/review-gate-baseline.md",
+        "docs/agent-context/roadmap-and-ship.md",
+        "docs/pr-review.md",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pr-adjudicate-cli.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pr-review-cli.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/pr-review-gate-record.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/review-adjudication.test.ts",
+        "packages/pelaggio/scripts/pelaggio/pr-review-cli.ts",
+        "packages/pelaggio/scripts/pelaggio/pr-review-gate-record.ts",
+        "packages/pelaggio/scripts/pelaggio/review/adjudication.ts",
+        "packages/pelaggio/scripts/pelaggio/review/findings.ts"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 708,
+      "files": [
+        "ci/assurance-reachability.ts",
+        "docs/agent-context/review-gate-baseline.md",
+        "docs/assurance/shadow-graph.json",
+        "docs/decision-log/653.md"
+      ],
+      "diff": "",
+      "legacyTriggered": false,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "invalid-pass",
+          "gate": "block",
+          "survivorCount": 1,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 704,
+      "files": [
+        "ci/test-realization-mutation.sh",
+        "docs/assurance/README.md",
+        "package.json"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 700,
+      "files": [
+        "ci/__tests__/assurance-views.test.ts",
+        "ci/__tests__/shadow-assurance.test.ts",
+        "ci/assurance-observation-reporter.mjs",
+        "ci/assurance-observations.ts",
+        "ci/assurance-views.ts",
+        "ci/root-files.ts",
+        "ci/test-assurance.sh",
+        "ci/test-assurance.test.sh",
+        "docs/assurance/README.md",
+        "docs/assurance/owner-independence-fixture.json",
+        "docs/assurance/shadow-graph.json",
+        "docs/assurance/views.json",
+        "docs/decision-log/635.md",
+        "docs/decisions/0027-machine-readable-architectural-intent-graph.md",
+        "package.json"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "invalid-pass",
+          "gate": "block",
+          "survivorCount": 6,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "invalid-pass",
+          "gate": "block",
+          "survivorCount": 3,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 698,
+      "files": [
+        "ci/__tests__/corpus-checker.test.ts",
+        "docs/agent-context/data/corpus/corpus.json",
+        "docs/decision-log/687.md"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 697,
+      "files": [
+        "ci/__tests__/shadow-assurance.test.ts",
+        "docs/agent-context/guarded-actions.md",
+        "docs/assurance/README.md",
+        "docs/assurance/shadow-graph.json",
+        "docs/decision-log/686.md"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "invalid-pass",
+          "gate": "block",
+          "survivorCount": 2,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 695,
+      "files": [
+        "ci/__tests__/assurance-views.test.ts",
+        "ci/__tests__/shadow-assurance.test.ts",
+        "ci/assurance-views.ts",
+        "docs/assurance/README.md",
+        "docs/assurance/owner-independence-fixture.json",
+        "docs/assurance/shadow-graph.json",
+        "docs/assurance/views.json",
+        "docs/decision-log/684.md",
+        "docs/decisions/0027-machine-readable-architectural-intent-graph.md"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 694,
+      "files": [
+        "ci/__tests__/assurance-views.test.ts",
+        "ci/__tests__/shadow-assurance.test.ts",
+        "ci/assurance-views.ts",
+        "docs/assurance/README.md",
+        "docs/assurance/owner-independence-fixture.json",
+        "docs/assurance/shadow-graph.json",
+        "docs/assurance/views.json",
+        "docs/decision-log/683.md",
+        "docs/decisions/0027-machine-readable-architectural-intent-graph.md"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 693,
+      "files": [
+        "ci/__tests__/assurance-views.test.ts",
+        "ci/__tests__/shadow-assurance.test.ts",
+        "ci/assurance-views.ts",
+        "docs/assurance/README.md",
+        "docs/assurance/owner-independence-consumer/acme/intent.md",
+        "docs/assurance/owner-independence-fixture.json",
+        "docs/assurance/shadow-graph.json",
+        "docs/decision-log/682.md",
+        "docs/decisions/0027-machine-readable-architectural-intent-graph.md"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "invalid-pass",
+          "gate": "block",
+          "survivorCount": 1,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 691,
+      "files": [
+        "ci/__tests__/shadow-assurance.test.ts",
+        "docs/assurance/README.md",
+        "docs/assurance/shadow-graph.json",
+        "docs/decision-log/681.md",
+        "docs/decisions/0027-machine-readable-architectural-intent-graph.md"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 690,
+      "files": [
+        "ci/__tests__/shadow-assurance.test.ts",
+        "docs/assurance/README.md",
+        "docs/assurance/shadow-graph.json",
+        "docs/decision-log/680.md",
+        "docs/decisions/0027-machine-readable-architectural-intent-graph.md"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "invalid-pass",
+          "gate": "block",
+          "survivorCount": 2,
+          "recurrenceCount": 0
+        },
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 689,
+      "files": [
+        "ci/__tests__/shadow-assurance.test.ts"
+      ],
+      "diff": "",
+      "legacyTriggered": false,
+      "rolls": [
+        {
+          "ok": true,
+          "subtype": "success",
+          "gate": "pass",
+          "survivorCount": 0,
+          "recurrenceCount": 0
+        }
+      ]
+    },
+    {
+      "pr": 713,
+      "files": [
+        "docs/decision-log/42.md",
+        "docs/server.md",
+        "packages/server/__tests__/app.test.ts",
+        "packages/server/__tests__/config.test.ts",
+        "packages/server/__tests__/roadmap-cache.test.ts",
+        "packages/server/__tests__/supervisor.test.ts",
+        "packages/server/scripts/server.ts",
+        "packages/server/src/app.ts",
+        "packages/server/src/config.ts",
+        "packages/server/src/repo-child-env.ts",
+        "packages/server/src/roadmap-cache.ts",
+        "packages/server/src/routes/repos.ts",
+        "packages/server/src/routes/runs.ts",
+        "packages/server/src/supervisor.ts",
+        "packages/server/src/types.ts",
+        "packages/web/__tests__/format.test.ts",
+        "packages/web/src/components/RunList.tsx",
+        "packages/web/src/components/StatsView.tsx",
+        "packages/web/src/lib/api.ts",
+        "packages/web/src/lib/format.ts"
+      ],
+      "diff": "",
+      "legacyTriggered": true,
+      "rolls": []
+    },
+    {
+      "pr": 722,
+      "files": [
+        "docs/decision-log/503.md",
+        "docs/server.md",
+        "packages/server/__tests__/app.test.ts",
+        "packages/server/__tests__/auth.test.ts",
+        "packages/server/__tests__/config.test.ts",
+        "packages/server/src/app.ts",
+        "packages/server/src/auth.ts",
+        "packages/server/src/config.ts"
+      ],
+      "diff": "diff --git a/docs/decision-log/503.md b/docs/decision-log/503.md\nnew file mode 100644\nindex 00000000..827f13e6\n--- /dev/null\n+++ b/docs/decision-log/503.md\n@@ -0,0 +1,19 @@\n+# Decision log \u2014 503\n+\n+Status values are `default-taken`, `resolved`, or `resolved\u2192ADR-nnnn`. Source is an item, pull request, or review-note reference.\n+\n+## Active\n+\n+| Decision | Status | Chosen/leaning | Alternatives | Source | Date |\n+| --- | --- | --- | --- | --- | --- |\n+| Preserve unauthenticated 404 fallthrough without weakening current authority routes | default-taken | bearer auth at the `/runs` and `/repos` family chokepoints | per-route auth duplication; global catch-all auth that converts unknown paths to 401. | https://github.com/pelaggio/pelaggio/issues/503 | 2026-08-29 |\n+<!-- decision:e8a98f63-98fe-4a19-8b08-82ee293d7aa1 -->\n+<!-- decision-meta:eyJjb250ZW50RmluZ2VycHJpbnQiOiI4ZTg2NGVhNTM0OTA4ZGQwYTZmZDI1ZDE5NWM0ZWJlNmJkYWQ5NDEzNTQ4ZmNkMTYwMDkwOTg5YzYzMWUxMTI5IiwiZGVkdXBlIjp7InJ1bklkIjoiY3ljbGUtMS01MDMtYTEiLCJzdGVwIjoiaW1wbGVtZW50Iiwib2NjdXJyZW5jZSI6MH19 -->\n+| Keep the generated Astro shell functional under CSP | default-taken | same-origin CSP with inline script/style allowed only because Astro emits inline island bootstrap code | omit CSP; add a build-time hash/nonce pipeline beyond this S item. | https://github.com/pelaggio/pelaggio/issues/503 | 2026-08-29 |\n+<!-- decision:6782838c-2382-4f8a-b9c2-656de6fd5fff -->\n+<!-- decision-meta:eyJjb250ZW50RmluZ2VycHJpbnQiOiJlNTY2NjU5Y2MyNzEyZmFlZDNhMGExOGI4Zjc2Y2I2Yzk1M2IwY2U1YWRkMmY5N2I0M2Q4MzdlMjAyMTk2M2QwIiwiZGVkdXBlIjp7InJ1bklkIjoiY3ljbGUtMS01MDMtYTEiLCJzdGVwIjoiaW1wbGVtZW50Iiwib2NjdXJyZW5jZSI6MX19 -->\n+\n+## Resolved\n+\n+| Decision | Status | Chosen/leaning | Alternatives | Source | Date |\n+| --- | --- | --- | --- | --- | --- |\ndiff --git a/docs/server.md b/docs/server.md\nindex 141db3b9..3c14a6c0 100644\n--- a/docs/server.md\n+++ b/docs/server.md\n@@ -24,7 +24,7 @@ Module boundaries (`packages/server/src/`):\n |---|---|\n | `scripts/server.ts` | Entry: env \u2192 registry \u2192 `createApp(deps)` \u2192 `serve(...)`. |\n | `src/app.ts` | Composition. `/healthz` is registered outside the auth chain. |\n-| `src/config.ts` | Env parsing. Refuses `AUTOPILOT_SERVER_HOST=0.0.0.0` and refuses to start without `CONTROL_PLANE_TOKEN`, including on loopback. XDG-aware defaults for registry/state/log paths. |\n+| `src/config.ts` | Env parsing. Refuses IPv4 and IPv6 wildcard bind aliases and refuses to start without `CONTROL_PLANE_TOKEN`, including on loopback. XDG-aware defaults for registry/state/log paths. |\n | `src/registry.ts` | Loads + validates `repos.yml`. `Registry.path(slug)` resolves slug \u2192 absolute repo path. |\n | `src/roadmap-cache.ts` | Lazy `Map<slug, RoadmapSource>`; first hit per slug instantiates via injected factory. |\n | `src/auth.ts` | Bearer middleware; constant-time compare via `crypto.timingSafeEqual`. Its input token is required by type. |\n@@ -304,7 +304,9 @@ token parameter is also required by type, so alternate app-factory callers\n cannot instantiate an unauthenticated API. Live deployments can bind the daemon\n to a tailnet-only interface and front it with Cloudflare Tunnel (see below).\n Comparison uses `crypto.timingSafeEqual` and rejects length mismatches before\n-the compare so attackers can't probe length via timing.\n+the compare so attackers can't probe length via timing. `bearerAuth()` also\n+rejects empty and whitespace-only tokens at runtime, preserving the fail-closed\n+boundary for callers outside `loadServerConfig()`.\n \n Rotate the token by editing `~/.config/pelaggio-server.env` and running\n `systemctl --user restart pelaggio-server`. SSE streams reconnect with the\n@@ -312,9 +314,10 @@ new token on the next page load.\n \n ## Tailnet bind\n \n-`AUTOPILOT_SERVER_HOST=0.0.0.0` (and its IPv6 wildcard equivalent `::`) is\n-rejected at startup. The intent is that deploy environments specify the\n-tailnet interface explicitly. Local dev can use `127.0.0.1`.\n+`AUTOPILOT_SERVER_HOST=0.0.0.0` and every spelling of the IPv6 unspecified\n+address (`::`, `0:0:0:0:0:0:0:0`, and bracketed aliases) are rejected at\n+startup. The intent is that deploy environments specify the tailnet interface\n+explicitly. Local dev can use `127.0.0.1`.\n \n Every bind, including loopback (`127.0.0.1`, `localhost`, `::1`), requires\n `CONTROL_PLANE_TOKEN`. There is deliberately no unauthenticated local-dev flag:\n@@ -331,7 +334,10 @@ handler \u2014 pre-build deploys still come up.\n \n Static serving is unauthenticated but bounded to the configured `webDist`\n directory: pointing `AUTOPILOT_SERVER_WEB_DIST` at a broader directory would\n-publish those files without auth (operator-controlled).\n+publish those files without auth (operator-controlled). The shell and its\n+assets receive browser-hardening headers, including a same-origin content\n+security policy, clickjacking denial, MIME sniffing denial, and no-referrer\n+policy.\n \n URL layout:\n \ndiff --git a/packages/server/__tests__/app.test.ts b/packages/server/__tests__/app.test.ts\nindex b5073ce4..857c8263 100644\n--- a/packages/server/__tests__/app.test.ts\n+++ b/packages/server/__tests__/app.test.ts\n@@ -666,6 +666,12 @@ describe(\"createApp\", () => {\n \t\tassert.equal(res.status, 200);\n \t});\n \n+\tit(\"unknown routes fall through to 404 without demanding authentication\", async () => {\n+\t\tconst { rawApp } = setup({ token: \"secret\" });\n+\t\tassert.equal((await rawApp.request(\"/not-an-api-route\")).status, 404);\n+\t\tassert.equal((await rawApp.request(\"/runs\")).status, 401);\n+\t});\n+\n \tit(\"static handler serves /ui/index.html when webDist is set\", async () => {\n \t\tconst dir = mkdtempSync(join(tmpdir(), \"web-dist-\"));\n \t\twriteFileSync(join(dir, \"index.html\"), \"<!doctype html><html><body>pelaggio ui</body></html>\");\n@@ -674,6 +680,11 @@ describe(\"createApp\", () => {\n \t\tassert.equal(res.status, 200);\n \t\tconst body = await res.text();\n \t\tassert.match(body, /pelaggio ui/);\n+\t\tassert.match(res.headers.get(\"content-security-policy\") ?? \"\", /default-src 'self'/);\n+\t\tassert.match(res.headers.get(\"content-security-policy\") ?? \"\", /frame-ancestors 'none'/);\n+\t\tassert.equal(res.headers.get(\"x-content-type-options\"), \"nosniff\");\n+\t\tassert.equal(res.headers.get(\"x-frame-options\"), \"DENY\");\n+\t\tassert.equal(res.headers.get(\"referrer-policy\"), \"no-referrer\");\n \t});\n \n \tit(\"API routes still return JSON when webDist is set (no /ui collision)\", async () => {\ndiff --git a/packages/server/__tests__/auth.test.ts b/packages/server/__tests__/auth.test.ts\nindex 7558e048..14ec2141 100644\n--- a/packages/server/__tests__/auth.test.ts\n+++ b/packages/server/__tests__/auth.test.ts\n@@ -12,6 +12,12 @@ function makeApp(token: string): Hono {\n }\n \n describe(\"bearerAuth\", () => {\n+\tit(\"rejects an empty token at runtime\", () => {\n+\t\tfor (const token of [\"\", \"   \", \"\\n\"]) {\n+\t\t\tassert.throws(() => bearerAuth(token), /bearer token must not be empty/);\n+\t\t}\n+\t});\n+\n \tit(\"missing Authorization header: 401\", async () => {\n \t\tconst app = makeApp(\"secret\");\n \t\tconst res = await app.request(\"/x\");\ndiff --git a/packages/server/__tests__/config.test.ts b/packages/server/__tests__/config.test.ts\nindex 7768bbb5..d4ff8348 100644\n--- a/packages/server/__tests__/config.test.ts\n+++ b/packages/server/__tests__/config.test.ts\n@@ -99,11 +99,18 @@ describe(\"loadServerConfig\", () => {\n \t});\n \n \tit(\"rejects wildcard bind hosts\", () => {\n-\t\tfor (const host of [\"0.0.0.0\", \"::\"]) {\n+\t\tfor (const host of [\"0.0.0.0\", \"::\", \"[::]\", \"0:0:0:0:0:0:0:0\", \"[0:0:0:0:0:0:0:0]\", \"::0\", \"0::0\"]) {\n \t\t\tassert.throws(() => loadServerConfig({ AUTOPILOT_SERVER_HOST: host, AUTOPILOT_SERVER_PORT: \"7777\" }), /specific interface.*not/, host);\n \t\t}\n \t});\n \n+\tit(\"accepts specific IPv6 bind hosts\", () => {\n+\t\tfor (const host of [\"::1\", \"2001:db8::1\", \"fd7a:115c:a1e0::1\"]) {\n+\t\t\tconst cfg = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: host }), { webDistDefault: join(tmpdir(), \"no-such-dist\") });\n+\t\t\tassert.equal(cfg.host, host);\n+\t\t}\n+\t});\n+\n \tit(\"fails closed when the token is unset, including on loopback\", () => {\n \t\tfor (const host of [\"127.0.0.1\", \"localhost\", \"::1\", \"100.64.0.1\"]) {\n \t\t\tfor (const token of [undefined, \"\"]) {\n@@ -121,6 +128,10 @@ describe(\"loadServerConfig\", () => {\n \t\tassert.throws(() => loadServerConfig(baseEnv({ CONTROL_PLANE_TOKEN: \"   \" }), { webDistDefault: join(tmpdir(), \"no-such-dist\") }), /CONTROL_PLANE_TOKEN is required/);\n \t});\n \n+\tit(\"missing-token startup error names the operator remediation\", () => {\n+\t\tassert.throws(() => loadServerConfig(baseEnv({ CONTROL_PLANE_TOKEN: undefined }), { webDistDefault: join(tmpdir(), \"no-such-dist\") }), /CONTROL_PLANE_TOKEN.*~\\/\\.config\\/pelaggio-server\\.env.*before starting pelaggio-server/);\n+\t});\n+\n \tit(\"token set on a non-loopback host is unchanged (does not throw; token preserved)\", () => {\n \t\tconst cfg = loadServerConfig(baseEnv({ AUTOPILOT_SERVER_HOST: \"100.64.0.1\", CONTROL_PLANE_TOKEN: \"s3cret\" }), {\n \t\t\twebDistDefault: join(tmpdir(), \"no-such-dist\"),\ndiff --git a/packages/server/src/app.ts b/packages/server/src/app.ts\nindex f47d8c0c..ccde0fd3 100644\n--- a/packages/server/src/app.ts\n+++ b/packages/server/src/app.ts\n@@ -1,6 +1,7 @@\n import { readFileSync } from \"node:fs\";\n import { serveStatic } from \"@hono/node-server/serve-static\";\n import { Hono } from \"hono\";\n+import { secureHeaders } from \"hono/secure-headers\";\n import { bearerAuth } from \"./auth.js\";\n import type { Registry } from \"./registry.js\";\n import type { RoadmapCache } from \"./roadmap-cache.js\";\n@@ -20,6 +21,7 @@ export interface AppDeps {\n \n export function createApp(deps: AppDeps): Hono {\n \tconst app = new Hono();\n+\tconst authenticate = bearerAuth(deps.token);\n \n \t// Health bypasses auth.\n \tregisterHealthRoutes(app);\n@@ -37,9 +39,28 @@ export function createApp(deps: AppDeps): Hono {\n \t});\n \n \t// The static shell must load before the operator can enter a bearer token.\n-\t// It carries no authority; every API route remains in the guarded sub-app.\n+\t// It carries no authority; every API route remains in guarded route families.\n \tif (deps.webDist !== undefined) {\n \t\tconst root = deps.webDist;\n+\t\tconst protectShell = secureHeaders({\n+\t\t\tcontentSecurityPolicy: {\n+\t\t\t\tdefaultSrc: [\"'self'\"],\n+\t\t\t\tbaseUri: [\"'none'\"],\n+\t\t\t\tconnectSrc: [\"'self'\"],\n+\t\t\t\tfontSrc: [\"'self'\"],\n+\t\t\t\tformAction: [\"'self'\"],\n+\t\t\t\tframeAncestors: [\"'none'\"],\n+\t\t\t\timgSrc: [\"'self'\", \"data:\"],\n+\t\t\t\tmanifestSrc: [\"'self'\"],\n+\t\t\t\tobjectSrc: [\"'none'\"],\n+\t\t\t\t// Astro emits its island bootstrap and styles inline in the static shell.\n+\t\t\t\tscriptSrc: [\"'self'\", \"'unsafe-inline'\"],\n+\t\t\t\tstyleSrc: [\"'self'\", \"'unsafe-inline'\"],\n+\t\t\t},\n+\t\t\txFrameOptions: \"DENY\",\n+\t\t});\n+\t\tapp.use(\"/\", protectShell);\n+\t\tapp.use(\"/ui/*\", protectShell);\n \t\tapp.get(\"/\", (c) => c.redirect(\"/ui/\", 302));\n \t\tapp.get(\n \t\t\t\"/ui/*\",\n@@ -50,11 +71,15 @@ export function createApp(deps: AppDeps): Hono {\n \t\t);\n \t}\n \n-\tconst guarded = new Hono();\n-\tguarded.use(\"*\", bearerAuth(deps.token));\n-\tregisterRunRoutes(guarded, { supervisor: deps.supervisor, registry: deps.registry, roadmapCache: deps.roadmapCache });\n-\tregisterReposRoutes(guarded, { registry: deps.registry, roadmapCache: deps.roadmapCache });\n-\tapp.route(\"/\", guarded);\n+\t// Scope auth to the authority-bearing route families. A global guarded\n+\t// sub-app turns every unknown URL into a misleading 401 before Hono can\n+\t// produce its 404 fallback.\n+\tapp.use(\"/runs\", authenticate);\n+\tapp.use(\"/runs/*\", authenticate);\n+\tapp.use(\"/repos\", authenticate);\n+\tapp.use(\"/repos/*\", authenticate);\n+\tregisterRunRoutes(app, { supervisor: deps.supervisor, registry: deps.registry, roadmapCache: deps.roadmapCache });\n+\tregisterReposRoutes(app, { registry: deps.registry, roadmapCache: deps.roadmapCache });\n \n \treturn app;\n }\ndiff --git a/packages/server/src/auth.ts b/packages/server/src/auth.ts\nindex ab200a68..ea8b4b83 100644\n--- a/packages/server/src/auth.ts\n+++ b/packages/server/src/auth.ts\n@@ -2,6 +2,9 @@ import { timingSafeEqual } from \"node:crypto\";\n import type { MiddlewareHandler } from \"hono\";\n \n export function bearerAuth(token: string): MiddlewareHandler {\n+\tif (token.trim() === \"\") {\n+\t\tthrow new Error(\"bearer token must not be empty\");\n+\t}\n \tconst expected = Buffer.from(token, \"utf-8\");\n \treturn async (c, next) => {\n \t\tconst header = c.req.header(\"Authorization\") ?? \"\";\ndiff --git a/packages/server/src/config.ts b/packages/server/src/config.ts\nindex 5d2a1484..7567c5d2 100644\n--- a/packages/server/src/config.ts\n+++ b/packages/server/src/config.ts\n@@ -1,4 +1,5 @@\n import { existsSync } from \"node:fs\";\n+import { isIP } from \"node:net\";\n import { homedir } from \"node:os\";\n import { resolve } from \"node:path\";\n import { fileURLToPath } from \"node:url\";\n@@ -22,6 +23,19 @@ function required(name: string, value: string | undefined): string {\n \treturn value;\n }\n \n+function isWildcardHost(host: string): boolean {\n+\tif (host === \"0.0.0.0\") return true;\n+\tconst unwrapped = host.startsWith(\"[\") && host.endsWith(\"]\") ? host.slice(1, -1) : host;\n+\treturn isIP(unwrapped) === 6 && unwrapped.replace(/[0:]/g, \"\") === \"\";\n+}\n+\n+function requiredControlPlaneToken(value: string | undefined): string {\n+\tif (value === undefined || value === \"\") {\n+\t\tthrow new Error(\"CONTROL_PLANE_TOKEN is required; set a non-empty token in ~/.config/pelaggio-server.env before starting pelaggio-server\");\n+\t}\n+\treturn value;\n+}\n+\n // Resolved relative to this file: packages/server/src/ \u2192 ../../web/dist = packages/web/dist\n const packageRelativeWebDist = fileURLToPath(new URL(\"../../web/dist\", import.meta.url));\n \n@@ -35,7 +49,7 @@ function xdgStateHome(env: NodeJS.ProcessEnv): string {\n \n export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDistDefault = packageRelativeWebDist }: { webDistDefault?: string } = {}): ServerConfig {\n \tconst host = required(\"AUTOPILOT_SERVER_HOST\", env.AUTOPILOT_SERVER_HOST);\n-\tif (host === \"0.0.0.0\" || host === \"::\") {\n+\tif (isWildcardHost(host)) {\n \t\tthrow new Error(`AUTOPILOT_SERVER_HOST must be a specific interface (e.g. tailnet IP), not ${host}`);\n \t}\n \tconst portRaw = required(\"AUTOPILOT_SERVER_PORT\", env.AUTOPILOT_SERVER_PORT);\n@@ -54,8 +68,8 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env, { webDist\n \t\tthrow new Error(`AUTOPILOT_SERVER_ROADMAP_TITLE_TTL_MS must be a positive integer; got ${JSON.stringify(roadmapTitleTtlRaw)}`);\n \t}\n \t// Trim so a stray trailing space/newline in the operator env file cannot 401 every\n-\t// request; a whitespace-only value trims to \"\" and still fails closed via required().\n-\tconst token = required(\"CONTROL_PLANE_TOKEN\", env.CONTROL_PLANE_TOKEN?.trim());\n+\t// request; a whitespace-only value trims to \"\" and still fails closed.\n+\tconst token = requiredControlPlaneToken(env.CONTROL_PLANE_TOKEN?.trim());\n \tconst webDistCandidate = env.AUTOPILOT_SERVER_WEB_DIST ? resolve(env.AUTOPILOT_SERVER_WEB_DIST) : webDistDefault;\n \tconst webDist = existsSync(webDistCandidate) ? webDistCandidate : undefined;\n \treturn { host, port, registryPath, token, statePath, logDir, webDist, trustManifestPath, roadmapTitleTtlMs };\n",
+      "legacyTriggered": true,
+      "rolls": [],
+      "headSha": "6f58b47fc6f37ed6791e8519679354c30a184359",
+      "baseSha": "6a6336f012e0e2e23cfa0bc395928086aeaf43f4"
+    },
+    {
+      "pr": 730,
+      "files": [
+        "docs/agent-context/pipeline.md",
+        "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/registers.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/ship-pr-effects.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/step-runner.test.ts",
+        "packages/pelaggio/scripts/pelaggio/attempt-identity.ts",
+        "packages/pelaggio/scripts/pelaggio/config.ts",
+        "packages/pelaggio/scripts/pelaggio/confinement/sessions.ts",
+        "packages/pelaggio/scripts/pelaggio/contained-execution.ts",
+        "packages/pelaggio/scripts/pelaggio/decisions.ts",
+        "packages/pelaggio/scripts/pelaggio/effects.ts",
+        "packages/pelaggio/scripts/pelaggio/execution-receipt.ts",
+        "packages/pelaggio/scripts/pelaggio/flow-events.ts",
+        "packages/pelaggio/scripts/pelaggio/freshness-gate-record.ts",
+        "packages/pelaggio/scripts/pelaggio/index.ts",
+        "packages/pelaggio/scripts/pelaggio/orchestrator.ts",
+        "packages/pelaggio/scripts/pelaggio/pipeline.ts",
+        "packages/pelaggio/scripts/pelaggio/pr-review-gate-record.ts",
+        "packages/pelaggio/scripts/pelaggio/pr-review-gate.ts",
+        "packages/pelaggio/scripts/pelaggio/providers/claude.ts",
+        "packages/pelaggio/scripts/pelaggio/registers.ts",
+        "packages/pelaggio/scripts/pelaggio/review-findings-archive.ts",
+        "packages/pelaggio/scripts/pelaggio/review-request-queue.ts",
+        "packages/pelaggio/scripts/pelaggio/review-sweep.ts",
+        "packages/pelaggio/scripts/pelaggio/review/adjudication.ts",
+        "packages/pelaggio/scripts/pelaggio/review/carry.ts",
+        "packages/pelaggio/scripts/pelaggio/review/record.ts",
+        "packages/pelaggio/scripts/pelaggio/review/seats.ts",
+        "packages/pelaggio/scripts/pelaggio/revise-sweep.ts",
+        "packages/pelaggio/scripts/pelaggio/roadmap/github-issues.ts",
+        "packages/pelaggio/scripts/pelaggio/roadmap/linear.ts",
+        "packages/pelaggio/scripts/pelaggio/roadmap/markdown.ts",
+        "packages/pelaggio/scripts/pelaggio/roadmap/mutation-lock.ts",
+        "packages/pelaggio/scripts/pelaggio/roadmap/stale-quarantine.ts",
+        "packages/pelaggio/scripts/pelaggio/sessions-cli.ts",
+        "packages/pelaggio/scripts/pelaggio/ship/bookkeeping.ts",
+        "packages/pelaggio/scripts/pelaggio/ship/decision.ts",
+        "packages/pelaggio/scripts/pelaggio/text.ts",
+        "packages/pelaggio/scripts/pelaggio/worktree-deps.ts",
+        "packages/server/src/flow-event-tailer.ts",
+        "packages/server/src/routes/repos.ts"
+      ],
+      "diff": "diff --git a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\nindex 2e18e97..747036f 100644\n--- a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n+++ b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n@@ -23,6 +23,7 @@ const BASELINE_PATH = join(ROOT, \"__tests__\", \"fixtures\", \"module-layering-basel\n const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {\n \t// L0 foundation \u2014 types/config/argv/terminal/pure utilities; read-only fs probing ok, no `.dev` writes.\n \t\"types.ts\": 0,\n+\t\"registers.ts\": 0,\n \t\"text.ts\": 0,\n \t\"step-names.ts\": 0,\n \t\"cycle-errors.ts\": 0,\ndiff --git a/packages/pelaggio/scripts/pelaggio/registers.ts b/packages/pelaggio/scripts/pelaggio/registers.ts\nnew file mode 100644\nindex 0000000..026c75c\n--- /dev/null\n+++ b/packages/pelaggio/scripts/pelaggio/registers.ts\n@@ -0,0 +1,192 @@\n+/**\n+ * The `.dev/` register table (L0, pure): every directory or file pelaggio keeps under a\n+ * checkout's `.dev/`, who writes it, and therefore what the seat guards must deny.\n+ *\n+ * This is the one place that knows a `.dev` child by name. Path construction goes through\n+ * `registerPath` / `registerRelativePath`, whose `name` parameter is the closed `RegisterName`\n+ * union, so an unregistered child cannot be built through the API \u2014 and `registers.test.ts`\n+ * fails on any `.dev` token in a string, template or regex literal anywhere else in the two\n+ * packages, so it cannot be built around the API either (plan step 7a; guarded-actions \u00a78.2).\n+ *\n+ * `kind`:\n+ * - `harness`   \u2014 written only by the harness. Seats may not Write/Edit it and may not name it\n+ *                 in a Bash command (mere mention is denied, fail closed \u2014 #386/#510), except\n+ *                 entries flagged `agentReads`, which skills legitimately read (tidy reads the\n+ *                 cycle log) and so stay Bash-mentionable while remaining Write/Edit-denied.\n+ * - `agent`     \u2014 written by agents during a step (plans, ship bodies, review findings).\n+ * - `seat-tree` \u2014 harness-created trees that agents run *inside* (seat worktrees, review heads).\n+ *\n+ * Excluded primitives (step 7b): `attempt-identity` keeps its O_EXCL allocator, `file-lock` is a\n+ * lock, `flow-events` is append-only JSONL, `execution-receipt` keeps its verifying writer. They\n+ * are registered here for their *paths* only.\n+ */\n+import { mkdirSync } from \"node:fs\";\n+import { basename, dirname, resolve } from \"node:path\";\n+\n+/** Private on purpose: exporting the token would let callers compose an unregistered child without a `.dev` literal. */\n+const DEV_DIR = \".dev\";\n+\n+/**\n+ * The `.dev` directory as a git/shell pathspec, for commands such as `git reset -- <pathspec>`.\n+ * Never for path composition \u2014 `registers.test.ts` fails on `devRootPathspec()` used inside\n+ * `join()`/`resolve()` or followed by `/`.\n+ */\n+export function devRootPathspec(): string {\n+\treturn DEV_DIR;\n+}\n+\n+/** A child segment may not be empty, absolute, `.`/`..`, or contain a `..` component. */\n+function assertSegment(segment: string, where: string): void {\n+\tif (segment === \"\" || segment === \".\" || segment === \"..\" || segment.startsWith(\"/\") || /(^|\\/)\\.\\.(\\/|$)/.test(segment)) {\n+\t\tthrow new Error(`${where}: refusing path segment ${JSON.stringify(segment)} \u2014 it would leave the register`);\n+\t}\n+}\n+\n+export type RegisterKind = \"harness\" | \"agent\" | \"seat-tree\";\n+export type RegisterShape = \"dir\" | \"file\" | \"file-family\";\n+\n+export interface RegisterSpec {\n+\t/** Directory or file name directly under `.dev/`; for `file-family`, the shared filename prefix. */\n+\treadonly name: string;\n+\treadonly kind: RegisterKind;\n+\treadonly shape: RegisterShape;\n+\t/** Harness-written but legitimately read by skills; stays Bash-mentionable. */\n+\treadonly agentReads?: true;\n+}\n+\n+export const REGISTERS = [\n+\t// \u2500\u2500 harness evidence stores (Bash mention + Write/Edit denied) \u2500\u2500\n+\t{ name: \"sessions\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"pr-review-gate-records\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"pr-review-adjudication-sources\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"pr-review-finding-dispositions\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"freshness-gate-records\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"effects\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"execution-receipts\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"attempts\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"flow-events\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"review-records\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"doc-review-records\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"doc-review-transcripts\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"review-requests\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"archive\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"revise-exec\", kind: \"harness\", shape: \"dir\" },\n+\t{ name: \"roadmap-mutation.lock\", kind: \"harness\", shape: \"file\" },\n+\t{ name: \"revise-claim.lock\", kind: \"harness\", shape: \"file\" },\n+\t{ name: \"node-modules-repair.lock\", kind: \"harness\", shape: \"file\" },\n+\t// \u2500\u2500 harness-written, skill-read \u2500\u2500\n+\t{ name: \"pelaggio-log.jsonl\", kind: \"harness\", shape: \"file\", agentReads: true },\n+\t{ name: \"stale-quarantine.json\", kind: \"harness\", shape: \"file\", agentReads: true },\n+\t{ name: \"pelaggio-\", kind: \"harness\", shape: \"file-family\", agentReads: true }, // pelaggio-<n>.log, pelaggio-resume-<id>.log\n+\t// \u2500\u2500 agent-written \u2500\u2500\n+\t{ name: \"plans\", kind: \"agent\", shape: \"dir\" },\n+\t{ name: \"ship\", kind: \"agent\", shape: \"dir\" },\n+\t{ name: \"review-findings-\", kind: \"agent\", shape: \"file-family\" }, // review-findings-<id>.md\n+\t// \u2500\u2500 seat trees agents run inside \u2500\u2500\n+\t{ name: \"authoring-review-seats\", kind: \"seat-tree\", shape: \"dir\" },\n+\t{ name: \"review-heads\", kind: \"seat-tree\", shape: \"dir\" },\n+\t{ name: \"contained-runs\", kind: \"seat-tree\", shape: \"dir\" },\n+] as const satisfies readonly RegisterSpec[];\n+\n+export type RegisterName = (typeof REGISTERS)[number][\"name\"];\n+\n+/** The table viewed through the wide spec type (the `as const` members omit optional fields). */\n+export const REGISTER_SPECS: readonly RegisterSpec[] = REGISTERS;\n+\n+export function registerSpec(name: RegisterName): RegisterSpec {\n+\tconst spec = REGISTER_SPECS.find((r) => r.name === name);\n+\tif (!spec) throw new Error(`unknown register: ${name}`);\n+\treturn spec;\n+}\n+\n+/** `<root>/.dev` \u2014 private on purpose: exporting it would let callers compose unregistered children. */\n+function devRoot(root: string): string {\n+\treturn resolve(root, DEV_DIR);\n+}\n+\n+/** Create `<root>/.dev` (recursively). The path itself is not returned \u2014 use `registerPath` for children. */\n+export function ensureDevRoot(root: string): void {\n+\tmkdirSync(devRoot(root), { recursive: true });\n+}\n+\n+/** `<root>/.dev/<name>[/segments\u2026]` \u2014 the only way to build an absolute register path. */\n+export function registerPath(root: string, name: RegisterName, ...segments: string[]): string {\n+\tfor (const segment of segments) assertSegment(segment, `registerPath(${name})`);\n+\treturn resolve(root, DEV_DIR, name, ...segments);\n+}\n+\n+/** `<root>/.dev/<prefix><rest>` for a `file-family` register (e.g. `pelaggio-3.log`). */\n+export function registerFamilyPath(root: string, family: RegisterName, rest: string): string {\n+\tif (registerSpec(family).shape !== \"file-family\") throw new Error(`${family} is not a file family`);\n+\tassertSegment(rest, `registerFamilyPath(${family})`);\n+\tif (rest.includes(\"/\")) throw new Error(`registerFamilyPath(${family}): a family member is a single filename, got ${JSON.stringify(rest)}`);\n+\treturn resolve(root, DEV_DIR, `${family}${rest}`);\n+}\n+\n+/** `.dev/<prefix><rest>` for a `file-family` register, relative. */\n+export function registerFamilyRelativePath(family: RegisterName, rest: string): string {\n+\tif (registerSpec(family).shape !== \"file-family\") throw new Error(`${family} is not a file family`);\n+\tassertSegment(rest, `registerFamilyRelativePath(${family})`);\n+\treturn `${DEV_DIR}/${family}${rest}`;\n+}\n+\n+/** `.dev/<name>[/segments\u2026]` \u2014 for worktree-relative records and prose. */\n+export function registerRelativePath(name: RegisterName, ...segments: string[]): string {\n+\tfor (const segment of segments) assertSegment(segment, `registerRelativePath(${name})`);\n+\treturn [DEV_DIR, name, ...segments].join(\"/\");\n+}\n+\n+/**\n+ * Registers a seat may not name in a Bash command nor Write/Edit: harness-written and not\n+ * skill-read. Derived, never hand-listed \u2014 a new harness register is denied by construction.\n+ */\n+export function bashDeniedRegisters(): readonly RegisterName[] {\n+\treturn REGISTER_SPECS.filter((r) => r.kind === \"harness\" && !r.agentReads).map((r) => r.name as RegisterName);\n+}\n+\n+export interface WriteDeniedRegister {\n+\treadonly name: RegisterName;\n+\treadonly shape: RegisterShape;\n+\t/** Absolute directory / file path, or the absolute filename prefix for a `file-family`. */\n+\treadonly path: string;\n+}\n+\n+/**\n+ * Every harness register under `root`, as the Write/Edit guard must see it. All harness entries\n+ * are included \u2014 `agentReads` relaxes Bash *mention* only; a skill may read the cycle log, never\n+ * write it \u2014 and file-shaped registers (locks, the log, the quarantine file) are covered as well\n+ * as directories. Derived, never hand-listed.\n+ */\n+export function writeDeniedRegisters(root: string): readonly WriteDeniedRegister[] {\n+\treturn REGISTER_SPECS.filter((r) => r.kind === \"harness\").map((r) => ({ name: r.name as RegisterName, shape: r.shape, path: resolve(root, DEV_DIR, r.name) }));\n+}\n+\n+/**\n+ * The harness register an absolute path lands in under `root`, or `null`. Directories match any\n+ * descendant, files match exactly, file families match by filename prefix in `.dev` itself.\n+ */\n+export function writeDeniedRegisterFor(root: string, absolutePath: string): WriteDeniedRegister | null {\n+\tfor (const register of writeDeniedRegisters(root)) {\n+\t\tif (register.shape === \"dir\") {\n+\t\t\tif (absolutePath === register.path || absolutePath.startsWith(`${register.path}/`)) return register;\n+\t\t} else if (register.shape === \"file\") {\n+\t\t\tif (absolutePath === register.path) return register;\n+\t\t} else if (dirname(absolutePath) === devRoot(root) && basename(absolutePath).startsWith(register.name)) {\n+\t\t\treturn register;\n+\t\t}\n+\t}\n+\treturn null;\n+}\n+\n+/**\n+ * The Bash-mention denial for `bashDeniedRegisters()`: `.dev/<register>` in any shell spelling\n+ * (`.dev//x`, `.dev/./x`) with a real boundary after the name (`/`, end, whitespace, quote,\n+ * shell punctuation) \u2014 so `.dev/effects-old/\u2026` is not a match (no false fire). Built here so\n+ * the guard never needs the raw directory token.\n+ */\n+export function bashDeniedRegisterPattern(): RegExp {\n+\tconst names = bashDeniedRegisters()\n+\t\t.map((name) => name.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\"))\n+\t\t.join(\"|\");\n+\treturn new RegExp(`(^|[\\\\s\"'=/>|;&(])\\\\.dev(?:/+(?:\\\\./+)*)(?:${names})(?=/|$|[\\\\s\"'\\`;&|)<>])`);\n+}\n",
+      "legacyTriggered": true,
+      "rolls": []
+    },
+    {
+      "pr": 736,
+      "files": [
+        "ci/guards-staged.sh",
+        "docs/plans/module-architecture.md",
+        "lefthook.yml",
+        "packages/pelaggio/scripts/pelaggio/__tests__/cycle-support.test.ts",
+        "packages/pelaggio/scripts/pelaggio/__tests__/fixtures/module-layering-baseline.json",
+        "packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts",
+        "packages/pelaggio/scripts/pelaggio/cycle-support.ts",
+        "packages/pelaggio/scripts/pelaggio/effects.ts",
+        "packages/pelaggio/scripts/pelaggio/execution-receipt.ts",
+        "packages/pelaggio/scripts/pelaggio/review/loop-result.ts",
+        "packages/pelaggio/scripts/pelaggio/review/loop.ts",
+        "packages/pelaggio/scripts/pelaggio/review/record.ts",
+        "packages/pelaggio/scripts/pelaggio/types.ts"
+      ],
+      "diff": "diff --git a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\nindex 41c8054..796854c 100644\n--- a/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n+++ b/packages/pelaggio/scripts/pelaggio/__tests__/module-layering.test.ts\n@@ -3,21 +3,19 @@\n  *\n  * Every non-test module under `scripts/pelaggio` is assigned a layer; an import may only point\n  * at the same layer or lower, and entry (L5) modules may be imported only by the package barrel\n- * and `main.ts`. Violations are ratcheted through a baseline fixture of exact edges: a new\n- * violating edge fails, and a baseline edge that no longer exists fails too (remove it in the\n- * same PR that fixes it). An unlisted module fails \u2014 extract-and-require, not default-allow.\n- *\n- * Regenerate the baseline: `MODULE_LAYERING_WRITE=1 npx tsx --test <this file>`.\n+ * and `main.ts`. Any violating edge fails \u2014 there is no baseline and no regeneration switch: the\n+ * migration that carried one (`docs/plans/module-architecture.md` \u00a74) retired it at zero, so the\n+ * rule has no reset key a PR could turn. An unlisted module fails \u2014 extract-and-require, not\n+ * default-allow.\n  */\n import assert from \"node:assert/strict\";\n-import { readdirSync, readFileSync, statSync, writeFileSync } from \"node:fs\";\n+import { readdirSync, readFileSync, statSync } from \"node:fs\";\n import { dirname, join, normalize, relative } from \"node:path\";\n import { describe, it } from \"node:test\";\n import { fileURLToPath } from \"node:url\";\n import ts from \"typescript\";\n \n const ROOT = join(dirname(fileURLToPath(import.meta.url)), \"..\");\n-const BASELINE_PATH = join(ROOT, \"__tests__\", \"fixtures\", \"module-layering-baseline.json\");\n \n /** Admission questions per layer live in the plan \u00a72; this table is the path-anchored answer. */\n const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {\n@@ -50,6 +48,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {\n \t\"review-findings-archive.ts\": 1,\n \t\"review/findings.ts\": 1,\n \t\"review/record.ts\": 1,\n+\t\"review/loop-result.ts\": 1,\n \t\"review/seats.ts\": 1,\n \t\"github-posting.ts\": 1,\n \t\"confinement/roots.ts\": 1,\n@@ -258,19 +257,11 @@ describe(\"module layering\", () => {\n \t\tassert.deepEqual(stale, [], `LAYERS names modules that no longer exist: ${stale.join(\", \")}`);\n \t});\n \n-\tit(\"violating edges match the baseline exactly (ratchet)\", () => {\n+\tit(\"no edge points upward and no non-entry module imports an entry module\", () => {\n \t\tconst current = violations(modules, edges);\n \t\tconst cycles = intraLayerCycles(edges);\n \t\tif (cycles.length) console.log(`[module-layering] ${cycles.length} intra-layer cycle path(s) (diagnostic, not gated):\\n  ${cycles.join(\"\\n  \")}`);\n-\t\t// Regen is a local authoring convenience; under CI it would make this assertion vacuous.\n-\t\tif (process.env.MODULE_LAYERING_WRITE && !process.env.CI) {\n-\t\t\twriteFileSync(BASELINE_PATH, `${JSON.stringify({ edges: current }, null, \"\\t\")}\\n`);\n-\t\t}\n-\t\tconst baseline: string[] = JSON.parse(readFileSync(BASELINE_PATH, \"utf8\")).edges;\n-\t\tconst added = current.filter((e) => !baseline.includes(e));\n-\t\tconst fixed = baseline.filter((e) => !current.includes(e));\n-\t\tassert.deepEqual(added, [], `new layering violations (fix them or, for a planned move, extend the baseline deliberately):\\n  ${added.join(\"\\n  \")}`);\n-\t\tassert.deepEqual(fixed, [], `baseline edges no longer violate \u2014 remove them from the fixture:\\n  ${fixed.join(\"\\n  \")}`);\n+\t\tassert.deepEqual(current, [], `layering violations (move the module down, or reclassify it in LAYERS with the admission question answered):\\n  ${current.join(\"\\n  \")}`);\n \t});\n \n \tit(\"recognizes every import syntax that creates an edge, including inside template expressions (no scanner bypass)\", () => {\n",
+      "legacyTriggered": true,
+      "rolls": []
+    }
+  ]
+}

@@ -60,8 +60,18 @@ export interface PrReviewFleetGateRecordV2 {
 	elapsedMs?: number;
 	/** Compact confirmed must-fix observations. Absent on historical v2 records. */
 	recurrenceFindings?: readonly PrReviewRecurrenceFinding[];
+	/** Digest-only red-team seat telemetry. Absent on historical v2 records. */
+	securityReview?: PrReviewSecurityTelemetry;
 	runner: "local";
 	reviewedAt: string;
+}
+
+/** Closed per-label red-team selector telemetry. Digests are SHA-256 of finding fingerprints. */
+export interface PrReviewSecurityTelemetry {
+	triggered: boolean;
+	reasons: readonly string[];
+	standardMustFixDigests: readonly string[];
+	redTeamMustFixDigests: readonly string[];
 }
 
 export interface PrReviewOperatorGateRecordV2 {
@@ -117,6 +127,7 @@ const FLEET_V2_KEYS = [
 	"turns",
 	"elapsedMs",
 	"recurrenceFindings",
+	"securityReview",
 	"runner",
 	"reviewedAt",
 ] as const;
@@ -124,6 +135,8 @@ const OPERATOR_V2_KEYS = ["schemaVersion", "producer", "agreement", "prNumber", 
 const DISPOSITION_ENTRY_KEYS = ["disposition", "rationale"] as const;
 const RECURRENCE_FINDING_KEYS = ["fingerprintDigest", "path", "findingClass", "closure"] as const;
 const RECURRENCE_FINDINGS_MAX = 64;
+const SECURITY_REVIEW_KEYS = ["triggered", "reasons", "standardMustFixDigests", "redTeamMustFixDigests"] as const;
+const SECURITY_REVIEW_REASONS_MAX = 8;
 
 export function gateRecordsDir(mainRepo: string): string {
 	return registerPath(mainRepo, PR_REVIEW_GATE_RECORDS_DIR);
@@ -313,16 +326,56 @@ function requireOptionalRecurrenceFindings(value: unknown): PrReviewRecurrenceFi
 	return observations;
 }
 
+function requireDigestArray(value: unknown, field: string): string[] {
+	if (!Array.isArray(value) || value.length > RECURRENCE_FINDINGS_MAX) fail(field);
+	const seen = new Set<string>();
+	const digests: string[] = [];
+	for (const entry of value) {
+		if (typeof entry !== "string" || !DIGEST_RE.test(entry)) fail(field);
+		if (seen.has(entry)) fail(field);
+		seen.add(entry);
+		digests.push(entry);
+	}
+	return digests;
+}
+
+/** The fleet-v2 security telemetry validator, shared by persistence and read-only metrics. */
+export function validatePrReviewSecurityTelemetry(value: unknown): PrReviewSecurityTelemetry {
+	if (!isRecord(value)) fail("securityReview");
+	requireClosedKeys(value, SECURITY_REVIEW_KEYS, "securityReview");
+	if (typeof value.triggered !== "boolean") fail("securityReview.triggered");
+	if (!Array.isArray(value.reasons) || value.reasons.length > SECURITY_REVIEW_REASONS_MAX) fail("securityReview.reasons");
+	const reasons: string[] = [];
+	const seenReasons = new Set<string>();
+	for (const reason of value.reasons) {
+		if (typeof reason !== "string" || reason.length === 0) fail("securityReview.reasons");
+		if (seenReasons.has(reason)) fail("securityReview.reasons");
+		seenReasons.add(reason);
+		reasons.push(reason);
+	}
+	if (value.triggered !== reasons.length > 0) fail("securityReview.triggered");
+	const standardMustFixDigests = requireDigestArray(value.standardMustFixDigests, "securityReview.standardMustFixDigests");
+	const redTeamMustFixDigests = requireDigestArray(value.redTeamMustFixDigests, "securityReview.redTeamMustFixDigests");
+	if (!value.triggered && redTeamMustFixDigests.length > 0) fail("securityReview.redTeamMustFixDigests");
+	return { triggered: value.triggered, reasons, standardMustFixDigests, redTeamMustFixDigests };
+}
+
+function requireOptionalSecurityReview(value: unknown): PrReviewSecurityTelemetry | undefined {
+	return value === undefined ? undefined : validatePrReviewSecurityTelemetry(value);
+}
+
 function validateFleetV2(value: Record<string, unknown>): PrReviewFleetGateRecordV2 {
 	requireClosedKeys(value, FLEET_V2_KEYS, "record");
 	if (value.producer !== "fleet") fail("producer");
 	const recurrenceFindings = requireOptionalRecurrenceFindings(value.recurrenceFindings);
+	const securityReview = requireOptionalSecurityReview(value.securityReview);
 	return {
 		schemaVersion: 2,
 		producer: "fleet",
 		...validateCommonIdentity(value),
 		...validateFleetMetrics(value),
 		...(recurrenceFindings !== undefined ? { recurrenceFindings } : {}),
+		...(securityReview !== undefined ? { securityReview } : {}),
 	};
 }
 
