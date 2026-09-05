@@ -17,7 +17,8 @@
 	},
 	"createdAt": "2026-09-04T12:00:00.000Z",
 	"updatedAt": "2026-09-04T12:00:01.000Z",
-	"artifacts": [],
+	"execution": { "mode": "host", "contained": false, "effectsEnforced": false },
+	"artifacts": [{ "kind": "verification", "uri": "file:verification.json", "mediaType": "application/json", "digest": { "algorithm": "sha256", "value": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" } }],
 	"problems": [
 		{
 			"schemaVersion": 1,

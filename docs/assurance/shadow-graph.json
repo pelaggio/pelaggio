@@ -1620,7 +1620,7 @@
 			"role": "invariant",
 			"visibility": "internal",
 			"slug": "local-autopilot-success-is-ready-for-review",
-			"statement": "A local-autopilot Run is the public durable object; successful autonomous work ends ready_for_review, never accepted or shipped, and external effects are denied by default.",
+			"statement": "A local-autopilot Run is the public durable object; successful autonomous work ends ready_for_review with verification evidence, never accepted or shipped, and uncontained host execution requires explicit consent with truthful assurance.",
 			"sources": [
 				"ADR-0029"
 			]
@@ -1631,7 +1631,7 @@
 			"role": "constraint",
 			"visibility": "internal",
 			"slug": "local-autopilot-readiness-is-deterministic",
-			"statement": "Readiness and effects for a local-autopilot Run are deterministic: the model is not the gate, and a pause is not a protocol fault.",
+			"statement": "Readiness, host-execution consent, and execution assurance for a local-autopilot Run are deterministic: the model is not the gate, and a pause is not a protocol fault.",
 			"sources": [
 				"ADR-0029"
 			]
@@ -1651,7 +1651,7 @@
 			"id": "DEC-0022",
 			"kind": "decision",
 			"slug": "local-autopilot-run-object",
-			"statement": "Publish a local-first autopilot preview whose durable object is a Run, whose transport-neutral operations are start/get/continue/cancel, and whose success disposition is ready_for_review with effects denied by default.",
+			"statement": "Publish a local-first autopilot preview whose durable object is a Run, whose transport-neutral operations are start/get/continue/cancel, and whose success disposition is ready_for_review with required verification and truthful execution assurance.",
 			"status": "proposed-construction-choice",
 			"sources": [
 				"ADR-0029"

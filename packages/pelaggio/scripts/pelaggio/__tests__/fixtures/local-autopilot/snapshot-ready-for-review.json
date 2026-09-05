@@ -17,9 +17,19 @@
 	},
 	"createdAt": "2026-09-04T12:00:00.000Z",
 	"updatedAt": "2026-09-04T12:01:00.000Z",
+	"execution": { "mode": "host", "contained": false, "effectsEnforced": false },
 	"durationMs": 60000,
 	"worktree": { "branch": "pelaggio/01ARZ3NDEKTSV4RRFFQ69G5FAV" },
 	"artifacts": [
+		{
+			"kind": "verification",
+			"uri": "file:.pelaggio/verification.json",
+			"mediaType": "application/json",
+			"digest": {
+				"algorithm": "sha256",
+				"value": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+			}
+		},
 		{
 			"kind": "diff",
 			"uri": "file:src/hello.ts",

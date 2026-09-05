@@ -23,6 +23,9 @@ export type WorkContractSourceKind = (typeof WORK_CONTRACT_SOURCE_KINDS)[number]
 export const HARNESS_ADAPTERS = ["fake", "grok"] as const;
 export type HarnessAdapterName = (typeof HARNESS_ADAPTERS)[number];
 
+export const EXECUTION_MODES = ["host", "contained"] as const;
+export type ExecutionMode = (typeof EXECUTION_MODES)[number];
+
 export type OpaqueId = string;
 export type UtcTimestamp = string;
 
@@ -106,6 +109,12 @@ export interface WorktreeRef {
 	branch: string;
 }
 
+export interface ExecutionAssurance {
+	mode: ExecutionMode;
+	contained: boolean;
+	effectsEnforced: boolean;
+}
+
 export interface RunSnapshot {
 	schemaVersion: 1;
 	runId: OpaqueId;
@@ -118,6 +127,7 @@ export interface RunSnapshot {
 	updatedAt: UtcTimestamp;
 	durationMs?: number;
 	worktree?: WorktreeRef;
+	execution: ExecutionAssurance;
 	artifacts: Artifact[];
 	problems: Problem[];
 	metrics?: Metrics;
@@ -146,6 +156,7 @@ export interface LocalConfig {
 		maxRepairs?: number;
 		verification?: { command?: string };
 	};
+	execution?: { mode?: ExecutionMode };
 	effects?: { allow?: [] };
 }
 

@@ -16,7 +16,7 @@ A `Run` is the durable object. Operations: `startRun`, `getRun`, `continueRun`, 
 
 ## Authority
 
-The run journal is authoritative. Snapshots and metrics are derived. Resume is checkpoint-restart (ADR-0019). Effects are denied by default.
+The run journal is authoritative. Snapshots and metrics are derived. Resume is checkpoint-restart (ADR-0019). `ready_for_review` requires configured verification evidence. Pelaggio performs no push/PR/merge/release/deploy effect. Uncontained host harness execution requires explicit CLI or uncommitted-policy consent and reports `effectsEnforced: false`.
 
 ## Adapters
 

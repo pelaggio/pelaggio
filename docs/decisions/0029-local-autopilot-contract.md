@@ -19,8 +19,8 @@ Without a freeze, the preview either clones the dogfood pipeline (and silently p
 1. **The durable object is a `Run`**, addressed by an opaque `runId`. The transport-neutral operations are `startRun`, `getRun`, `continueRun`, and `cancelRun`. CLI verbs (`run`, `resume`, `show`, `doctor`) are projections over those operations, not a second lifecycle.
 2. **A versioned `WorkContract`** is the only task payload the engine executes. Text, file, and stdin are CLI conveniences that normalize into one WorkContract before any repository mutation.
 3. **Lifecycle splits three fields.** `state` is `queued | running | paused | completed`. `pauseReason` is present if and only if `state` is `paused`. `disposition` is present if and only if `state` is `completed`. Successful autonomous work ends `ready_for_review`. `accepted` and `shipped` are not valid dispositions.
-4. **Readiness is configured verification plus the absence of an open blocking finding.** Review-factor taxonomies and scoring are not part of this contract.
-5. **External effects are denied by default** and are not implied by a successful disposition. A preview run must not push, open a PR, merge, release, or deploy unless a later, explicit effects contract says otherwise.
+4. **Readiness requires configured verification evidence plus the absence of an open blocking finding.** Missing verification is a configuration fault, never an implicit pass. Review-factor taxonomies and scoring are not part of this contract.
+5. **Pelaggio performs no push, PR, merge, release, or deploy effect.** Harness containment is reported separately from readiness. The prerelease may run a harness with ambient host capabilities only after explicit `--allow-host-execution` or uncommitted `execution.mode: host` consent; its result records `contained: false` and `effectsEnforced: false`. Host mode is permission, not an effects-denial guarantee.
 6. **Domain pauses and dispositions are valid structured results.** Only Pelaggio/protocol faults (invalid input, unknown fields, I/O of the harness itself, `requestId` content conflict) are transport errors.
 7. **The append-only event journal is authoritative for recovery.** Snapshots and metrics are derived. Resume continues the same `runId` and does not repeat acknowledged work (checkpoint-restart, not replay — ADR-0019).
 8. **Share-safe metrics structurally cannot carry task content.** They omit repository names, paths, ticket text, prompts, diffs, commands, and model output. Usage and cost appear only when a harness reports them.
@@ -28,9 +28,9 @@ Without a freeze, the preview either clones the dogfood pipeline (and silently p
 
 ## Constraints on any implementation
 
-- **Must not make the model the gate for readiness or effects.** Verification outcome and the effects allow-list are deterministic. (ADR-0014)
+- **Must not make the model the gate for readiness or execution assurance.** Verification outcome, host-mode consent, and the reported assurance are deterministic. (ADR-0014)
 - **Must not treat a pause as a crash or a protocol fault as a domain disposition.** Callers have to distinguish "operator must decide" from "Pelaggio could not parse the request."
-- **Must not require a checked-in integration** before a local run can start. Uncommitted `.pelaggio/pelaggio.yml` is a valid policy home.
+- **Must not require a checked-in integration** before a local run can start. Uncommitted `.pelaggio/pelaggio.yml` is a valid policy and host-execution-consent home.
 - **Must not scrape unstructured harness prose** for the public result when a typed seam exists. Artifact references (kind, URI, media type, digest) are the extension point for later evidence and `#751` Case objects — not a new snapshot shape.
 - **Must not encode repository or task content in metrics.** A metrics schema that admits arbitrary strings will leak; the schema is the control.
 - **Must not collapse multiple concurrent runs into one repo-global slot.** Each run has its own lease and worktree.

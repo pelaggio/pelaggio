@@ -39,6 +39,9 @@ export function assertSnapshotInvariants(snapshot: RunSnapshot): ParseResult<Run
 		if (snapshot.disposition === "ready_for_review" && isBlockingProblem(snapshot)) {
 			return { ok: false, problem: protocolProblem("readiness", "ready_for_review is invalid while a blocking finding is open") };
 		}
+		if (snapshot.disposition === "ready_for_review" && !snapshot.artifacts.some((artifact) => artifact.kind === "verification")) {
+			return { ok: false, problem: protocolProblem("readiness", "ready_for_review requires a verification artifact") };
+		}
 	} else if (snapshot.disposition) {
 		return { ok: false, problem: protocolProblem("disposition", "disposition is only valid when state is completed") };
 	}

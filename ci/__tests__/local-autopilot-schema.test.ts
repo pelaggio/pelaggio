@@ -85,6 +85,18 @@ describe("local autopilot JSON Schema 2020-12", () => {
 		}
 	});
 
+	it("agrees on readiness evidence and execution assurance invariants", () => {
+		const missingEvidence = load("snapshot-ready-for-review.json") as Record<string, unknown>;
+		missingEvidence.artifacts = [];
+		assert.equal(validators.runSnapshot(missingEvidence), false);
+		assert.equal(parseRunSnapshot(missingEvidence).ok, false);
+
+		const overstatedHost = load("snapshot-running.json") as Record<string, unknown>;
+		overstatedHost.execution = { mode: "host", contained: true, effectsEnforced: true };
+		assert.equal(validators.runSnapshot(overstatedHost), false);
+		assert.equal(parseRunSnapshot(overstatedHost).ok, false);
+	});
+
 	it("keeps fixture names aligned with the on-disk set", () => {
 		const names = readdirSync(fixtures)
 			.filter((name) => name.endsWith(".json"))

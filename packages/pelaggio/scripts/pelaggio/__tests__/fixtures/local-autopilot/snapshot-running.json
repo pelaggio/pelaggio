@@ -17,6 +17,7 @@
 	},
 	"createdAt": "2026-09-04T12:00:00.000Z",
 	"updatedAt": "2026-09-04T12:00:01.000Z",
+	"execution": { "mode": "host", "contained": false, "effectsEnforced": false },
 	"worktree": { "branch": "pelaggio/01ARZ3NDEKTSV4RRFFQ69G5FAV", "path": "/tmp/example" },
 	"artifacts": [],
 	"problems": []

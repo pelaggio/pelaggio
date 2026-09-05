@@ -178,10 +178,31 @@
 				"branch": { "type": "string", "minLength": 1, "maxLength": 255 }
 			}
 		},
+		"executionAssurance": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["mode", "contained", "effectsEnforced"],
+			"properties": {
+				"mode": { "enum": ["host", "contained"] },
+				"contained": { "type": "boolean" },
+				"effectsEnforced": { "type": "boolean" }
+			},
+			"allOf": [
+				{
+					"if": { "properties": { "mode": { "const": "host" } }, "required": ["mode"] },
+					"then": {
+						"properties": { "contained": { "const": false }, "effectsEnforced": { "const": false } }
+					},
+					"else": {
+						"properties": { "contained": { "const": true }, "effectsEnforced": { "const": true } }
+					}
+				}
+			]
+		},
 		"runSnapshot": {
 			"type": "object",
 			"additionalProperties": true,
-			"required": ["schemaVersion", "runId", "state", "workContract", "createdAt", "updatedAt", "artifacts", "problems"],
+			"required": ["schemaVersion", "runId", "state", "workContract", "createdAt", "updatedAt", "execution", "artifacts", "problems"],
 			"properties": {
 				"schemaVersion": { "$ref": "#/$defs/schemaVersion" },
 				"runId": { "$ref": "#/$defs/opaqueId" },
@@ -194,6 +215,7 @@
 				"updatedAt": { "$ref": "#/$defs/utcTimestamp" },
 				"durationMs": { "$ref": "#/$defs/durationMs" },
 				"worktree": { "$ref": "#/$defs/worktreeRef" },
+				"execution": { "$ref": "#/$defs/executionAssurance" },
 				"artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
 				"problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } },
 				"metrics": { "$ref": "#/$defs/metrics" }
@@ -216,7 +238,12 @@
 				{
 					"if": { "properties": { "disposition": { "const": "ready_for_review" } }, "required": ["disposition"] },
 					"then": {
+						"required": ["artifacts"],
 						"properties": {
+							"artifacts": {
+								"type": "array",
+								"contains": { "type": "object", "properties": { "kind": { "const": "verification" } }, "required": ["kind"] }
+							},
 							"problems": {
 								"type": "array",
 								"not": {
@@ -255,6 +282,11 @@
 					"type": "object",
 					"additionalProperties": false,
 					"properties": {}
+				},
+				"execution": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": { "mode": { "enum": ["host", "contained"] } }
 				},
 				"harness": {
 					"type": "object",

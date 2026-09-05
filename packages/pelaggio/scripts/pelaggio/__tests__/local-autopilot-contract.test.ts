@@ -54,6 +54,24 @@ describe("local autopilot contract parsers", () => {
 		assert.equal(result.problem.code, "readiness");
 	});
 
+	it("rejects ready_for_review without verification evidence", () => {
+		const raw = load("snapshot-ready-for-review.json") as Record<string, unknown>;
+		raw.artifacts = [];
+		const result = parseRunSnapshot(raw);
+		assert.equal(result.ok, false);
+		if (result.ok) return;
+		assert.equal(result.problem.code, "readiness");
+	});
+
+	it("rejects execution assurance that overstates host containment", () => {
+		const raw = load("snapshot-running.json") as Record<string, unknown>;
+		raw.execution = { mode: "host", contained: true, effectsEnforced: true };
+		const result = parseRunSnapshot(raw);
+		assert.equal(result.ok, false);
+		if (result.ok) return;
+		assert.equal(result.problem.code, "execution-assurance");
+	});
+
 	it("rejects metrics that could carry repository content", () => {
 		const result = parseMetrics(load("invalid-metrics-path.json"));
 		assert.equal(result.ok, false);
@@ -113,11 +131,22 @@ describe("local autopilot lifecycle", () => {
 	});
 
 	it("completes to ready_for_review only without blocking findings", () => {
-		const ok = applyTransition(running(), "complete", { updatedAt: "2026-09-04T12:01:00.000Z", disposition: "ready_for_review" });
+		const verified = {
+			...running(),
+			artifacts: [
+				{
+					kind: "verification",
+					uri: "file:.pelaggio/verification.json",
+					mediaType: "application/json",
+					digest: { algorithm: "sha256" as const, value: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" },
+				},
+			],
+		};
+		const ok = applyTransition(verified, "complete", { updatedAt: "2026-09-04T12:01:00.000Z", disposition: "ready_for_review" });
 		assert.equal(ok.ok, true);
 		if (!ok.ok) return;
 		assert.equal(ok.value.disposition, "ready_for_review");
-		const blocked = applyTransition({ ...running(), problems: [{ schemaVersion: 1, type: "verification", code: "tests-failed", message: "red", retryable: true }] }, "complete", {
+		const blocked = applyTransition({ ...verified, problems: [{ schemaVersion: 1, type: "verification", code: "tests-failed", message: "red", retryable: true }] }, "complete", {
 			updatedAt: "2026-09-04T12:01:00.000Z",
 			disposition: "ready_for_review",
 		});

@@ -6,6 +6,8 @@ import {
 	DISPOSITIONS,
 	type Digest,
 	type Disposition,
+	EXECUTION_MODES,
+	type ExecutionAssurance,
 	type FakeStep,
 	HARNESS_ADAPTERS,
 	type LocalConfig,
@@ -42,15 +44,17 @@ const ARTIFACT_KEYS = new Set(["kind", "uri", "mediaType", "digest"]);
 const METRICS_KEYS = new Set(["schemaVersion", "durationMs", "harnessCalls", "verificationPasses", "repairAttempts", "usage"]);
 const USAGE_KEYS = new Set(["inputTokens", "outputTokens", "costUsd"]);
 const WORKTREE_KEYS = new Set(["path", "branch"]);
-const SNAPSHOT_KEYS = new Set(["schemaVersion", "runId", "requestId", "state", "pauseReason", "disposition", "workContract", "createdAt", "updatedAt", "durationMs", "worktree", "artifacts", "problems", "metrics"]);
+const SNAPSHOT_KEYS = new Set(["schemaVersion", "runId", "requestId", "state", "pauseReason", "disposition", "workContract", "createdAt", "updatedAt", "durationMs", "worktree", "execution", "artifacts", "problems", "metrics"]);
 const EVENT_KEYS = new Set(["schemaVersion", "eventId", "runId", "seq", "type", "at", "payload"]);
-const CONFIG_KEYS = new Set(["project", "harness", "autopilot", "effects"]);
+const CONFIG_KEYS = new Set(["project", "harness", "autopilot", "execution", "effects"]);
 const HARNESS_KEYS = new Set(["adapter", "fake", "grok"]);
 const FAKE_KEYS = new Set(["script"]);
 const GROK_KEYS = new Set(["bin", "model"]);
 const AUTOPILOT_KEYS = new Set(["maxRepairs", "verification"]);
 const VERIFICATION_KEYS = new Set(["command"]);
 const EFFECTS_KEYS = new Set(["allow"]);
+const EXECUTION_KEYS = new Set(["mode"]);
+const ASSURANCE_KEYS = new Set(["mode", "contained", "effectsEnforced"]);
 const PROJECT_KEYS = new Set<string>([]);
 
 function fail(problem: Problem): ParseResult<never> {
@@ -319,6 +323,23 @@ function parseWorktree(value: unknown): ParseResult<WorktreeRef> {
 	return { ok: true, value: { branch: branch.value, ...(path ? { path } : {}) } };
 }
 
+function parseExecutionAssurance(value: unknown): ParseResult<ExecutionAssurance> {
+	if (!isObject(value)) return fail(protocolProblem("type", "execution must be an object"));
+	const unknown = rejectUnknownKeys(value, ASSURANCE_KEYS, "execution");
+	if (!unknown.ok) return unknown;
+	if (typeof value.mode !== "string" || !(EXECUTION_MODES as readonly string[]).includes(value.mode)) {
+		return fail(protocolProblem("execution-mode", "execution.mode must be host|contained"));
+	}
+	if (typeof value.contained !== "boolean" || typeof value.effectsEnforced !== "boolean") {
+		return fail(protocolProblem("execution-assurance", "execution.contained and execution.effectsEnforced must be booleans"));
+	}
+	const expected = value.mode === "contained";
+	if (value.contained !== expected || value.effectsEnforced !== expected) {
+		return fail(protocolProblem("execution-assurance", `execution assurance is inconsistent with ${value.mode} mode`));
+	}
+	return { ok: true, value: { mode: value.mode as ExecutionAssurance["mode"], contained: expected, effectsEnforced: expected } };
+}
+
 export function parseRunSnapshot(value: unknown): ParseResult<RunSnapshot> {
 	if (!isObject(value)) return fail(protocolProblem("type", "runSnapshot must be an object"));
 	const camel = requireCamelCaseKeys(value, "runSnapshot");
@@ -359,9 +380,13 @@ export function parseRunSnapshot(value: unknown): ParseResult<RunSnapshot> {
 		workContract: workContract.value,
 		createdAt: value.createdAt,
 		updatedAt: value.updatedAt,
+		execution: { mode: "host", contained: false, effectsEnforced: false },
 		artifacts,
 		problems,
 	};
+	const execution = parseExecutionAssurance(value.execution);
+	if (!execution.ok) return execution;
+	snapshot.execution = execution.value;
 	if (value.requestId !== undefined) {
 		if (!isOpaqueId(value.requestId)) return fail(protocolProblem("opaque-id", "runSnapshot.requestId is not an opaque id"));
 		snapshot.requestId = value.requestId;
@@ -535,6 +560,15 @@ export function parseLocalConfig(value: unknown): ParseResult<LocalConfig> {
 			} else autopilot.verification = {};
 		}
 		config.autopilot = autopilot;
+	}
+	if (value.execution !== undefined) {
+		if (!isObject(value.execution)) return fail(configProblem("execution", "execution must be an object"));
+		const executionUnknown = rejectUnknownKeys(value.execution, EXECUTION_KEYS, "execution");
+		if (!executionUnknown.ok) return { ok: false, problem: configProblem(executionUnknown.problem.code, executionUnknown.problem.message) };
+		if (value.execution.mode !== undefined && (typeof value.execution.mode !== "string" || !(EXECUTION_MODES as readonly string[]).includes(value.execution.mode))) {
+			return fail(configProblem("execution-mode", "execution.mode must be host|contained"));
+		}
+		config.execution = value.execution.mode === undefined ? {} : { mode: value.execution.mode as NonNullable<LocalConfig["execution"]>["mode"] };
 	}
 	if (value.effects !== undefined) {
 		if (!isObject(value.effects)) return fail(configProblem("effects", "effects must be an object"));
