@@ -122,7 +122,7 @@ describe("registers", () => {
 			assert.equal(denied.includes(r.name as RegisterName), expected, `${r.name} (${r.kind}${r.agentReads ? ", agentReads" : ""})`);
 		}
 		// The four registers plan step 7a widens the deny list to are harness and not skill-read.
-		for (const name of ["effects", "execution-receipts", "attempts", "flow-events"]) assert.ok(denied.includes(name as never), name);
+		for (const name of ["effects", "execution-receipts", "attempts", "flow-events", "delivery-cases"]) assert.ok(denied.includes(name as never), name);
 		// Skill-read and agent-written registers must never be denied (no false fire).
 		for (const name of ["pelaggio-log.jsonl", "plans", "ship", "authoring-review-seats", "review-heads", "review-findings-"]) assert.ok(!denied.includes(name as never), name);
 		// Write/Edit denial covers EVERY harness register — files and families too; agentReads only relaxes Bash mention.

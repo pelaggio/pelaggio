@@ -13,8 +13,8 @@ import { classifyFailure, classifyOutcome } from "../cycle-outcome.js";
 import { parsePickItem, parsePickResult, pickDivergedFromPin } from "../pick-parse.js";
 import { ensureMainCheckoutOnBranch } from "../ship/freshness.js";
 import { expandSkill } from "../skills.js";
-import { ALL_STEPS } from "../step-names.js";
-import type { Flags, ParkSignal, PipelineOpts, Step } from "../types.js";
+import { ALL_STEPS, STEPS } from "../step-names.js";
+import type { Flags, ParkSignal, PipelineEntryDecision, PipelineEntryReason, PipelineOpts, Step } from "../types.js";
 import type { CycleHelpers, StepOutcome } from "./context.js";
 
 /** The cycle bindings `runPick` reads — data only, built by the cycle at the call site. */
@@ -44,6 +44,8 @@ export interface PickOutcome {
 	readonly profile: string;
 	/** Set when the claim published a cross-process session record; `finish()` disposes it. */
 	readonly sessionController: SessionController | undefined;
+	/** Computed after quick-scope classification; pipeline persists it via `finish()`. */
+	readonly entryDecision: PipelineEntryDecision;
 }
 
 export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOutcome<PickOutcome>> {
@@ -140,10 +142,12 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 							return base === expected || base.startsWith(`${expected}-`);
 						});
 						if (nested.length === 1) {
-							const base = nested[0].split(/[/\\]/).pop() ?? "";
+							const chosen = nested[0];
+							if (!chosen) return { kind: "terminal", result: finishFailed(`worktree missing for ${itemId}: expected ${expected}`, "selection", { itemId, cost: cost() }) };
+							const base = chosen.split(/[/\\]/).pop() ?? "";
 							const extendedId = (base.startsWith(WORKTREE_PREFIX) ? base.slice(WORKTREE_PREFIX.length) : base).toUpperCase();
-							log(`expected ${worktree}, using ${nested[0]} for in-flight ${extendedId}`);
-							worktree = nested[0];
+							log(`expected ${worktree}, using ${chosen} for in-flight ${extendedId}`);
+							worktree = chosen;
 						} else if (nested.length > 1) return { kind: "terminal", result: finishFailed(`worktree ambiguous: ${nested.join(", ")}`, "selection", { itemId, cost: cost() }) };
 						else {
 							const summary = all.map((p) => p.split(/[/\\]/).pop()).join(", ");
@@ -228,15 +232,42 @@ export async function runPick(ctx: PickInput, helpers: PickDeps): Promise<StepOu
 	// ── Detect quick mode ──
 	// A pinned --profile (issue #247) suppresses the automatic downgrade: the operator has taken
 	// explicit control of the profile, so keep the step set and backend identical to the pin.
+	const requestedStart = startFrom ?? null;
+	const requestedSource = flags.from ? "from-flag" : flags["review-findings"] ? "review-findings" : ctx.startFrom !== undefined ? "supplied" : "default";
+	let automaticQuick = false;
+	let reason: PipelineEntryReason = flags.profile ? "profile-pin" : "standard";
+	let excludedQuickSteps: PipelineEntryDecision["excludedQuickSteps"] = [];
 
 	if (!flags.profile) {
 		const quickItem = !opts.dryRun && itemId ? await roadmap.getItem(itemId).catch(() => null) : null;
 		if (isQuickScope({ item: quickItem, summaryText: pickAssistantText })) {
 			profile = "quick";
+			automaticQuick = true;
+			excludedQuickSteps = ["plan", "shakedown-plan"];
 			log("scope S/XS or bug — quick mode (Sonnet, skip plan+shakedown-plan)");
-			startFrom ??= "implement";
+			const implementIndex = STEPS.indexOf("implement");
+			const requestedIndex = startFrom === undefined ? -1 : (STEPS as readonly string[]).indexOf(startFrom);
+			if (startFrom === undefined) {
+				startFrom = "implement";
+				reason = "automatic-quick-fresh";
+			} else if (requestedIndex !== -1 && requestedIndex < implementIndex) {
+				startFrom = "implement";
+				reason = "automatic-quick-clamped";
+			} else {
+				reason = "automatic-quick-kept";
+			}
 		}
 	}
 	startFrom ??= "plan";
-	return { kind: "continue", itemId: itemId!, worktree: worktree!, startFrom, profile, sessionController };
+	const entryDecision: PipelineEntryDecision = {
+		requestedStart,
+		requestedSource,
+		profile,
+		automaticQuick,
+		effectiveStart: startFrom,
+		excludedQuickSteps,
+		reason,
+	};
+	log(`entry requested=${requestedStart ?? "default"} source=${requestedSource} effective=${startFrom} reason=${reason} profile=${profile}`);
+	return { kind: "continue", itemId: itemId!, worktree: worktree!, startFrom, profile, sessionController, entryDecision };
 }

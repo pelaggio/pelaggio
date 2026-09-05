@@ -6,6 +6,8 @@ The pipeline sequence is:
 pick -> plan -> shakedown-plan -> implement -> shakedown-code -> ship
 ```
 
+After pick classifies an item as automatically quick, the entry chokepoint clamps any requested pipeline start before `implement` to `implement`, so a committed-plan resume cannot spend on the quick profile's excluded `plan` or `shakedown-plan` steps (#706). Explicit `--profile` pins retain their existing start semantics, and later resumes such as `shakedown-code` or `ship` are never rewound. The requested source/start, effective start, selected profile, and closed reason are recorded together in cycle provenance.
+
 `shipwreck` and `pr-review` are first-class configured steps but are not normal pipeline stages. Both live in `Step`/`ALL_STEPS` and every `Record<Step, T>` map, yet are absent from `STEPS`/`PipelineStep`, so they carry first-class budget/turns/effort/model config without affecting pipeline sequencing.
 
 ## Step Configuration

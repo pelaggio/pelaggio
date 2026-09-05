@@ -25,11 +25,11 @@ export interface WriteAtomicallyOptions {
  * the temp is renamed over the destination. Readers never observe a partial record. On any
  * failure the temp file is removed and the error propagates; the destination is untouched.
  */
-export function writeAtomically(path: string, body: string, options: WriteAtomicallyOptions = {}): void {
+export function writeAtomically(path: string, body: string | Uint8Array, options: WriteAtomicallyOptions = {}): void {
 	mkdirSync(dirname(path), { recursive: true });
 	const temporary = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
 	try {
-		writeFileSync(temporary, body, { encoding: "utf8", flag: "wx", ...(options.mode === undefined ? {} : { mode: options.mode }) });
+		writeFileSync(temporary, body, { flag: "wx", ...(options.mode === undefined ? {} : { mode: options.mode }) });
 		if (options.mode !== undefined) chmodSync(temporary, options.mode);
 		renameSync(temporary, path);
 	} catch (error) {
