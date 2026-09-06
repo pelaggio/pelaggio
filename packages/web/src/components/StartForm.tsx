@@ -106,7 +106,7 @@ export function StartForm() {
 		<form onSubmit={submit} className="wrap max-w-3xl pt-10 pb-20 md:pt-14">
 			<p className="eyebrow">This repository · {currentRepo}</p>
 			<h1 className="mt-3 font-display text-2xl font-medium tracking-tight text-ink md:text-[2.5rem] md:leading-[1.1]">Start a run</h1>
-			<p className="mt-3 max-w-xl text-[17px] text-ink-soft">Pick a work item, or drain / watch the open list. Shipping stays a pull request unless you change it below.</p>
+			<p className="mt-3 max-w-xl text-[17px] text-ink-soft">Pick a work item, or drain / watch the open list. Shipping uses this repository’s configured policy unless you choose a ship target under Advanced.</p>
 
 			<section className="mt-8 flex flex-wrap gap-2">
 				<button type="button" className="btn-ghost" disabled={busy} onClick={() => void preset("drain", 1)}>
