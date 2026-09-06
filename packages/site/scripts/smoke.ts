@@ -15,6 +15,8 @@ const contentTypes: Record<string, string> = {
 	".json": "application/json",
 	".svg": "image/svg+xml",
 	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
 	".woff2": "font/woff2",
 };
 const base = (process.env.SITE_BASE || "").replace(/\/$/, "");
@@ -68,11 +70,14 @@ try {
 			const panel = page.locator(`[data-scenario="${id}"]`);
 			assert.equal(await panel.isVisible(), true);
 			assert.equal(await page.locator(`[data-scenario="${id === "csv" ? "import" : "csv"}"]`).isVisible(), false);
-			await panel.locator(".envelope summary").click();
-			await panel.locator(".plan-detail summary").click();
+			await panel.getByRole("radio", { name: "Decisions", exact: true }).check();
+			assert.equal(await panel.locator('[data-receipt="decisions"]').isVisible(), true);
+			await panel.getByRole("radio", { name: "Run", exact: true }).check();
+			assert.equal(await panel.locator('[data-receipt="run"]').isVisible(), true);
+			assert.match(await panel.locator(".step-meter").innerText(), /gpt-5-codex/);
+			assert.match(await panel.locator(".step-meter").innerText(), /grok-code-fast-1/);
 			assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${id} expanded overflow at ${width}px`);
-			await panel.locator(".envelope summary").click();
-			await panel.locator(".plan-detail summary").click();
+			await panel.getByRole("radio", { name: "Charter", exact: true }).check();
 			if (process.env.SITE_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SITE_SCREENSHOT_DIR}/${id}-${width}.png`, fullPage: true });
 		}
 	}
@@ -95,7 +100,7 @@ try {
 	assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "npx pelaggio init");
 	await page.goto(`${origin}/limitations`);
 	assert.equal(await page.locator("#delivery-records").count(), 1);
-	for (const path of ["/og.png", "/apple-touch-icon.png", "/example/receipt.json", "/example/csv/plan.md", "/example/import/plan.md", "/ai-delivery/v0.1/predicate.schema.json"]) {
+	for (const path of ["/og.jpg", "/apple-touch-icon.png", "/example/receipt.json", "/example/csv/plan.md", "/example/import/plan.md", "/ai-delivery/v0.1/predicate.schema.json"]) {
 		assert.equal((await context.request.get(origin + path)).status(), 200, path);
 	}
 	const receipt = await (await context.request.get(`${origin}/example/receipt.json`)).json();
@@ -119,6 +124,9 @@ try {
 	await staticPage.getByRole("radio", { name: "Interrupted import", exact: true }).check();
 	assert.equal(await staticPage.locator('[data-scenario="import"]').isVisible(), true);
 	assert.equal(await staticPage.locator('[data-scenario="csv"]').isVisible(), false);
+	await staticPage.locator('[data-scenario="import"]').getByRole("radio", { name: "Run", exact: true }).check();
+	assert.equal(await staticPage.locator('[data-scenario="import"] [data-receipt="run"]').isVisible(), true);
+	assert.equal(await staticPage.locator('[data-scenario="import"] [data-receipt="charter"]').isVisible(), false);
 	assert.equal(await staticPage.locator("h1").textContent(), "Let the work run.");
 	assert.ok((await staticPage.locator("button.copy-cmd code").first().textContent())?.includes("npx pelaggio init"));
 	await noJs.close();

@@ -43,8 +43,7 @@ deliveries as GitHub PRs or environmental containment demonstrations.
 
 The canonical `docs/ai-delivery/v0.1` files are copied to their public schema URLs.
 These captures do not claim to be emitted production delivery envelopes; #782 owns the
-richer production handoff. CI checks both views, native no-JavaScript switching,
-expanded plans/receipts, mobile widths, exact downloadable bytes, and revision binding.
+richer production handoff. CI checks both views, native no-JavaScript switching, receipt tabs, mobile widths, exact downloadable bytes, and revision binding.
 
 `docs/trust/limitations.md` is rendered directly at `/limitations`. Edit it there;
 do not maintain a separate marketing copy of the trust statements.
