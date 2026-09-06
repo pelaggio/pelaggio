@@ -1,42 +1,264 @@
 @import "tailwindcss";
+@import "@fontsource-variable/outfit";
 
-html {
-	-webkit-text-size-adjust: 100%;
-	text-size-adjust: 100%;
+@theme {
+	--color-foam: #fff6e8;
+	--color-foam-2: #fffbf3;
+	--color-ink: #071a2e;
+	--color-ink-soft: #2e5868;
+	--color-deep: #0a3a48;
+	--color-abyss: #042830;
+	--color-accent: #00736c;
+	--color-signal: #00c9b4;
+	--color-signal-lit: #3ae8d0;
+	--color-on-accent: #071a2e;
+	--color-bg: #fff6e8;
+	--color-surface: #fffbf3;
+	--color-mist: #a8d4ce;
+	--color-pass: #1f7a4d;
+	--color-pass-lit: #7ee8a0;
+	--color-warn: #b86a1c;
+	--color-fail: #c44747;
+	--color-plume: #c9dcd6;
+	--color-abyss-line: #ffffff30;
+	--color-foam-line: #00736c33;
+
+	--font-sans: "Segoe UI", "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
+	--font-display: "Outfit Variable", "Outfit", ui-sans-serif, system-ui, sans-serif;
+	--font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+	--text-micro: 0.625rem;
+	--text-2xs: 0.6875rem;
+
+	--radius-btn: 5px;
+	--tracking-label: 0.08em;
 }
 
-body {
-	@apply bg-slate-50 text-slate-900 antialiased;
-	font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+@layer base {
+	html {
+		-webkit-text-size-adjust: 100%;
+		text-size-adjust: 100%;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+		color-scheme: light;
+	}
+
+	html,
+	body {
+		min-height: 100%;
+		background: var(--color-bg);
+		color: var(--color-ink);
+	}
+
+	body {
+		font-family: var(--font-sans);
+		line-height: 1.65;
+	}
+
+	h1,
+	h2,
+	h3 {
+		text-wrap: balance;
+		font-family: var(--font-display);
+		font-weight: 500;
+		letter-spacing: -0.035em;
+	}
+
+	p {
+		text-wrap: pretty;
+	}
+
+	a {
+		color: inherit;
+		text-underline-offset: 5px;
+	}
+
+	a:hover {
+		text-decoration: underline;
+	}
+
+	a:focus-visible,
+	button:focus-visible,
+	summary:focus-visible,
+	select:focus-visible,
+	input:focus-visible {
+		outline: 2px solid currentColor;
+		outline-offset: 4px;
+	}
+
+	::selection {
+		background: var(--color-signal);
+		color: var(--color-on-accent);
+	}
+
+	button {
+		min-height: 44px;
+		cursor: pointer;
+		border-radius: var(--radius-btn);
+		font-weight: 600;
+	}
+
+	button:not(:disabled),
+	[role="button"]:not(:disabled) {
+		cursor: pointer;
+	}
+
+	button:disabled {
+		cursor: not-allowed;
+		opacity: 0.4;
+	}
+
+	input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+	select,
+	textarea {
+		min-height: 44px;
+		width: 100%;
+		border-radius: var(--radius-btn);
+		border: 1px solid color-mix(in oklab, var(--color-accent) 20%, transparent);
+		background: var(--color-foam-2);
+		padding: 8px 12px;
+		color: var(--color-ink);
+	}
+
+	input[type="checkbox"],
+	input[type="radio"] {
+		accent-color: var(--color-accent);
+	}
+
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		text-align: left;
+	}
+
+	th,
+	td {
+		border-bottom: 1px solid var(--color-foam-line);
+		padding: 10px 12px 10px 0;
+		vertical-align: middle;
+	}
+
+	th {
+		font-family: var(--font-mono);
+		font-size: 0.6875rem;
+		font-weight: 400;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--color-ink-soft);
+	}
+
+	pre {
+		overflow-x: auto;
+		font-family: var(--font-mono);
+	}
+
+	code {
+		font-family: var(--font-mono);
+		font-size: 0.8125em;
+	}
 }
 
-a {
-	@apply text-blue-700 underline-offset-2 hover:underline;
+@layer components {
+	.wrap {
+		max-width: 1120px;
+		margin-inline: auto;
+		padding-inline: 36px;
+	}
+
+	.onshore {
+		position: relative;
+		background: var(--color-bg);
+		color: var(--color-ink);
+	}
+
+	.onshore::after {
+		content: "";
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+		opacity: 0.045;
+		mix-blend-mode: multiply;
+		background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.12  0 0 0 0 0.08  0 0 0 0 0.03  0 0 0 0.5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+	}
+
+	.offshore {
+		background: var(--color-abyss);
+		color: var(--color-foam);
+		color-scheme: dark;
+	}
+
+	.eyebrow {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--color-accent);
+	}
+
+	.offshore .eyebrow {
+		color: var(--color-signal-lit);
+	}
+
+	.btn-primary {
+		background: var(--color-signal);
+		color: var(--color-ink);
+		padding: 8px 20px;
+		font-size: 15px;
+	}
+
+	.btn-primary:hover:not(:disabled) {
+		background: var(--color-signal-lit);
+	}
+
+	.btn-ghost {
+		border: 1px solid var(--color-foam-line);
+		background: var(--color-foam-2);
+		color: var(--color-ink);
+		padding: 8px 20px;
+		font-size: 15px;
+	}
+
+	.btn-ghost:hover:not(:disabled) {
+		border-color: var(--color-accent);
+	}
+
+	.btn-quiet {
+		min-height: 44px;
+		padding: 8px 16px;
+		font-size: 15px;
+		font-weight: 600;
+		color: var(--color-ink-soft);
+		background: transparent;
+	}
+
+	.btn-quiet:hover:not(:disabled) {
+		color: var(--color-ink);
+	}
+
+	.btn-inline {
+		min-height: auto;
+		padding: 0;
+		font-size: inherit;
+		font-weight: inherit;
+		color: inherit;
+		background: transparent;
+		text-decoration: underline;
+		text-underline-offset: 5px;
+	}
 }
 
-table {
-	@apply w-full border-collapse;
+@media (max-width: 700px) {
+	.wrap {
+		padding-inline: 22px;
+	}
 }
 
-th,
-td {
-	@apply border-b border-slate-200 px-3 py-3 text-left align-middle;
-}
-
-th {
-	@apply text-xs font-semibold uppercase tracking-wide text-slate-500;
-}
-
-button {
-	@apply min-h-[44px] cursor-pointer rounded border border-slate-300 bg-white px-4 py-2 font-medium hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60;
-}
-
-input,
-select,
-textarea {
-	@apply min-h-[44px] w-full rounded border border-slate-300 bg-white px-3 py-2;
-}
-
-pre {
-	@apply overflow-x-auto rounded bg-slate-900 p-3 text-sm text-slate-100;
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
 }

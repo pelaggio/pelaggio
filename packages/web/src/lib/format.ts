@@ -77,23 +77,25 @@ export function formatRunState(status: RunStatus, activity?: RunActivity): strin
 }
 
 const STATUS_CLASSES: Record<RunStatus, string> = {
-	running: "bg-blue-100 text-blue-800",
-	completed: "bg-green-100 text-green-800",
-	failed: "bg-red-100 text-red-800",
-	parked: "bg-amber-100 text-amber-800",
-	paused: "bg-slate-200 text-slate-800",
-	abandoned: "bg-zinc-200 text-zinc-700",
+	running: "bg-accent/10 text-accent",
+	completed: "bg-pass/10 text-pass",
+	failed: "bg-fail/10 text-fail",
+	parked: "bg-warn/10 text-warn",
+	paused: "bg-ink/5 text-ink-soft",
+	abandoned: "bg-ink/5 text-ink-soft",
 };
 
 const ACTIVITY_RUNNING_CLASSES: Record<string, string> = {
 	active: STATUS_CLASSES.running,
-	"watch-idle": "bg-slate-100 text-slate-700",
-	"budget-idle": "bg-amber-100 text-amber-800",
-	parked: "bg-amber-100 text-amber-800",
+	"watch-idle": "bg-ink/5 text-ink-soft",
+	"budget-idle": "bg-warn/10 text-warn",
+	parked: "bg-warn/10 text-warn",
 };
 
+const PILL = "inline-flex items-center rounded-btn px-2 py-0.5 font-mono text-2xs tracking-label uppercase";
+
 export function statusBadgeClass(status: RunStatus): string {
-	return `inline-block rounded px-2 py-0.5 text-xs font-medium ${STATUS_CLASSES[status]}`;
+	return `${PILL} ${STATUS_CLASSES[status]}`;
 }
 
 /** Activity-aware badge class; non-running statuses keep the status map. */
@@ -101,5 +103,5 @@ export function runStateBadgeClass(status: RunStatus, activity?: RunActivity): s
 	if (status !== "running") return statusBadgeClass(status);
 	const kind = activity?.kind ?? "active";
 	const color = ACTIVITY_RUNNING_CLASSES[kind] ?? STATUS_CLASSES.running;
-	return `inline-block rounded px-2 py-0.5 text-xs font-medium ${color}`;
+	return `${PILL} ${color}`;
 }

@@ -10,26 +10,26 @@ export function RepoNav() {
 	const state = useRepos();
 
 	if (state.status === "loading") {
-		return <span className="text-xs text-slate-500">loading repos…</span>;
+		return <span className="font-mono text-2xs tracking-label text-ink-soft uppercase">loading repos…</span>;
 	}
 	if (state.status === "error") {
 		return (
-			<span className="text-xs text-red-700">
+			<span className="text-2xs text-fail">
 				failed to load repos: {state.error}
-				<button type="button" onClick={() => void retryInit()} className="ml-2 underline">
+				<button type="button" onClick={() => void retryInit()} className="btn-inline ml-2">
 					retry
 				</button>
 			</span>
 		);
 	}
 	if (state.status === "empty") {
-		return <span className="text-xs text-slate-500">no repos configured</span>;
+		return <span className="font-mono text-2xs tracking-label text-ink-soft uppercase">no repos configured</span>;
 	}
 
 	return (
-		<label className="flex items-center gap-1 text-xs text-slate-600">
-			<span>repo</span>
-			<select value={state.current} onChange={(e) => setCurrentRepo(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1 text-sm">
+		<label className="flex items-center gap-2 font-mono text-2xs tracking-label text-ink-soft uppercase">
+			<span>Repo</span>
+			<select value={state.current} onChange={(e) => setCurrentRepo(e.target.value)} className="min-h-11 w-auto rounded-btn border border-foam-line bg-foam-2 px-2.5 font-sans text-sm font-normal tracking-normal text-ink normal-case">
 				{state.repos.map((r) => (
 					<option key={r.slug} value={r.slug}>
 						{r.slug} — {basename(r.path)}

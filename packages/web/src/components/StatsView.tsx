@@ -37,18 +37,18 @@ export function StatsView() {
 
 	if (reposState.status === "error") {
 		return (
-			<p className="text-red-700">
+			<p className="wrap pt-10 text-fail">
 				Failed to load repos: {reposState.error}
-				<button type="button" onClick={() => void retryInit()} className="ml-2 underline">
+				<button type="button" onClick={() => void retryInit()} className="btn-inline ml-2">
 					retry
 				</button>
 			</p>
 		);
 	}
-	if (reposState.status === "empty") return <p className="text-slate-500">No repos configured.</p>;
-	if (reposState.status === "loading") return <p className="text-slate-500">Loading…</p>;
-	if (error) return <p className="text-red-700">Error loading stats: {error}</p>;
-	if (!stats) return <p className="text-slate-500">Loading…</p>;
+	if (reposState.status === "empty") return <p className="wrap pt-10 text-ink-soft">No repos configured.</p>;
+	if (reposState.status === "loading") return <p className="wrap pt-10 text-ink-soft">Loading…</p>;
+	if (error) return <p className="wrap pt-10 text-fail">Error loading stats: {error}</p>;
+	if (!stats) return <p className="wrap pt-10 text-ink-soft">Loading…</p>;
 
 	const stepKeys = Array.from(new Set([...Object.keys(stats.costByStep), ...Object.keys(stats.avgRetriesByStep), ...Object.keys(stats.maxTurnsRetriesByStep), ...Object.keys(stats.rethinkRateByStep)])).sort();
 	const totalTokens = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.cacheRead + stats.totalTokens.cacheCreation;
@@ -59,93 +59,104 @@ export function StatsView() {
 	const failKeys = Object.keys(stats.failuresByCause).sort((a, b) => (stats.failuresByCause[b] ?? 0) - (stats.failuresByCause[a] ?? 0));
 
 	return (
-		<div className="space-y-8">
-			<h1 className="text-2xl font-semibold">Stats — {currentRepo}</h1>
+		<div className="wrap pb-20 pt-10 md:pt-14">
+			<p className="eyebrow">This repository · {currentRepo}</p>
+			<h1 className="mt-3 font-display text-2xl font-medium tracking-tight text-ink md:text-[2.5rem] md:leading-[1.1]">Stats</h1>
+			<p className="mt-3 max-w-xl text-[17px] text-ink-soft">Reducer over this repo's recorded cycles. Cost is self-reported.</p>
 
-			<section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+			<dl className="mt-10 grid grid-cols-2 gap-px overflow-hidden border border-foam-line bg-foam-line sm:grid-cols-4">
 				<Card label="Cycles" value={String(stats.totalCycles)} />
 				<Card label="Completed" value={String(stats.completedCycles)} />
 				<Card label="Failed" value={String(stats.failedCycles)} />
 				<Card label="Parked" value={String(stats.parkedCycles)} />
 				<Card label="Blocked" value={String(stats.blockedCycles)} />
-				<Card label="Total cost" value={formatUsd(stats.totalCostUsd)} />
+				<Card label="Total cost" value={formatUsd(stats.totalCostUsd)} hint="self-reported" />
 				<Card label="Total tokens" value={formatTokens(totalTokens)} />
 				<Card label="Cache hit" value={`${(stats.cacheHitRatio * 100).toFixed(1)}%`} />
 				<Card label="Avg shakedown" value={stats.avgShakedownIterations.toFixed(2)} />
-			</section>
+			</dl>
 
-			<section>
-				<h2 className="mb-2 text-lg font-semibold">Per-step</h2>
-				<table>
-					<thead>
-						<tr>
-							<th>Step</th>
-							<th>Avg retries</th>
-							<th>Turn-limit retries</th>
-							<th>Rethink rate</th>
-							<th>Cost</th>
-						</tr>
-					</thead>
-					<tbody>
-						{stepKeys.map((k) => (
-							<tr key={k}>
-								<td>{k}</td>
-								<td>{(stats.avgRetriesByStep[k] ?? 0).toFixed(2)}</td>
-								<td>{stats.maxTurnsRetriesByStep[k] ?? 0}</td>
-								<td>{((stats.rethinkRateByStep[k] ?? 0) * 100).toFixed(1)}%</td>
-								<td>{formatUsd(stats.costByStep[k] ?? 0)}</td>
-							</tr>
-						))}
-					</tbody>
-				</table>
-			</section>
-
-			{providerKeys.length > 0 && (
-				<section>
-					<h2 className="mb-2 text-lg font-semibold">Per-provider</h2>
+			<section className="mt-12">
+				<h2 className="font-display text-xl font-medium tracking-tight text-ink">Per-step</h2>
+				<div className="mt-4 overflow-x-auto">
 					<table>
 						<thead>
 							<tr>
-								<th>Provider</th>
+								<th>Step</th>
+								<th>Avg retries</th>
+								<th>Turn-limit retries</th>
+								<th>Rethink rate</th>
 								<th>Cost</th>
-								<th>Steps</th>
-								<th>Tokens</th>
 							</tr>
 						</thead>
 						<tbody>
-							{providerKeys.map((p) => {
-								const t = stats.tokensByProvider[p];
-								const total = t ? t.input + t.output + t.cacheRead + t.cacheCreation : 0;
-								return (
-									<tr key={p}>
-										<td>{p}</td>
-										<td>
-											{stats.costEstimatedByProvider[p] ? "~" : ""}
-											{formatUsd(stats.costByProvider[p] ?? 0)}
-										</td>
-										<td>{stats.stepsByProvider[p] ?? 0}</td>
-										<td>{formatTokens(total)}</td>
-									</tr>
-								);
-							})}
+							{stepKeys.map((k) => (
+								<tr key={k}>
+									<th scope="row" className="font-mono text-xs font-normal text-ink">
+										{k}
+									</th>
+									<td className="font-mono text-sm tabular-nums">{(stats.avgRetriesByStep[k] ?? 0).toFixed(2)}</td>
+									<td className="font-mono text-sm tabular-nums">{stats.maxTurnsRetriesByStep[k] ?? 0}</td>
+									<td className="font-mono text-sm tabular-nums">{((stats.rethinkRateByStep[k] ?? 0) * 100).toFixed(1)}%</td>
+									<td className="font-mono text-sm tabular-nums">{formatUsd(stats.costByStep[k] ?? 0)}</td>
+								</tr>
+							))}
 						</tbody>
 					</table>
+				</div>
+			</section>
+
+			{providerKeys.length > 0 && (
+				<section className="mt-12">
+					<h2 className="font-display text-xl font-medium tracking-tight text-ink">Per-provider</h2>
+					<p className="mt-1 text-sm text-ink-soft">Single-harness counts. Not a bake-off.</p>
+					<div className="mt-4 overflow-x-auto">
+						<table>
+							<thead>
+								<tr>
+									<th>Provider</th>
+									<th>Cost</th>
+									<th>Steps</th>
+									<th>Tokens</th>
+								</tr>
+							</thead>
+							<tbody>
+								{providerKeys.map((p) => {
+									const t = stats.tokensByProvider[p];
+									const total = t ? t.input + t.output + t.cacheRead + t.cacheCreation : 0;
+									return (
+										<tr key={p}>
+											<th scope="row" className="font-mono text-xs font-normal text-ink">
+												{p}
+											</th>
+											<td className="font-mono text-sm tabular-nums">
+												{stats.costEstimatedByProvider[p] ? "~" : ""}
+												{formatUsd(stats.costByProvider[p] ?? 0)}
+											</td>
+											<td className="font-mono text-sm tabular-nums">{stats.stepsByProvider[p] ?? 0}</td>
+											<td className="font-mono text-sm tabular-nums">{formatTokens(total)}</td>
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
 				</section>
 			)}
 
 			{(parkKeys.length > 0 || blockKeys.length > 0 || failKeys.length > 0) && (
-				<section>
-					<h2 className="mb-2 text-lg font-semibold">Outcomes</h2>
-					<div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+				<section className="mt-12">
+					<h2 className="font-display text-xl font-medium tracking-tight text-ink">Outcomes</h2>
+					<div className="mt-4 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
 						{parkKeys.length > 0 && (
 							<div>
-								<h3 className="mb-1 text-sm font-semibold text-slate-600">Parked by cause</h3>
-								<ul className="space-y-1 text-sm">
+								<h3 className="font-mono text-2xs tracking-label text-ink-soft uppercase">Parked by cause</h3>
+								<ul className="mt-2 text-sm">
 									{parkKeys.map((k) => (
-										<li key={k}>
+										<li key={k} className="border-b border-foam-line py-2">
 											<code>{k}</code> · {stats.parksByClass[k]}
-											{k === "unrecorded" ? <span className="text-slate-500"> (logged before classification)</span> : ""}
-											{k === "unknown" ? <span className="text-slate-500"> (stored member not in runtime allowlist)</span> : ""}
+											{k === "unrecorded" ? <span className="text-ink-soft"> (logged before classification)</span> : ""}
+											{k === "unknown" ? <span className="text-ink-soft"> (stored member not in runtime allowlist)</span> : ""}
 										</li>
 									))}
 								</ul>
@@ -153,13 +164,13 @@ export function StatsView() {
 						)}
 						{blockKeys.length > 0 && (
 							<div>
-								<h3 className="mb-1 text-sm font-semibold text-slate-600">Blocked by kind</h3>
-								<ul className="space-y-1 text-sm">
+								<h3 className="font-mono text-2xs tracking-label text-ink-soft uppercase">Blocked by kind</h3>
+								<ul className="mt-2 text-sm">
 									{blockKeys.map((k) => (
-										<li key={k}>
+										<li key={k} className="border-b border-foam-line py-2">
 											<code>{k}</code> · {stats.blocksByKind[k]}
-											{k === "unrecorded" ? <span className="text-slate-500"> (logged before classification)</span> : ""}
-											{k === "unknown" ? <span className="text-slate-500"> (stored member not in runtime allowlist)</span> : ""}
+											{k === "unrecorded" ? <span className="text-ink-soft"> (logged before classification)</span> : ""}
+											{k === "unknown" ? <span className="text-ink-soft"> (stored member not in runtime allowlist)</span> : ""}
 										</li>
 									))}
 								</ul>
@@ -167,13 +178,13 @@ export function StatsView() {
 						)}
 						{failKeys.length > 0 && (
 							<div>
-								<h3 className="mb-1 text-sm font-semibold text-slate-600">Failed by cause</h3>
-								<ul className="space-y-1 text-sm">
+								<h3 className="font-mono text-2xs tracking-label text-ink-soft uppercase">Failed by cause</h3>
+								<ul className="mt-2 text-sm">
 									{failKeys.map((k) => (
-										<li key={k}>
+										<li key={k} className="border-b border-foam-line py-2">
 											<code>{k}</code> · {stats.failuresByCause[k]}
-											{k === "unrecorded" ? <span className="text-slate-500"> (logged before classification)</span> : ""}
-											{k === "unknown" ? <span className="text-slate-500"> (stored member not in runtime allowlist)</span> : ""}
+											{k === "unrecorded" ? <span className="text-ink-soft"> (logged before classification)</span> : ""}
+											{k === "unknown" ? <span className="text-ink-soft"> (stored member not in runtime allowlist)</span> : ""}
 										</li>
 									))}
 								</ul>
@@ -183,28 +194,32 @@ export function StatsView() {
 				</section>
 			)}
 
-			<section>
-				<h2 className="mb-2 text-lg font-semibold">Items delivered ({stats.itemsDelivered.length})</h2>
-				<ul className="space-y-1 text-sm">
+			<section className="mt-12">
+				<h2 className="font-display text-xl font-medium tracking-tight text-ink">Items delivered ({stats.itemsDelivered.length})</h2>
+				<ul className="mt-3">
 					{stats.itemsDelivered
 						.slice(-20)
 						.reverse()
 						.map((i) => (
-							<li key={`${i.id}-${i.date}`}>
-								<code>{formatItemLabel(i.id, currentRepo, i.itemTitle)}</code> · {i.date} · {formatUsd(i.cost)}
-								{i.parked ? " · parked" : ""}
+							<li key={`${i.id}-${i.date}`} className="border-b border-foam-line py-2.5 text-sm">
+								<code>{formatItemLabel(i.id, currentRepo, i.itemTitle)}</code>
+								<span className="text-ink-soft">
+									{" "}
+									· {i.date} · {formatUsd(i.cost)}
+									{i.parked ? " · parked" : ""}
+								</span>
 							</li>
 						))}
 				</ul>
 			</section>
 
 			{stats.recentFailures.length > 0 && (
-				<section>
-					<h2 className="mb-2 text-lg font-semibold">Recent failures</h2>
-					<ul className="space-y-1 text-sm">
+				<section className="mt-12">
+					<h2 className="font-display text-xl font-medium tracking-tight text-ink">Recent failures</h2>
+					<ul className="mt-3">
 						{stats.recentFailures.map((f) => (
-							<li key={`${f.ts}-${f.item ?? "?"}-${f.error ?? "?"}`}>
-								<span className="text-slate-500">{f.ts}</span> · {f.item ? formatItemLabel(f.item, currentRepo, f.itemTitle) : "?"} · {f.error ?? "?"}
+							<li key={`${f.ts}-${f.item ?? "?"}-${f.error ?? "?"}`} className="border-b border-foam-line py-2.5 text-sm">
+								<span className="text-ink-soft">{f.ts}</span> · {f.item ? formatItemLabel(f.item, currentRepo, f.itemTitle) : "?"} · {f.error ?? "?"}
 							</li>
 						))}
 					</ul>
@@ -214,11 +229,12 @@ export function StatsView() {
 	);
 }
 
-function Card({ label, value }: { label: string; value: string }) {
+function Card({ label, value, hint }: { label: string; value: string; hint?: string }) {
 	return (
-		<div className="rounded border border-slate-200 bg-white p-3">
-			<div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
-			<div className="mt-1 text-xl font-semibold">{value}</div>
+		<div className="bg-surface px-5 py-4">
+			<dt className="font-mono text-micro tracking-label text-ink-soft uppercase">{label}</dt>
+			<dd className="mt-1 font-display text-xl font-semibold tracking-tight text-ink tabular-nums">{value}</dd>
+			{hint ? <p className="mt-0.5 font-mono text-2xs text-ink-soft">{hint}</p> : null}
 		</div>
 	);
 }

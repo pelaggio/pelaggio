@@ -2,8 +2,8 @@
 	"name": "Pelaggio Control",
 	"short_name": "Pelaggio",
 	"display": "standalone",
-	"theme_color": "#061423",
-	"background_color": "#f8fafc",
+	"theme_color": "#00736c",
+	"background_color": "#fff6e8",
 	"scope": "/ui/",
 	"start_url": "/ui/",
 	"icons": [

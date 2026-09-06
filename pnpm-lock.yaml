@@ -119,6 +119,9 @@ importers:
       '@astrojs/react':
         specifier: ^6.0.2
         version: 6.0.2(@types/node@24.13.3)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(esbuild@0.28.1)(jiti@2.7.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(tsx@4.23.1)(yaml@2.9.0)
+      '@fontsource-variable/outfit':
+        specifier: ^5.2.8
+        version: 5.3.0
       '@pelaggio/server':
         specifier: workspace:*
         version: link:../server
