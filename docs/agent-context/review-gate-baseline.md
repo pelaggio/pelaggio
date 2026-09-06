@@ -326,3 +326,19 @@ and a written document; a baseline table drifted from its own reproduce command 
 conclusion about architectural drift contradicted the ADR it cited. Each was caught by a mechanical
 check or an adversarial reader, none by re-reading. Whatever else the assurance work is for, that is
 the pattern it should be built to interrupt — including in documents like this one.
+
+
+## 2026-09-05 — #757 profile coverage baseline
+
+Before the profile record/reader change, the primary main-worktree corpus was copied to `/tmp/pelaggio-757-frozen-corpus` and fingerprinted as **12:dd0c1b20f369**, with `--until 2026-09-06`: 12 rolls, 7 gated PRs, 6 PRs reaching a pass, 1.71 rolls/PR, $260.47 reported cost. This is a separate cohort from #746's retained baseline; neither its fingerprint nor the immutable21-PR trigger replay is restamped here.
+
+The profile reader was replayed over that exact frozen copy once for this dated row:
+
+| Profile | Instrumented rolls | Gated PRs | Repeated rolls | Reached-pass PRs |
+|---|---:|---:|---:|---:|
+| full | 0 | 0 | 0 | 0 |
+| docs | 0 | 0 | 0 | 0 |
+
+Coverage is **0/12 fleet rolls**: all12 historical classifications are unknown, not inferred full. These zeroes describe observed profile metadata only. Actual profile landings and post-landing must-fixes are **unavailable**, not zero; #793 tracks the missing durable observations. Future reports disclose overlapping profile PR cohorts and keep gate passes distinct from landings. The pre-change and post-change reports are `/tmp/pelaggio-757-before-metrics.txt` and `/tmp/pelaggio-757-after-metrics.txt`; reproduce while the frozen copy is available with `npx tsx ci/review-metrics.ts /tmp/pelaggio-757-frozen-corpus --until 2026-09-06`.
+
+Classifier validation uses the committed real-Git patch corpus in `__tests__/fixtures/review-intensity-profile-corpus.json` (synthetic repository, no historical outcome claims), adversarial no-false-reduction cases, and the unchanged #746 cohort. Unknown/incomplete historical diffs retain full review. This establishes the conservative selection boundary, not that reduced panels have measured equal defect-detection power.

@@ -1,0 +1,131 @@
+{
+  "source": "Real git staged diffs; inventory uses --no-renames, patch uses default rename detection, matching the inspection seam. Synthetic repository, no claimed historical PR outcomes.",
+  "entries": [
+    {
+      "name": "ordinary Markdown edit",
+      "expected": "docs",
+      "files": [
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/guide.md\nindex d763e90..6043dd9 100644\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,3 +1,3 @@\n First paragraph.\n \n-Old text.\n+New text.\n"
+    },
+    {
+      "name": "two Markdown edits",
+      "expected": "docs",
+      "files": [
+        "README.md",
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/README.md b/README.md\nindex 95dcfb4..5e00058 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-Read me.\n+New read me.\ndiff --git a/docs/guide.md b/docs/guide.md\nindex d763e90..e090817 100644\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,3 +1 @@\n-First paragraph.\n-\n-Old text.\n+New.\n"
+    },
+    {
+      "name": "Markdown insertion without final newline",
+      "expected": "docs",
+      "files": [
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/guide.md\nindex d763e90..030f98c 100644\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,3 +1,4 @@\n First paragraph.\n \n Old text.\n+Addition\n\\ No newline at end of file\n"
+    },
+    {
+      "name": "mixed doc and source",
+      "expected": "full",
+      "files": [
+        "docs/guide.md",
+        "src.ts"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/guide.md\nindex d763e90..e090817 100644\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,3 +1 @@\n-First paragraph.\n-\n-Old text.\n+New.\ndiff --git a/src.ts b/src.ts\nindex 31c1de6..caabcb7 100644\n--- a/src.ts\n+++ b/src.ts\n@@ -1 +1 @@\n-export const x=1;\n+export const x=2;\n"
+    },
+    {
+      "name": "rename into docs",
+      "expected": "full",
+      "files": [
+        "docs/code.md",
+        "src.ts"
+      ],
+      "diff": "diff --git a/src.ts b/docs/code.md\nsimilarity index 100%\nrename from src.ts\nrename to docs/code.md\n"
+    },
+    {
+      "name": "rename out of docs",
+      "expected": "full",
+      "files": [
+        "docs/guide.md",
+        "guide.ts"
+      ],
+      "diff": "diff --git a/docs/guide.md b/guide.ts\nsimilarity index 100%\nrename from docs/guide.md\nrename to guide.ts\n"
+    },
+    {
+      "name": "rename between docs",
+      "expected": "full",
+      "files": [
+        "docs/guide.md",
+        "docs/new.md"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/new.md\nsimilarity index 100%\nrename from docs/guide.md\nrename to docs/new.md\n"
+    },
+    {
+      "name": "mode only",
+      "expected": "full",
+      "files": [
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/guide.md\nold mode 100644\nnew mode 100755\n"
+    },
+    {
+      "name": "text and mode",
+      "expected": "full",
+      "files": [
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/guide.md\nold mode 100644\nnew mode 100755\nindex d763e90..e090817\n--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,3 +1 @@\n-First paragraph.\n-\n-Old text.\n+New.\n"
+    },
+    {
+      "name": "new doc mode",
+      "expected": "full",
+      "files": [
+        "docs/new.md"
+      ],
+      "diff": "diff --git a/docs/new.md b/docs/new.md\nnew file mode 100644\nindex 0000000..e090817\n--- /dev/null\n+++ b/docs/new.md\n@@ -0,0 +1 @@\n+New.\n"
+    },
+    {
+      "name": "deleted doc mode",
+      "expected": "full",
+      "files": [
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/guide.md\ndeleted file mode 100644\nindex d763e90..0000000\n--- a/docs/guide.md\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-First paragraph.\n-\n-Old text.\n"
+    },
+    {
+      "name": "binary doc",
+      "expected": "full",
+      "files": [
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/docs/guide.md b/docs/guide.md\nindex d763e90..75994f1 100644\nBinary files a/docs/guide.md and b/docs/guide.md differ\n"
+    },
+    {
+      "name": "skill body",
+      "expected": "full",
+      "files": [
+        "docs/SKILL.md"
+      ],
+      "diff": "diff --git a/docs/SKILL.md b/docs/SKILL.md\nindex a060d8c..0808b38 100644\n--- a/docs/SKILL.md\n+++ b/docs/SKILL.md\n@@ -1 +1 @@\n-Executable instructions.\n+Changed instructions.\n"
+    },
+    {
+      "name": "owned governing doc",
+      "expected": "full",
+      "files": [
+        "docs/agent-context/policy.md"
+      ],
+      "diff": "diff --git a/docs/agent-context/policy.md b/docs/agent-context/policy.md\nindex 348669f..53347e3 100644\n--- a/docs/agent-context/policy.md\n+++ b/docs/agent-context/policy.md\n@@ -1 +1 @@\n-Governing instructions.\n+Changed governing instructions.\n"
+    },
+    {
+      "name": "symlink doc",
+      "expected": "full",
+      "files": [
+        "docs/agent-context/policy.md",
+        "docs/guide.md"
+      ],
+      "diff": "diff --git a/docs/agent-context/policy.md b/docs/agent-context/policy.md\nindex 348669f..53347e3 100644\n--- a/docs/agent-context/policy.md\n+++ b/docs/agent-context/policy.md\n@@ -1 +1 @@\n-Governing instructions.\n+Changed governing instructions.\ndiff --git a/docs/guide.md b/docs/guide.md\ndeleted file mode 100644\nindex d763e90..0000000\n--- a/docs/guide.md\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-First paragraph.\n-\n-Old text.\ndiff --git a/docs/guide.md b/docs/guide.md\nnew file mode 120000\nindex 0000000..b8dccd1\n--- /dev/null\n+++ b/docs/guide.md\n@@ -0,0 +1 @@\n+../src.ts\n\\ No newline at end of file\n"
+    }
+  ]
+}

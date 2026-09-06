@@ -67,6 +67,7 @@ import {
 	type VerificationDisposition,
 } from "./review/findings.js";
 import { isWellFormedClassId } from "./review/taxonomy.js";
+import { classifyReviewIntensity } from "./review-intensity-profile.js";
 import { CLAIM_BRANCH_RE } from "./revise-sweep.js";
 import type { GhRunner } from "./roadmap/github-issues.js";
 import { classifySecurityReviewDiff, type SecurityDiffSignal } from "./security-review-trigger.js";
@@ -980,8 +981,14 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 
 	const labels: ReviewLabel[] = securitySignal.triggered ? ["standard", "red-team"] : ["standard"];
 	participation.labels = labels;
+	const profileSelection =
+		!securitySignal.triggered && reviewDrivers.length > 0 && reviewDrivers.every((candidate) => Object.hasOwn(REVIEW_SCHEDULING_PROFILES, candidate.provider)) ? classifyReviewIntensity(inspectionFiles, inspectionDiff) : "full";
+	const independentSlot = reviewDrivers.findIndex((candidate) => candidate.provider !== verifySettings.provider);
+	const reviewerSlots = profileSelection === "docs" ? [Math.max(0, independentSlot)] : reviewDrivers.map((_, index) => index);
+	participation.selection = { profile: profileSelection, reviewerSlots };
+	const selectedDrivers = reviewerSlots.map((slot) => ({ candidate: reviewDrivers[slot] as StepSettings, slot }));
 	// Worst-case: every (driver × label) may spend one discovery + one verify budget.
-	const reservation = labels.length * reviewDrivers.length * (reviewSettings.budget + verifySettings.budget);
+	const reservation = labels.length * selectedDrivers.length * ((selectedDrivers[0]?.candidate.budget ?? reviewSettings.budget) + verifySettings.budget);
 	const pairing = `${formatReviewerSet(reviewDrivers)}/${verifySettings.provider}`;
 	// require: at least one review driver must differ from the scalar verifier (independent-verifier guarantee).
 	if (policy.providerDiversity === "require" && reviewDrivers.every((driver) => driver.provider === verifySettings.provider)) {
@@ -1003,7 +1010,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	if (reservation > policy.budgetCap) {
 		const body = buildFailClosedComment(
 			"budget",
-			`A complete required review iteration reserves $${reservation} (${labels.length} labels × ${reviewDrivers.length} drivers × (review+verify)), exceeding review.budget-cap $${policy.budgetCap}.`,
+			`A complete required review iteration reserves $${reservation} (${labels.length} labels × ${selectedDrivers.length} selected drivers × (review+verify)), exceeding review.budget-cap $${policy.budgetCap}.`,
 		);
 		return finish({ gate: "block", body, cost: 0, costEstimated: false, turns: 0, ok: false, subtype: "budget", agreement: "invalid", breakerReason: "budget", recurrenceFindings: [], securityReview: emptySecurityReview(securitySignal) });
 	}
@@ -1047,7 +1054,7 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 	let breakerReason: ReviewExhaustionReason | undefined;
 	let agreement: PrReviewAgreement = "invalid";
 	let gate: "pass" | "block" = "block";
-	const requiredCells = labels.length * reviewDrivers.length;
+	const requiredCells = labels.length * selectedDrivers.length;
 	// #495 D5: a narrowed run scopes DISCOVERY to the interdiff (prior..reviewedSha) via the
 	// trusted-context refs; the inspection diff, security signal, and verification context keep
 	// the full range — two ranges, two roles, both computed by the harness.
@@ -1069,8 +1076,8 @@ export async function runPrReviewGate(options: RunPrReviewGateOptions): Promise<
 			const skillArgs = options.skillArguments ?? `--pr ${options.pr}`;
 			const args = label === "standard" ? skillArgs : `${skillArgs} --red-team --security-reasons ${JSON.stringify(securitySignal.reasons.join(", "))}`;
 			const prompt = `${expandPackagedSkill("pr-review", args)}${discoveryContext}${taskContext}`;
-			return reviewDrivers.map((candidate, driverIndex) => ({
-				key: `${iteration}:${labelIndex}:${driverIndex}`,
+			return selectedDrivers.map(({ candidate, slot }) => ({
+				key: `${iteration}:${labelIndex}:${slot}`,
 				group: labelIndex,
 				provider: candidate.provider,
 				payload: { label, prompt, candidate, child: childParkSignal() },

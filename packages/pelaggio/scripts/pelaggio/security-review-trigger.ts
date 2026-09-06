@@ -20,6 +20,7 @@ export const SECURITY_REASON_LIMIT = 8;
 const TRIGGER_MODULE = "packages/pelaggio/scripts/pelaggio/security-review-trigger.ts";
 const TRIGGER_TEST = "packages/pelaggio/scripts/pelaggio/__tests__/security-review-trigger.test.ts";
 const TRIGGER_OWNED_PATHS = new Set([TRIGGER_MODULE, TRIGGER_TEST]);
+const INTENSITY_OWNED_PATHS = new Set(["packages/pelaggio/scripts/pelaggio/review-intensity-profile.ts", "packages/pelaggio/scripts/pelaggio/__tests__/review-intensity-profile.test.ts"]);
 const SELF_TRIGGER_REASON = "guard:security-review-trigger";
 
 /** The charter's guarantee-holding paths; this selector changes seats, never verdicts. */
@@ -124,6 +125,7 @@ export function classifySecurityReviewDiff(files: readonly string[], diff: strin
 		reasons.push(reason);
 	};
 
+	if (files.some((file) => INTENSITY_OWNED_PATHS.has(file))) addReason("guard:review-intensity-profile");
 	if (files.some((file) => TRIGGER_OWNED_PATHS.has(file))) addReason(SELF_TRIGGER_REASON);
 	for (const reason of guardConfigDelta(diff)) addReason(reason);
 	for (const file of files) {

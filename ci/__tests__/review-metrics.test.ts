@@ -71,7 +71,7 @@ describe("review-metrics closure modes (#756)", () => {
 		assert.equal(rows[9], "  security-review coverage  0 / 1 instrumented fleet rolls");
 		assert.equal(rows[10], "  red-team trigger rate     0 / 0 (0%)");
 		assert.equal(rows[11], "  red-team-only must-fixes  0   (verified surviving digest set-difference)");
-		assert.equal(rows.length, 12);
+		assert.ok(rows.length > 12);
 	});
 });
 
@@ -150,5 +150,49 @@ describe("review-metrics security-review telemetry (#746)", () => {
 	it("returns zeros without throwing when telemetry is absent", () => {
 		assert.deepEqual(summarize([]).securityReview, { fleetRolls: 0, instrumented: 0, triggered: 0, redTeamOnlyMustFixes: 0 });
 		assert.deepEqual(summarize([record()]).securityReview, { fleetRolls: 0, instrumented: 0, triggered: 0, redTeamOnlyMustFixes: 0 });
+	});
+});
+
+describe("review metrics profile coverage (#757)", () => {
+	const participation = (profile: "full" | "docs") => ({
+		configuredReviewers: ["codex", "grok"],
+		configuredVerifier: "codex",
+		labels: ["standard"],
+		selection: { profile, reviewerSlots: profile === "docs" ? [1] : [0, 1] },
+		iterations: [{ reviewReturned: profile === "docs" ? [true] : [true, true] }],
+	});
+	it("reports observed profile rolls and overlapping PR cohorts, never invented landings", () => {
+		const fleet = { schemaVersion: 2, producer: "fleet" };
+		const records = [
+			record({ ...fleet, participation: participation("full") }),
+			record({ ...fleet, headSha: "b".repeat(40), gate: "pass", participation: participation("docs") }),
+			record({ ...fleet, headSha: "c".repeat(40), gate: "pass", participation: participation("docs") }),
+			record({ ...fleet, prNumber: 2, participation: participation("docs") }),
+			record({ ...fleet, prNumber: 3 }),
+			record({ ...fleet, prNumber: 4, participation: { ...participation("docs"), selection: { profile: "future", reviewerSlots: [1] } } }),
+			record({ ...fleet, prNumber: 5, producer: "operator-adjudication", participation: participation("docs") }),
+			record({ prNumber: 6, schemaVersion: 1, participation: participation("full") }),
+		];
+		const summary = summarize(records);
+		assert.deepEqual(summary.reviewIntensity, {
+			fleetRolls: 6,
+			instrumented: 4,
+			overlappingPrs: 1,
+			profiles: [
+				{ profile: "full", prs: 1, rolls: 1, repeatRolls: 0, reachedPass: 0, rollsPerPr: 1 },
+				{ profile: "docs", prs: 2, rolls: 3, repeatRolls: 1, reachedPass: 1, rollsPerPr: 1.5 },
+			],
+		});
+		const rows = formatBaselineRows(summary);
+		assert.match(rows, /profile coverage.*4 \/ 6/);
+		assert.match(rows, /landing.*unavailable/i);
+		assert.match(rows, /post-landing.*unavailable/i);
+		assert.match(rows, /overlapping.*1/);
+	});
+	it("does not classify absent or malformed selection metadata as full", () => {
+		const old = { ...participation("full"), selection: undefined };
+		const summary = summarize([record({ schemaVersion: 2, producer: "fleet", participation: old })]);
+		assert.equal(summary.reviewIntensity.instrumented, 0);
+		assert.ok(summary.reviewIntensity.profiles.every((row) => row.rolls === 0));
 	});
 });

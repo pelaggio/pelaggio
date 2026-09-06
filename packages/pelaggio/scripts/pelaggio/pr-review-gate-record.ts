@@ -4,7 +4,9 @@ import { writeAtomically } from "./record-store.js";
 import { type RegisterName, registerPath } from "./registers.js";
 import { REVIEW_FINDING_CLOSURES, type ReviewExhaustionReason, type ReviewFindingClosure } from "./review/findings.js";
 import { isWellFormedClassId } from "./review/taxonomy.js";
-import type { ProviderName, PrReviewAgreement } from "./types.js";
+import type { ProviderName, PrReviewAgreement, ReviewIntensityProfile } from "./types.js";
+
+export const REVIEW_INTENSITY_PROFILES: readonly ReviewIntensityProfile[] = ["full", "docs"];
 
 export type PrReviewFindingDisposition = "fixed" | "refuted" | "accepted";
 
@@ -45,7 +47,9 @@ export interface PrReviewParticipation {
 	configuredVerifier: ProviderName;
 	/** Null means diff inspection did not establish the selected labels. */
 	labels: Array<"standard" | "red-team"> | null;
-	/** Stable label-major, configured-slot-major cells for each begun iteration. */
+	/** Absent on historical records: every configured slot was selected. */
+	selection?: { profile: ReviewIntensityProfile; reviewerSlots: number[] };
+	/** Stable label-major, selected-slot-major cells for each begun iteration. */
 	iterations: Array<{ reviewReturned: boolean[] }>;
 }
 
@@ -56,9 +60,9 @@ function participationProvider(value: unknown): ProviderName {
 	return value as ProviderName;
 }
 
-function validateParticipation(value: unknown): PrReviewParticipation {
+export function validatePrReviewParticipation(value: unknown): PrReviewParticipation {
 	if (!isRecord(value)) fail("participation");
-	requireClosedKeys(value, ["configuredReviewers", "configuredVerifier", "labels", "iterations"], "participation");
+	requireClosedKeys(value, ["configuredReviewers", "configuredVerifier", "labels", "iterations", "selection"], "participation");
 	if (!Array.isArray(value.configuredReviewers)) fail("participation.configuredReviewers");
 	const configuredReviewers = Array.from(value.configuredReviewers, participationProvider);
 	const configuredVerifier = participationProvider(value.configuredVerifier);
@@ -68,19 +72,31 @@ function validateParticipation(value: unknown): PrReviewParticipation {
 		labels = value.labels.length === 1 ? ["standard"] : ["standard", "red-team"];
 	}
 	if (!Array.isArray(value.iterations) || (labels === null && value.iterations.length !== 0)) fail("participation.iterations");
-	const cells = (labels?.length ?? 0) * configuredReviewers.length;
+	let selection: PrReviewParticipation["selection"];
+	if (value.selection !== undefined) {
+		if (!isRecord(value.selection)) fail("participation.selection");
+		requireClosedKeys(value.selection, ["profile", "reviewerSlots"], "participation.selection");
+		const { profile, reviewerSlots } = value.selection;
+		if (typeof profile !== "string" || !(REVIEW_INTENSITY_PROFILES as readonly string[]).includes(profile) || !Array.isArray(reviewerSlots) || labels === null) fail("participation.selection");
+		const slots = Array.from(reviewerSlots);
+		if (!slots.every((slot, index) => Number.isInteger(slot) && slot >= 0 && slot < configuredReviewers.length && (index === 0 || slot > slots[index - 1]))) fail("participation.selection.slots");
+		if (profile === "full" ? slots.length !== configuredReviewers.length : slots.length !== 1 || labels.length !== 1) fail("participation.selection.profile");
+		selection = { profile: profile as ReviewIntensityProfile, reviewerSlots: slots as number[] };
+	}
+	const cells = (labels?.length ?? 0) * (selection?.reviewerSlots.length ?? configuredReviewers.length);
 	const iterations = Array.from(value.iterations, (entry) => {
 		if (!isRecord(entry)) fail("participation.iterations");
 		requireClosedKeys(entry, ["reviewReturned"], "participation.iterations");
 		if (!Array.isArray(entry.reviewReturned) || entry.reviewReturned.length !== cells || !Array.from(entry.reviewReturned).every((cell) => typeof cell === "boolean")) fail("participation.reviewReturned");
 		return { reviewReturned: Array.from(entry.reviewReturned) as boolean[] };
 	});
-	return { configuredReviewers, configuredVerifier, labels, iterations };
+	return { configuredReviewers, configuredVerifier, labels, iterations, ...(selection ? { selection } : {}) };
 }
 
 /** Reporting only: verification and gate completeness are intentionally separate. */
 export function renderPrReviewParticipation(participation?: PrReviewParticipation): string {
 	if (!participation) return "Realized review diversity: unavailable (historical participation was not recorded).";
+	const reviewerSlots = participation.selection?.reviewerSlots ?? participation.configuredReviewers.map((_, index) => index);
 	const realized = new Set<ProviderName>();
 	let returned = 0;
 	let selected = 0;
@@ -89,7 +105,8 @@ export function renderPrReviewParticipation(participation?: PrReviewParticipatio
 			selected++;
 			if (!reviewed) continue;
 			returned++;
-			const provider = participation.configuredReviewers[index % participation.configuredReviewers.length];
+			const slot = reviewerSlots[index % reviewerSlots.length];
+			const provider = slot === undefined ? undefined : participation.configuredReviewers[slot];
 			if (provider) realized.add(provider);
 		}
 	}
@@ -97,6 +114,9 @@ export function renderPrReviewParticipation(participation?: PrReviewParticipatio
 	const state = selected === 0 ? "not run" : `${returned === selected ? "complete" : "degraded"} — ${returned}/${selected} selected cells returned valid parsed reviews`;
 	return [
 		`Configured review intent: reviewers=${participation.configuredReviewers.join(" + ") || "none"}; verifier=${participation.configuredVerifier}.`,
+		...(participation.selection
+			? [`Review intensity: ${participation.selection.profile}; selected reviewer slots=${reviewerSlots.map((slot) => slot + 1).join(", ") || "none"} (${reviewerSlots.length}/${participation.configuredReviewers.length} configured).`]
+			: []),
 		`Realized review diversity: ${providers.length} provider${providers.length === 1 ? "" : "s"} (${providers.join(", ") || "none"}); ${state}. Participation describes the supplied candidate scope; verification and gate verdict are separate.`,
 	].join("\n\n");
 }
@@ -432,7 +452,7 @@ function validateFleetV2(value: Record<string, unknown>): PrReviewFleetGateRecor
 	requireClosedKeys(value, FLEET_V2_KEYS, "record");
 	if (value.producer !== "fleet") fail("producer");
 	const recurrenceFindings = requireOptionalRecurrenceFindings(value.recurrenceFindings);
-	const participation = value.participation === undefined ? undefined : validateParticipation(value.participation);
+	const participation = value.participation === undefined ? undefined : validatePrReviewParticipation(value.participation);
 	const securityReview = requireOptionalSecurityReview(value.securityReview);
 	return {
 		schemaVersion: 2,

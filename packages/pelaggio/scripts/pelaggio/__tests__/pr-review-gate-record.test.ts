@@ -490,3 +490,31 @@ describe("closed realized participation records (#753)", () => {
 		assert.throws(() => validatePrReviewGateRecord({ schemaVersion: 2, ...operatorRecord(), participation }), /record/);
 	});
 });
+
+describe("closed profile selection records (#757)", () => {
+	const participation = { configuredReviewers: ["codex", "grok"], configuredVerifier: "codex", labels: ["standard"], selection: { profile: "docs", reviewerSlots: [1] }, iterations: [{ reviewReturned: [true] }] };
+	it("round-trips selected slot identity and does not mark intentional omissions as failed", () => {
+		const raw = { schemaVersion: 2, ...fleetRecord(), participation };
+		const validated = validatePrReviewGateRecord(raw);
+		assertFleet(validated);
+		const dir = root();
+		writePrReviewGateRecord(dir, { ...validated, elapsedMs: raw.elapsedMs });
+		assert.deepEqual(readPrReviewGateRecord(dir, 201, HEAD), validated);
+		assert.match(renderPrReviewParticipation(validated.participation), /1 provider \(grok\); complete — 1\/1/);
+	});
+	it("refuses malformed or ambiguous profile matrices and unknown profiles", () => {
+		const invalid = [
+			{ ...participation, selection: { profile: "future", reviewerSlots: [1] } },
+			{ ...participation, selection: { profile: "docs", reviewerSlots: [1], extra: true } },
+			...[[], [2], [-1], [0.5], [0, 1], [1, 0], [1, 1], Array(1)].map((reviewerSlots) => ({ ...participation, selection: { profile: "docs", reviewerSlots } })),
+			{ ...participation, selection: { profile: "full", reviewerSlots: [1] } },
+			{ ...participation, labels: ["standard", "red-team"], iterations: [{ reviewReturned: [true, true] }] },
+			{ ...participation, labels: null, iterations: [] },
+			{ ...participation, iterations: [{ reviewReturned: [true, false] }] },
+		];
+		for (const value of invalid) assert.throws(() => validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord(), participation: value }), /participation/);
+		const full = validatePrReviewGateRecord({ schemaVersion: 2, ...fleetRecord(), participation: { ...participation, selection: { profile: "full", reviewerSlots: [0, 1] }, iterations: [{ reviewReturned: [true, false] }] } });
+		assertFleet(full);
+		assert.match(renderPrReviewParticipation(full.participation), /degraded — 1\/2/);
+	});
+});
