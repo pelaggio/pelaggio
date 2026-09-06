@@ -425,10 +425,12 @@ describe("authoring review loop controller", () => {
 		// (5). The author revise seat ran exactly twice (once after each of the two unresolved passes).
 		let reviewPass = 0;
 		let authorCalls = 0;
+		let now = 0;
 		const block = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "fix me", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 		const clean = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "clean", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 		const result = await runReviewLoop({
 			policy: { ...basePolicy },
+			now: () => now,
 			author: { provider: "codex" },
 			parkSignal: { parked: false, resetsAt: 0, limitType: "", triggerWorker: "" },
 			classificationContext: emptyClassification,
@@ -436,16 +438,19 @@ describe("authoring review loop controller", () => {
 			runSeat: async (request) => {
 				if (request.role === "author") {
 					authorCalls++;
+					now += 11;
 					return ok("");
 				}
 				if (request.role === "reviewer") {
 					reviewPass++;
+					now += 3;
 					// Reviewer blocks on passes 1 and 2, then passes on pass 3 (revision landed).
 					return ok(reviewPass >= 3 ? clean : block);
 				}
 				// Judge: the carried must-fix survives while the reviewer still raises it (passes 1-2); once
 				// the fix lands (pass 3) the reviewer drops it but it is re-seeded as carried, and the Judge
 				// now refutes it — the only way a fixable candidate clears `carried`.
+				now += 4;
 				const survives = reviewPass < 3;
 				return ok(judgeReport([{ candidateId: "C1", decision: survives ? "survives" : "refuted", rationale: "r", class: "judgment", ...(survives ? { ruling: "fixable-blocker" as const } : {}) }]));
 			},
@@ -454,6 +459,19 @@ describe("authoring review loop controller", () => {
 		assert.equal(result.outcome, "converged-clean");
 		assert.equal(result.passes.length, 3);
 		assert.equal(authorCalls, 2);
+		assert.equal(result.elapsedMs, 43);
+		assert.deepEqual(
+			result.passes.map((pass) => pass.elapsedMs),
+			[7, 7, 7],
+		);
+		assert.deepEqual(
+			result.passes.map((pass) => pass.reviewers[0]?.elapsedMs),
+			[3, 3, 3],
+		);
+		assert.deepEqual(
+			result.passes.map((pass) => pass.judge.elapsedMs),
+			[4, 4, 4],
+		);
 	});
 
 	it("hard-blocks when a fixable must-fix survives all 5 passes", async () => {

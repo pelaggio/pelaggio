@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import type { ReviewLoopResult } from "../review/loop.js";
-import { type DocReviewRecord, type DocReviewSeatTranscriptRecord, renderDocReviewRecord, validateDocReviewRecord, writeDocReviewRecord, writeDocReviewSeatTranscript } from "../review/record.js";
+import { type DocReviewRecord, type DocReviewSeatTranscriptRecord, renderDocReviewRecord, validateDocReviewRecord, validateReviewRecord, writeDocReviewRecord, writeDocReviewSeatTranscript, writeReviewRecord } from "../review/record.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -186,5 +186,38 @@ describe("DocReviewSeatTranscriptRecord (#677)", () => {
 		assert.equal(parsed.failedSeatTranscript.sha256, written.sha256);
 		assert.equal(JSON.stringify(parsed).includes("PLANTED_SECRET"), false);
 		assert.equal(JSON.stringify(parsed).includes("assistantText"), false);
+	});
+});
+
+describe("optional review elapsed timing", () => {
+	const authoring = (result: ReviewLoopResult) => ({ schemaVersion: 1 as const, runId: "timed-run", itemId: "789", createdAt: "2026-09-06T00:00:00Z", blockingBar: "must-fix" as const, result });
+	it("roundtrips both record families and preserves historical absence", () => {
+		const root = mkdtempSync(join(tmpdir(), "pelaggio-timing-"));
+		try {
+			for (const timed of [false, true]) {
+				const result = structuredClone(cleanResult);
+				if (timed) {
+					result.elapsedMs = 20;
+					result.passes[0]!.elapsedMs = 20;
+					result.passes[0]!.reviewers[0]!.elapsedMs = 0;
+					result.passes[0]!.judge.elapsedMs = 10;
+				}
+				const doc = { ...record(), result };
+				for (const path of [writeReviewRecord(root, authoring(result)), writeDocReviewRecord(root, doc)]) assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).result, result);
+			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+	it("rejects malformed optional durations at every new observation location in both families", () => {
+		for (const value of [-1, 0.5, NaN, Infinity, "12", null]) {
+			for (const location of ["loop", "pass", "reviewer", "judge"]) {
+				const result = structuredClone(cleanResult);
+				const target = location === "loop" ? result : location === "pass" ? result.passes[0]! : location === "reviewer" ? result.passes[0]!.reviewers[0]! : result.passes[0]!.judge;
+				target.elapsedMs = value as number;
+				assert.throws(() => validateReviewRecord(authoring(result)), /elapsedMs/, `${location}:${value}`);
+				assert.throws(() => validateDocReviewRecord({ ...record(), result }), /elapsedMs/, `${location}:${value}`);
+			}
+		}
 	});
 });

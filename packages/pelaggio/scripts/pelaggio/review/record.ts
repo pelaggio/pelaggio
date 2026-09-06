@@ -56,9 +56,22 @@ export interface DocReviewSeatTranscriptRecord {
 	seats: DocReviewSeatTranscriptEntry[];
 }
 
+function validateElapsedTiming(result: ReviewLoopResult): void {
+	const duration = (value: number | undefined): void => {
+		if (value !== undefined && (!Number.isInteger(value) || value < 0)) throw new Error("invalid review elapsedMs");
+	};
+	duration(result.elapsedMs);
+	for (const pass of result.passes) {
+		duration(pass.elapsedMs);
+		for (const seat of pass.reviewers) duration(seat.elapsedMs);
+		duration(pass.judge.elapsedMs);
+	}
+}
+
 export function validateReviewRecord(value: ReviewRecord): ReviewRecord {
 	if (value.schemaVersion !== 1 || !value.runId || !value.itemId || value.blockingBar !== "must-fix") throw new Error("invalid review record");
 	if (Number.isNaN(Date.parse(value.createdAt))) throw new Error("invalid review record timestamp");
+	validateElapsedTiming(value.result);
 	return value;
 }
 
@@ -67,6 +80,7 @@ export function validateDocReviewRecord(value: DocReviewRecord): DocReviewRecord
 	if (value.safetyFloor !== "disabled") throw new Error("doc review record safety floor must be disabled");
 	if (!value.document?.path || !/^[a-f0-9]{64}$/.test(value.document.digest) || !Number.isInteger(value.document.byteLength) || value.document.byteLength < 0) throw new Error("invalid doc review record document binding");
 	if (Number.isNaN(Date.parse(value.createdAt))) throw new Error("invalid doc review record timestamp");
+	validateElapsedTiming(value.result);
 	if (value.failedSeatTranscript !== undefined) validateFailedSeatTranscriptDescriptor(value.failedSeatTranscript);
 	return value;
 }

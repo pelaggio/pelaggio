@@ -117,6 +117,8 @@ removal. Historical records lost before this root correction remain unavailable;
 same deterministic record to the PR body. This is a review record, not an
 identity-bound attestation.
 
+New authoring and doc-review results carry optional `elapsedMs` observations as non-negative integer milliseconds, using the PR-gate truncation/clamping encoding. A monotonic harness clock measures the whole loop (including any author revisions), each review pass (admission through reviewer/Judge settlement and processing, before any author revision), and each actually invoked reviewer/Judge seat (invocation through return or rejection, excluding queue wait and parsing). Timing never changes review policy or verdicts. Skipped Judges, never-started reviewers and historical missing fields remain unmeasured; zero means an observed zero. Author revisions have no separate persisted seat entry. These are elapsed observations, not model compute time or a host-suspension correction; platform clock behavior applies.
+
 `local` is the explicit subscription-or-keys opt-in for attended, worktree-backed,
 operator-initiated execution. It is refused fail-closed on any unattended signal:
 CI/single-shot mode, daemon-spawned runs (`PELAGGIO_SUPERVISED_RUN=1`), multi-cycle
