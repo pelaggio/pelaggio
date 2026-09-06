@@ -45,8 +45,10 @@ export interface SeatAttemptObservation {
 }
 export interface ReviewPassRecord {
 	pass: number;
-	reviewers: Array<{ identity: DriverIdentity; ok: boolean; cost: number; turns: number; tokens?: TokenUsage; verdict?: DriverReviewVerdict; diagnostic?: string; attempts?: SeatAttemptRecord[] }>;
-	judge: { identity: DriverIdentity; valid: boolean; cost: number; turns: number; tokens?: TokenUsage; diagnostic?: string; attempts?: SeatAttemptRecord[]; skipped?: JudgeSkipReason };
+	/** Harness elapsed milliseconds; absent on historical observations. */
+	elapsedMs?: number;
+	reviewers: Array<{ elapsedMs?: number; identity: DriverIdentity; ok: boolean; cost: number; turns: number; tokens?: TokenUsage; verdict?: DriverReviewVerdict; diagnostic?: string; attempts?: SeatAttemptRecord[] }>;
+	judge: { elapsedMs?: number; identity: DriverIdentity; valid: boolean; cost: number; turns: number; tokens?: TokenUsage; diagnostic?: string; attempts?: SeatAttemptRecord[]; skipped?: JudgeSkipReason };
 	carriedBefore: string[];
 	carriedAfter: string[];
 }
@@ -58,6 +60,8 @@ export interface ReviewDisagreement {
 	evidenceFingerprint: string;
 }
 export interface ReviewLoopResult {
+	/** Whole-loop elapsed milliseconds, including any author revisions; historical absence is unknown. */
+	elapsedMs?: number;
 	outcome: ReviewOutcome;
 	diversity: DiversityStatus;
 	passes: ReviewPassRecord[];

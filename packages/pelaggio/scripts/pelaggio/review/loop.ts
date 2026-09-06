@@ -65,6 +65,8 @@ export interface SeatRequest {
 export type RunSeatFn = (request: SeatRequest) => Promise<StepResult>;
 export type ReviewAuthorIdentity = { provider: ProviderName; model?: string };
 type ReviewLoopBase = {
+	/** Harness clock seam; defaults to a monotonic elapsed-time clock. */
+	now?: () => number;
 	policy: AuthoringReviewConfig;
 	parkSignal: ParkSignal;
 	runSeat: RunSeatFn;
@@ -224,6 +226,18 @@ export function classifyReviewOutcome(
 
 export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewLoopResult> {
 	const { policy, classificationContext, taxonomy } = options;
+	const now = options.now ?? (() => performance.now());
+	const loopStartedAt = now();
+	const elapsed = (startedAt: number): number => Math.max(0, Math.trunc(now() - startedAt));
+	type Timing = { elapsedMs?: number };
+	const runTimedSeat = async (request: SeatRequest & { role: "reviewer" | "judge" }, timing: Timing): Promise<StepResult> => {
+		const startedAt = now();
+		try {
+			return await options.runSeat(request);
+		} finally {
+			timing.elapsedMs = elapsed(startedAt);
+		}
+	};
 	const scrubDiagnostic = makeSecretScrubber();
 	// no-revise: the author is optional and the revision branch is unreachable — force the effective
 	// revision budget to 0 and drop the revise prompt so a mutating seat cannot be reached at all.
@@ -235,6 +249,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 	// Stamp the run's safety-floor posture on every terminal result without repeating it at 8 return sites.
 	const withFloor = (result: Omit<ReviewLoopResult, "safetyFloor" | "safetyFloorNote">): ReviewLoopResult => ({
 		...result,
+		elapsedMs: elapsed(loopStartedAt),
 		safetyFloor,
 		...(safetyFloorNote ? { safetyFloorNote } : {}),
 	});
@@ -253,7 +268,17 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 	for (let pass = 1; pass <= policy.maxPasses; pass++) {
 		const phaseReservation = configuredReviewers.length * 5 + 5;
 		if (cost + phaseReservation > policy.budgetCap) return withFloor({ outcome: "budget", diversity, passes, survivors: carried, notes, cost });
-		const reviewerJobs = configuredReviewers.map((slot) => ({ slot, parkSignal: childSignal() }));
+		const passStartedAt = now();
+		const reviewerJobs = configuredReviewers.map((slot) => ({ slot, parkSignal: childSignal(), timing: {} as Timing }));
+		const judgeTiming: Timing = {};
+		const recordPass = (record: ReviewPassRecord): void => {
+			passes.push({
+				...record,
+				elapsedMs: elapsed(passStartedAt),
+				reviewers: record.reviewers.map((seat, index) => ({ ...seat, ...reviewerJobs[index]?.timing })),
+				judge: { ...record.judge, ...judgeTiming },
+			});
+		};
 		const fleetPlan = buildDiscoveryFleetPlan({
 			cells: reviewerJobs.map((job, index) => ({ key: `${pass}:${index}`, group: 0, provider: job.slot.provider, payload: job })),
 			profiles: REVIEW_SCHEDULING_PROFILES,
@@ -269,9 +294,9 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		};
 		const settled = await executeDiscoveryFleet({
 			plan: fleetPlan,
-			launch: ({ payload: { slot, parkSignal } }) => {
+			launch: ({ payload: { slot, parkSignal, timing } }) => {
 				if (options.parkSignal.parked) return Promise.reject(new Error("reviewer not started: review parked"));
-				return options.runSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal });
+				return runTimedSeat({ role: "reviewer", slot, pass, prompt: options.prompts.review(pass), parkSignal }, timing);
 			},
 			shouldStop: ({ payload }, result) => {
 				if (result.status === "fulfilled" && result.value.subtype === "error_rate_limit" && !payload.parkSignal.parked) {
@@ -370,7 +395,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			// parse error, provider crash, max-turns) survives in the review record, instead of returning
 			// `passes:[]` with no reason (the #268/#269 diagnosis black hole). Judge is skipped; carried
 			// must-fixes pass through unchanged.
-			passes.push({
+			recordPass({
 				pass,
 				reviewers: reviewerRecords,
 				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: no reviewer seat completed", attempts: [], skipped: "no-reviewer-completed" },
@@ -382,7 +407,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		const candidates = deduplicateCandidates(discovered, taxonomy);
 		const disagreement = classifyReviewDisagreement(pass, reviewerRecords, candidates, taxonomy, safetyFloor);
 		if (disagreement) {
-			passes.push({
+			recordPass({
 				pass,
 				reviewers: reviewerRecords,
 				judge: { identity: identity("judge", policy.judge, pass), valid: false, cost: 0, turns: 0, diagnostic: "skipped: human adjudication required", attempts: [], skipped: "cross-model-split" },
@@ -404,13 +429,13 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 		const carriedBefore = discovered.filter((item) => item.source === "carried").map((item) => reviewFindingFingerprint(item.finding));
 		let judgeResult: StepResult;
 		try {
-			judgeResult = await options.runSeat({ role: "judge", slot: policy.judge, pass, prompt: options.prompts.judge(candidates, pass), parkSignal: judgeSignal });
+			judgeResult = await runTimedSeat({ role: "judge", slot: policy.judge, pass, prompt: options.prompts.judge(candidates, pass), parkSignal: judgeSignal }, judgeTiming);
 		} catch (reason) {
 			if (judgeSignal.parked) Object.assign(options.parkSignal, judgeSignal);
 			diversity = softenDiversity(diversity, `judge seat did not complete: ${policy.judge.id}`);
 			notes = candidates.filter((candidate) => candidate.finding.severity !== "must-fix");
 			carried = candidates.filter((candidate) => candidate.finding.severity === "must-fix");
-			passes.push({
+			recordPass({
 				pass,
 				reviewers: reviewerRecords,
 				judge: { identity: judgeIdentity, valid: false, cost: 0, turns: 0, diagnostic: scrubDiagnostic(String(reason)), attempts: [rejectedAttempt()] },
@@ -501,7 +526,7 @@ export async function runReviewLoop(options: ReviewLoopOptions): Promise<ReviewL
 			: candidates;
 		notes = candidates.filter((candidate) => candidate.finding.severity !== "must-fix");
 		carried = next.filter((candidate) => candidate.finding.severity === "must-fix");
-		passes.push({
+		recordPass({
 			pass,
 			reviewers: reviewerRecords,
 			judge: {

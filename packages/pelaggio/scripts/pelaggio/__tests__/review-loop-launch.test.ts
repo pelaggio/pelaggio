@@ -39,8 +39,17 @@ function policy(providers: ProviderName[]): AuthoringReviewConfig {
 		judge: { id: "judge", provider: "opencode" },
 	};
 }
-function run(providers: ProviderName[], runSeat: (request: SeatRequest) => Promise<StepResult>, parkSignal = signal()) {
-	return runReviewLoop({ mode: "no-revise", policy: policy(providers), parkSignal, classificationContext: { changedFiles: [] }, taxonomy: BASELINE_TAXONOMY, prompts: { review: () => "review", judge: () => "judge" }, runSeat });
+function run(providers: ProviderName[], runSeat: (request: SeatRequest) => Promise<StepResult>, parkSignal = signal(), now?: () => number) {
+	return runReviewLoop({
+		...(now ? { now } : {}),
+		mode: "no-revise",
+		policy: policy(providers),
+		parkSignal,
+		classificationContext: { changedFiles: [] },
+		taxonomy: BASELINE_TAXONOMY,
+		prompts: { review: () => "review", judge: () => "judge" },
+		runSeat,
+	});
 }
 
 describe("bounded shared reviewer launch", () => {
@@ -256,5 +265,197 @@ describe("bounded shared reviewer launch", () => {
 		assert.equal((source.match(/role: "reviewer", slot/g) ?? []).length, 1);
 		assert.match(source, /executeDiscoveryFleet\(/);
 		assert.doesNotMatch(source, /Promise\.allSettled/);
+	});
+});
+
+describe("harness-observed review timing", () => {
+	it("measures parallel seats at settlement in configured order, then Judge and pass wall-clock", async () => {
+		let now = 0;
+		const a = deferred<StepResult>();
+		const b = deferred<StepResult>();
+		const pending = run(
+			["codex", "grok"],
+			async (request) => {
+				if (request.role === "judge") {
+					assert.equal(now, 35);
+					now += 7;
+					return judge();
+				}
+				return request.slot.provider === "codex" ? a.promise : b.promise;
+			},
+			signal(),
+			() => now,
+		);
+		await tick();
+		now = 10;
+		b.resolve(clean());
+		await tick();
+		now = 35;
+		a.resolve(clean());
+		const result = await pending;
+		const pass = result.passes[0]!;
+		assert.deepEqual(
+			pass.reviewers.map((seat) => seat.elapsedMs),
+			[35, 10],
+		);
+		assert.equal(pass.judge.elapsedMs, 7);
+		assert.equal(pass.elapsedMs, 42);
+		assert.equal(result.elapsedMs, 42);
+		assert.ok(35 + 10 + 7 > pass.elapsedMs!);
+		assert.equal(result.outcome, "converged-clean");
+	});
+	it("excludes Claude/Grok compatibility waiting from the queued seat duration", async () => {
+		let now = 0;
+		const claude = deferred<StepResult>();
+		const grok = deferred<StepResult>();
+		const trace: string[] = [];
+		const pending = run(
+			["grok", "claude"],
+			async (request) => {
+				trace.push(request.role === "judge" ? "judge" : request.slot.provider);
+				if (request.role === "judge") {
+					now += 5;
+					return judge();
+				}
+				return request.slot.provider === "claude" ? claude.promise : grok.promise;
+			},
+			signal(),
+			() => now,
+		);
+		await tick();
+		assert.deepEqual(trace, ["claude"]);
+		now = 25;
+		claude.resolve(clean());
+		await tick();
+		assert.deepEqual(trace, ["claude", "grok"]);
+		now = 45;
+		grok.resolve(clean());
+		const result = await pending;
+		const pass = result.passes[0]!;
+		assert.deepEqual(
+			pass.reviewers.map((seat) => seat.elapsedMs),
+			[20, 25],
+		);
+		assert.equal(pass.judge.elapsedMs, 5);
+		assert.equal(pass.elapsedMs, 50);
+		assert.equal(result.elapsedMs, 50);
+	});
+	it("measures started parked work without inventing durations for unstarted reviewers or a skipped Judge", async () => {
+		let now = 0;
+		const result = await run(
+			["claude", "grok"],
+			async () => {
+				now = 8;
+				return { ...clean(), ok: false, subtype: "error_rate_limit" };
+			},
+			signal(),
+			() => now,
+		);
+		const pass = result.passes[0]!;
+		assert.equal(pass.reviewers[0]?.elapsedMs, 8);
+		assert.equal(pass.reviewers[1]?.elapsedMs, undefined);
+		assert.equal(pass.judge.skipped, "no-reviewer-completed");
+		assert.equal(pass.judge.elapsedMs, undefined);
+		assert.equal(pass.elapsedMs, 8);
+		assert.equal(result.elapsedMs, 8);
+		assert.equal(result.outcome, "budget");
+	});
+	it("retains timing of rejected and invalid-output seats without changing their outcomes", async () => {
+		for (const rejected of [true, false]) {
+			let now = 0;
+			const result = await run(
+				["codex"],
+				async () => {
+					now = 17.9;
+					if (rejected) throw new Error("provider rejected");
+					return { ...clean(), assistantText: "invalid review" };
+				},
+				signal(),
+				() => now,
+			);
+			assert.equal(result.passes[0]?.reviewers[0]?.elapsedMs, 17);
+			assert.equal(result.passes[0]?.judge.elapsedMs, undefined);
+			assert.equal(result.passes[0]?.elapsedMs, 17);
+			assert.equal(result.elapsedMs, 17);
+			assert.equal(result.outcome, "hard-block");
+		}
+	});
+	it("measures a rejected Judge and preserves its existing decision behavior", async () => {
+		let now = 0;
+		const result = await run(
+			["codex"],
+			async (request) => {
+				if (request.role === "judge") {
+					now += 9;
+					throw new Error("judge rejected");
+				}
+				now += 4;
+				return clean();
+			},
+			signal(),
+			() => now,
+		);
+		assert.equal(result.passes[0]?.reviewers[0]?.elapsedMs, 4);
+		assert.equal(result.passes[0]?.judge.elapsedMs, 9);
+		assert.equal(result.passes[0]?.elapsedMs, 13);
+		assert.equal(result.elapsedMs, 13);
+		assert.equal(result.passes[0]?.judge.valid, false);
+	});
+	it("does not count prompt-generation failures as launched reviewer or Judge timing", async () => {
+		for (const failedRole of ["reviewer", "judge"]) {
+			let now = 0;
+			const launched: string[] = [];
+			const result = await runReviewLoop({
+				mode: "no-revise",
+				policy: policy(["codex"]),
+				parkSignal: signal(),
+				taxonomy: BASELINE_TAXONOMY,
+				classificationContext: { changedFiles: [] },
+				now: () => now,
+				prompts: {
+					review: () => {
+						if (failedRole === "reviewer") throw new Error("prompt failed");
+						return "r";
+					},
+					judge: () => {
+						throw new Error("prompt failed");
+					},
+				},
+				runSeat: async (request) => {
+					launched.push(request.role);
+					now += 5;
+					return clean();
+				},
+			});
+			assert.deepEqual(launched, failedRole === "reviewer" ? [] : ["reviewer"]);
+			assert.equal(result.passes[0]?.judge.elapsedMs, undefined);
+			assert.equal(result.passes[0]?.reviewers[0]?.elapsedMs, failedRole === "reviewer" ? undefined : 5);
+		}
+	});
+	it("records a zero-duration preflight without inventing passes, and clamps clock rollback consistently", async () => {
+		const preflight = await run(
+			["codex", "codex"],
+			async () => {
+				throw new Error("must not launch");
+			},
+			signal(),
+			() => 100,
+		);
+		assert.equal(preflight.elapsedMs, 0);
+		assert.deepEqual(preflight.passes, []);
+		let now = 10;
+		const result = await run(
+			["codex"],
+			async (request) => {
+				now--;
+				return request.role === "judge" ? judge() : clean();
+			},
+			signal(),
+			() => now,
+		);
+		assert.equal(result.elapsedMs, 0);
+		assert.equal(result.passes[0]?.elapsedMs, 0);
+		assert.equal(result.passes[0]?.reviewers[0]?.elapsedMs, 0);
+		assert.equal(result.passes[0]?.judge.elapsedMs, 0);
 	});
 });
