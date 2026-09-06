@@ -1,0 +1,13 @@
+{
+	"label": "control",
+	"fixture": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6",
+	"appTs": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/src/app.ts",
+	"authFromApp": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/src/auth.ts",
+	"fixtureAuth": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/src/auth.ts",
+	"liveAuth": "/home/chris/workspace/pelaggio-799/packages/server/src/auth.ts",
+	"authSha256": "d9799e95a76c534820982b2f6c7fb426f278a3063bfe3aa41063ff16226b80d4",
+	"authTestSha256": "e6c6d41e8e16d5b2e0970982a30ee77b49cb482dd0ee3be3376a978e8f696b43",
+	"appTestSha256": "98f58a474344a09d9430cbf6785b16a6eaa00f41966f86ffca4f942d79d98cd1",
+	"packageJsonSha256": "8b86cd766911c02aacbf8dc1f4575e542b122e52565ab93ecddb9f0ac8799e68",
+	"bindOk": true
+}

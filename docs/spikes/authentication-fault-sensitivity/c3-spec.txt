@@ -1,0 +1,78 @@
+▶ createApp
+  [32m✔ GET /healthz bypasses bearer auth [90m(5.868238ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json bypasses bearer auth and returns JSON [90m(2.70238ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json returns JSON 404 when missing [90m(1.147673ms)[39m[39m
+  [32m✔ GET /repos lists registry entries with exists flag [90m(1.665208ms)[39m[39m
+  [32m✔ GET /repos/:slug/roadmap returns source name + items [90m(1.375627ms)[39m[39m
+  [32m✔ GET /repos/missing/roadmap returns 404 [90m(1.299681ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats returns stats payload [90m(1.67938ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list [90m(4.929381ms)[39m[39m
+  [32m✔ stats and runs preserve ID-only payloads when roadmap list fails [90m(5.039191ms)[39m[39m
+  [32m✔ omits itemTitle when the title is blank [90m(2.352521ms)[39m[39m
+  [32m✔ renders an id absent from the bounded title snapshot bare without error [90m(2.960397ms)[39m[39m
+  [32m✔ GET /repos/missing/stats returns 404 [90m(0.867129ms)[39m[39m
+  [32m✔ GET /roadmap and GET /stats are removed (404) [90m(0.91453ms)[39m[39m
+  [32m✔ POST /runs with missing body → 400 [90m(1.216176ms)[39m[39m
+  [31m✖ unauthenticated POST /runs rejects a text/plain simple request before spawning [90m(3.912647ms)[39m[39m
+  [32m✔ POST /runs missing repo → 400 [90m(0.908309ms)[39m[39m
+  [32m✔ POST /runs unknown repo → 400 (mapped from unknown-repo) [90m(0.968992ms)[39m[39m
+  [32m✔ POST /runs with invalid shipTarget → 400 [90m(0.815174ms)[39m[39m
+  [32m✔ POST /runs happy path → 200; persisted run carries repo [90m(1.529081ms)[39m[39m
+  [32m✔ POST /runs continuous omits item → 200 [90m(1.189567ms)[39m[39m
+  [32m✔ POST /runs continuous with item → 400 [90m(0.834753ms)[39m[39m
+  [32m✔ POST /runs missing item without mode → 400 [90m(1.059267ms)[39m[39m
+  [32m✔ POST /runs watchDailyBudget without watch mode → 400 [90m(1.051314ms)[39m[39m
+  [32m✔ POST /runs invalid mode → 400 [90m(1.091859ms)[39m[39m
+  [32m✔ GET /repos/:slug/config returns watchDailyBudget null when unset [90m(1.054916ms)[39m[39m
+  [32m✔ GET /repos/:slug/config 404 for unknown slug [90m(0.891823ms)[39m[39m
+  [32m✔ GET /runs/:id 404 for unknown id [90m(0.883922ms)[39m[39m
+  [32m✔ GET /runs lists current runs [90m(3.247774ms)[39m[39m
+  [32m✔ GET /runs keeps persisted rows whose repository was removed [90m(1.169419ms)[39m[39m
+  [32m✔ 1000 historical ids trigger one non-blocking roadmap list per repo [90m(10.484164ms)[39m[39m
+  [32m✔ GET /runs resolves identical item ids against each run's repository [90m(3.284695ms)[39m[39m
+  [32m✔ GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc [90m(2.078985ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters both supervised and external rows [90m(2.443788ms)[39m[39m
+  [32m✔ external ids are 404 on get/pause/resume/stop/log [90m(1.805329ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters by repo [90m(2.890153ms)[39m[39m
+  [32m✔ bearer gate: missing token → 401 except /healthz [90m(1.456744ms)[39m[39m
+  [32m✔ bearer gate: correct token → 200 [90m(0.921643ms)[39m[39m
+  [32m✔ static handler serves /ui/index.html when webDist is set [90m(5.958285ms)[39m[39m
+  [32m✔ API routes still return JSON when webDist is set (no /ui collision) [90m(1.293843ms)[39m[39m
+  [32m✔ GET / 302s to /ui/ when webDist is set [90m(1.148597ms)[39m[39m
+  [32m✔ no static handler / no redirect when webDist is undefined [90m(0.76835ms)[39m[39m
+[31m✖ createApp [90m(90.992957ms)[39m[39m
+▶ bearerAuth
+  [32m✔ missing Authorization header: 401 [90m(0.402463ms)[39m[39m
+  [32m✔ wrong token: 401 [90m(0.194137ms)[39m[39m
+  [32m✔ correct token: 200 [90m(0.18658ms)[39m[39m
+  [32m✔ correct token authenticates state changes [90m(0.248986ms)[39m[39m
+  [32m✔ token of different length: rejected without timingSafeEqual length crash [90m(0.307718ms)[39m[39m
+  [32m✔ non-Bearer scheme: 401 [90m(0.23519ms)[39m[39m
+[32m✔ bearerAuth [90m(1.708126ms)[39m[39m
+[34mℹ tests 47[39m
+[34mℹ suites 2[39m
+[34mℹ pass 46[39m
+[34mℹ fail 1[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 792.44761[39m
+
+[31m✖ failing tests:[39m
+
+test at .dev/assurance-mutation-TzyXMa/packages/server/__tests__/app.test.ts:2:8093
+[31m✖ unauthenticated POST /runs rejects a text/plain simple request before spawning [90m(3.912647ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-TzyXMa/packages/server/__tests__/app.test.ts:324:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m1[39m,
+    expected: [33m0[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }

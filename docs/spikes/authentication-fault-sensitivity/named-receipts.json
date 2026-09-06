@@ -1,0 +1,692 @@
+[
+	{
+		"run": "baseline-live",
+		"named": 65,
+		"pass": 65,
+		"fail": 0,
+		"selected": [
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.252063,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/auth.test.ts",
+					"name": "missing Authorization header: 401",
+					"nesting": 1,
+					"testNumber": 1
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.219286,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/auth.test.ts",
+					"name": "non-Bearer scheme: 401",
+					"nesting": 1,
+					"testNumber": 6
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.19145,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/auth.test.ts",
+					"name": "wrong token: 401",
+					"nesting": 1,
+					"testNumber": 2
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.17286,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/auth.test.ts",
+					"name": "correct token: 200",
+					"nesting": 1,
+					"testNumber": 3
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.174057,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/auth.test.ts",
+					"name": "correct token authenticates state changes",
+					"nesting": 1,
+					"testNumber": 4
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.140846,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/auth.test.ts",
+					"name": "token of different length: rejected without timingSafeEqual length crash",
+					"nesting": 1,
+					"testNumber": 5
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 1.042273,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: missing token → 401 except /healthz",
+					"nesting": 1,
+					"testNumber": 36
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.789906,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/app.test.ts",
+					"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+					"nesting": 1,
+					"testNumber": 15
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 1.251802,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/app.test.ts",
+					"name": "POST /runs happy path → 200; persisted run carries repo",
+					"nesting": 1,
+					"testNumber": 19
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.738453,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: correct token → 200",
+					"nesting": 1,
+					"testNumber": 37
+				}
+			}
+		]
+	},
+	{
+		"run": "control",
+		"named": 47,
+		"pass": 47,
+		"fail": 0,
+		"selected": [
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.277018,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/auth.test.ts",
+					"name": "missing Authorization header: 401",
+					"nesting": 1,
+					"testNumber": 1
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.16167,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/auth.test.ts",
+					"name": "non-Bearer scheme: 401",
+					"nesting": 1,
+					"testNumber": 6
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.176093,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/auth.test.ts",
+					"name": "wrong token: 401",
+					"nesting": 1,
+					"testNumber": 2
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.185209,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/auth.test.ts",
+					"name": "correct token: 200",
+					"nesting": 1,
+					"testNumber": 3
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.163771,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/auth.test.ts",
+					"name": "correct token authenticates state changes",
+					"nesting": 1,
+					"testNumber": 4
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.137045,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/auth.test.ts",
+					"name": "token of different length: rejected without timingSafeEqual length crash",
+					"nesting": 1,
+					"testNumber": 5
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 1.030623,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: missing token → 401 except /healthz",
+					"nesting": 1,
+					"testNumber": 36
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.773983,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/app.test.ts",
+					"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+					"nesting": 1,
+					"testNumber": 15
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 1.335289,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/app.test.ts",
+					"name": "POST /runs happy path → 200; persisted run carries repo",
+					"nesting": 1,
+					"testNumber": 19
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.790335,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: correct token → 200",
+					"nesting": 1,
+					"testNumber": 37
+				}
+			}
+		]
+	},
+	{
+		"run": "c1",
+		"named": 47,
+		"pass": 43,
+		"fail": 4,
+		"selected": [
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 0.502562,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts",
+					"name": "missing Authorization header: 401",
+					"nesting": 1,
+					"testNumber": 1
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 0.275829,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts",
+					"name": "non-Bearer scheme: 401",
+					"nesting": 1,
+					"testNumber": 6
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.229322,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts",
+					"name": "wrong token: 401",
+					"nesting": 1,
+					"testNumber": 2
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.179317,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts",
+					"name": "correct token: 200",
+					"nesting": 1,
+					"testNumber": 3
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.216533,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts",
+					"name": "correct token authenticates state changes",
+					"nesting": 1,
+					"testNumber": 4
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.161696,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts",
+					"name": "token of different length: rejected without timingSafeEqual length crash",
+					"nesting": 1,
+					"testNumber": 5
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 0.891351,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: missing token → 401 except /healthz",
+					"nesting": 1,
+					"testNumber": 36
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 4.105402,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts",
+					"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+					"nesting": 1,
+					"testNumber": 15
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 1.650333,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts",
+					"name": "POST /runs happy path → 200; persisted run carries repo",
+					"nesting": 1,
+					"testNumber": 19
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.71229,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: correct token → 200",
+					"nesting": 1,
+					"testNumber": 37
+				}
+			}
+		]
+	},
+	{
+		"run": "c2",
+		"named": 47,
+		"pass": 11,
+		"fail": 36,
+		"selected": [
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.275923,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts",
+					"name": "missing Authorization header: 401",
+					"nesting": 1,
+					"testNumber": 1
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.279584,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts",
+					"name": "non-Bearer scheme: 401",
+					"nesting": 1,
+					"testNumber": 6
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.179861,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts",
+					"name": "wrong token: 401",
+					"nesting": 1,
+					"testNumber": 2
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 0.339393,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts",
+					"name": "correct token: 200",
+					"nesting": 1,
+					"testNumber": 3
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 0.281744,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts",
+					"name": "correct token authenticates state changes",
+					"nesting": 1,
+					"testNumber": 4
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.175703,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts",
+					"name": "token of different length: rejected without timingSafeEqual length crash",
+					"nesting": 1,
+					"testNumber": 5
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.908742,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: missing token → 401 except /healthz",
+					"nesting": 1,
+					"testNumber": 36
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.942633,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts",
+					"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+					"nesting": 1,
+					"testNumber": 15
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 0.890075,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts",
+					"name": "POST /runs happy path → 200; persisted run carries repo",
+					"nesting": 1,
+					"testNumber": 19
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 0.824764,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: correct token → 200",
+					"nesting": 1,
+					"testNumber": 37
+				}
+			}
+		]
+	},
+	{
+		"run": "c3",
+		"named": 47,
+		"pass": 46,
+		"fail": 1,
+		"selected": [
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.402463,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/auth.test.ts",
+					"name": "missing Authorization header: 401",
+					"nesting": 1,
+					"testNumber": 1
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.23519,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/auth.test.ts",
+					"name": "non-Bearer scheme: 401",
+					"nesting": 1,
+					"testNumber": 6
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.194137,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/auth.test.ts",
+					"name": "wrong token: 401",
+					"nesting": 1,
+					"testNumber": 2
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.18658,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/auth.test.ts",
+					"name": "correct token: 200",
+					"nesting": 1,
+					"testNumber": 3
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.248986,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/auth.test.ts",
+					"name": "correct token authenticates state changes",
+					"nesting": 1,
+					"testNumber": 4
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.307718,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/auth.test.ts",
+					"name": "token of different length: rejected without timingSafeEqual length crash",
+					"nesting": 1,
+					"testNumber": 5
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 1.456744,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: missing token → 401 except /healthz",
+					"nesting": 1,
+					"testNumber": 36
+				}
+			},
+			{
+				"type": "test:fail",
+				"data": {
+					"details": {
+						"duration_ms": 3.912647,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/app.test.ts",
+					"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+					"nesting": 1,
+					"testNumber": 15
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 1.529081,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/app.test.ts",
+					"name": "POST /runs happy path → 200; persisted run carries repo",
+					"nesting": 1,
+					"testNumber": 19
+				}
+			},
+			{
+				"type": "test:pass",
+				"data": {
+					"details": {
+						"duration_ms": 0.921643,
+						"type": "test"
+					},
+					"file": "/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-TzyXMa/packages/server/__tests__/app.test.ts",
+					"name": "bearer gate: correct token → 200",
+					"nesting": 1,
+					"testNumber": 37
+				}
+			}
+		]
+	}
+]

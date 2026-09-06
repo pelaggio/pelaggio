@@ -1,0 +1,2 @@
+cwd=/home/chris/workspace/pelaggio-799
+node --import tsx --test --experimental-test-isolation=none --test-concurrency=1 --test-timeout=60000 --test-reporter=dot packages/server/__tests__/config.test.ts packages/server/__tests__/auth.test.ts packages/server/__tests__/app.test.ts

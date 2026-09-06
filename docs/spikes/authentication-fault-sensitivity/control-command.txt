@@ -1,0 +1,5 @@
+cwd=/home/chris/workspace/pelaggio-799
+fixture=/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6
+label=control
+patch=none
+node --import tsx --test --experimental-test-isolation=none --test-concurrency=1 --test-timeout=60000 --test-reporter=spec --test-reporter-destination=/home/chris/workspace/pelaggio-799/docs/spikes/authentication-fault-sensitivity/control-spec.txt --test-reporter=./ci/assurance-observation-reporter.mjs --test-reporter-destination=/home/chris/workspace/pelaggio-799/docs/spikes/authentication-fault-sensitivity/control-observations.jsonl /home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/auth.test.ts /home/chris/workspace/pelaggio-799/.dev/assurance-mutation-5gjzf6/packages/server/__tests__/app.test.ts
