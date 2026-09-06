@@ -1,11 +1,11 @@
 /**
- * Landing-cost baseline over the local fleet gate records in `.dev/pr-review-gate-records/`.
+ * Landing-cost baseline over PR-gate records, with explicit optional durable authoring coverage.
  *
  * This is INSTRUMENTATION, not a check: it exits 0 regardless and prints a table. It exists so a
  * throughput claim about a process change (the assurance/assessment stack, `review.carry`, seat
  * parallelism) can be tested against a pre-change baseline instead of an impression.
  *
- * Every number here is per-ROLL evidence the harness already persisted. `cost` is the fleet's own
+ * Every measurement comes from records the harness already persisted; family denominators stay separate. `cost` is the fleet's own
  * reported spend and is mostly notional against a subscription pool — read rolls and wall-clock as
  * the scarce resources, and cost as their proxy.
  */
@@ -22,7 +22,7 @@ export interface GateRecord {
 	itemId?: string;
 	headSha: string;
 	gate: string;
-	ok: boolean;
+	ok?: boolean;
 	subtype?: string;
 	agreement?: string;
 	breakerReason?: string;
@@ -35,6 +35,7 @@ export interface GateRecord {
 	schemaVersion?: number;
 	producer?: string;
 	recurrenceFindings?: readonly { closure?: string }[];
+	elapsedMs?: unknown;
 	securityReview?: unknown;
 	participation?: unknown;
 }
@@ -43,22 +44,176 @@ export function repoRoot(): string {
 	return resolve(dirname(fileURLToPath(import.meta.url)), "..");
 }
 
-export function loadGateRecords(dir: string): GateRecord[] {
+type ObjectRecord = Record<string, unknown>;
+export interface AuthoringRecord {
+	schemaVersion: 1;
+	runId: string;
+	itemId: string;
+	createdAt?: string;
+	result: ObjectRecord;
+}
+export interface ReviewCorpus<T = GateRecord | AuthoringRecord> {
+	family: "pr" | "authoring";
+	until?: string;
+	availability: "readable" | "missing" | "unreadable";
+	records: T[];
+	invalid: number;
+	undated: number;
+	excluded: number;
+	inventory: Array<{ name: string; digest: string; state: string }>;
+}
+function object(value: unknown): ObjectRecord | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as ObjectRecord) : undefined;
+}
+function finiteNonnegative(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+function validDate(value: unknown): value is string {
+	return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function parseMetricRecord(value: unknown, family: "pr" | "authoring"): GateRecord | AuthoringRecord | undefined {
+	const r = object(value);
+	if (!r) return undefined;
+	if (family === "authoring") {
+		const result = object(r.result);
+		if (r.schemaVersion !== 1 || typeof r.runId !== "string" || !r.runId || typeof r.itemId !== "string" || !r.itemId || r.document !== undefined || r.blockingBar !== "must-fix" || !result) return undefined;
+		return { schemaVersion: 1, runId: r.runId, itemId: r.itemId, ...(validDate(r.createdAt) ? { createdAt: r.createdAt } : {}), result };
+	}
+	if (!Number.isInteger(r.prNumber) || (r.prNumber as number) <= 0 || typeof r.headSha !== "string" || !/^(?:[a-f0-9]{7,40}|[a-f0-9]{64})$/i.test(r.headSha) || (r.gate !== "pass" && r.gate !== "block")) return undefined;
+	if (r.schemaVersion !== undefined && r.schemaVersion !== 1 && r.schemaVersion !== 2) return undefined;
+	if (r.schemaVersion === 2 && r.producer !== "fleet" && r.producer !== "operator-adjudication") return undefined;
+	// Normalize only consumed optional fields: damaged measurements are unknown, never observations.
+	return {
+		prNumber: r.prNumber as number,
+		headSha: r.headSha,
+		gate: r.gate,
+		...(typeof r.ok === "boolean" ? { ok: r.ok } : {}),
+		...(typeof r.itemId === "string" ? { itemId: r.itemId } : {}),
+		...(typeof r.agreement === "string" ? { agreement: r.agreement } : {}),
+		...(typeof r.breakerReason === "string" ? { breakerReason: r.breakerReason } : {}),
+		...(finiteNonnegative(r.cost) ? { cost: r.cost } : {}),
+		...(finiteNonnegative(r.survivorCount) && Number.isInteger(r.survivorCount) ? { survivorCount: r.survivorCount } : {}),
+		...(validDate(r.reviewedAt) ? { reviewedAt: r.reviewedAt } : {}),
+		...(typeof r.schemaVersion === "number" ? { schemaVersion: r.schemaVersion } : {}),
+		...(typeof r.producer === "string" ? { producer: r.producer } : {}),
+		...(Array.isArray(r.recurrenceFindings) ? { recurrenceFindings: r.recurrenceFindings } : {}),
+		elapsedMs: r.elapsedMs,
+		securityReview: r.securityReview,
+		participation: r.participation,
+	};
+}
+export function loadReviewCorpus(dir: string, family: "pr", until?: string): ReviewCorpus<GateRecord>;
+export function loadReviewCorpus(dir: string, family: "authoring", until?: string): ReviewCorpus<AuthoringRecord>;
+export function loadReviewCorpus(dir: string, family: "pr" | "authoring", until?: string): ReviewCorpus {
+	const corpus: ReviewCorpus = { family, ...(until !== undefined ? { until } : {}), availability: "readable", records: [], invalid: 0, undated: 0, excluded: 0, inventory: [] };
 	let names: string[];
 	try {
-		names = readdirSync(dir).filter((n) => n.endsWith(".json"));
-	} catch {
-		return [];
+		names = readdirSync(dir)
+			.filter((name) => name.endsWith(".json"))
+			.sort();
+	} catch (error) {
+		corpus.availability = (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable";
+		return corpus;
 	}
-	const records: GateRecord[] = [];
 	for (const name of names) {
+		let digest = "unreadable";
 		try {
-			records.push(JSON.parse(readFileSync(join(dir, name), "utf8")) as GateRecord);
+			const bytes = readFileSync(join(dir, name));
+			digest = createHash("sha256").update(bytes).digest("hex");
+			const record = parseMetricRecord(JSON.parse(bytes.toString("utf8")), family);
+			if (!record) throw new Error("unusable metrics identity");
+			const date = "prNumber" in record ? record.reviewedAt : record.createdAt;
+			if (!date) corpus.undated++;
+			if (until !== undefined && date && Date.parse(date) >= Date.parse(until)) {
+				corpus.excluded++;
+				continue;
+			}
+			const admitted = until === undefined || date !== undefined;
+			corpus.inventory.push({ name, digest, state: admitted ? "admitted" : "undated" });
+			if (admitted) corpus.records.push(record);
 		} catch {
-			/* a truncated record is evidence of a crashed roll, not a reason to fail the report */
+			corpus.invalid++;
+			corpus.inventory.push({ name, digest, state: "invalid" });
 		}
 	}
-	return records.sort((a, b) => (a.reviewedAt ?? "").localeCompare(b.reviewedAt ?? ""));
+	corpus.records.sort((a, b) => ("prNumber" in a ? (a.reviewedAt ?? "") : (a.createdAt ?? "")).localeCompare("prNumber" in b ? (b.reviewedAt ?? "") : (b.createdAt ?? "")));
+	return corpus;
+}
+export function loadGateRecords(dir: string): GateRecord[] {
+	return loadReviewCorpus(dir, "pr").records;
+}
+export interface MeasurementSummary {
+	total: number;
+	observed: number;
+	unknown: number;
+	min?: number;
+	max?: number;
+	mean?: number;
+	sum?: number;
+}
+export function measurementSummary(values: readonly unknown[], integer = true): MeasurementSummary {
+	const observed = values.filter((value): value is number => finiteNonnegative(value) && (!integer || Number.isInteger(value)));
+	const summary: MeasurementSummary = { total: values.length, observed: observed.length, unknown: values.length - observed.length };
+	if (observed.length === 0) return summary;
+	const sum = observed.reduce((total, value) => total + value, 0);
+	const min = observed.reduce((minimum, value) => Math.min(minimum, value), Infinity);
+	const max = observed.reduce((maximum, value) => Math.max(maximum, value), -Infinity);
+	return { ...summary, min, max, mean: Number((sum / observed.length).toFixed(2)), sum };
+}
+export function summarizeAuthoring(records: readonly AuthoringRecord[]): {
+	runs: MeasurementSummary;
+	passes: MeasurementSummary;
+	reviewers: MeasurementSummary;
+	judges: MeasurementSummary;
+	cost: MeasurementSummary;
+	unavailableContainers: number;
+} {
+	const passes: unknown[] = [],
+		reviewers: unknown[] = [],
+		judges: unknown[] = [];
+	let unavailableContainers = 0;
+	for (const record of records) {
+		if (!Array.isArray(record.result.passes)) {
+			unavailableContainers++;
+			continue;
+		}
+		for (const value of record.result.passes) {
+			const pass = object(value);
+			passes.push(pass?.elapsedMs);
+			if (!pass) {
+				unavailableContainers++;
+				continue;
+			}
+			if (Array.isArray(pass.reviewers)) for (const reviewer of pass.reviewers) reviewers.push(object(reviewer)?.elapsedMs);
+			else unavailableContainers++;
+			const judge = object(pass.judge);
+			if (judge) judges.push(judge.elapsedMs);
+			else unavailableContainers++;
+		}
+	}
+	return {
+		runs: measurementSummary(records.map((r) => r.result.elapsedMs)),
+		passes: measurementSummary(passes),
+		reviewers: measurementSummary(reviewers),
+		judges: measurementSummary(judges),
+		cost: measurementSummary(
+			records.map((r) => r.result.cost),
+			false,
+		),
+		unavailableContainers,
+	};
+}
+/** Content-bound family inventory; the old PR identity digest remains a separate protocol. */
+export function widenedCorpusDigest(corpora: readonly ReviewCorpus[]): string {
+	const lexical = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+	const inventory = corpora.map(({ family, until, availability, inventory }) => ({ family, until, availability, inventory: [...inventory].sort((a, b) => lexical(a.name, b.name)) })).sort((a, b) => lexical(a.family, b.family));
+	return `${corpora.reduce((count, corpus) => count + corpus.records.length, 0)}:${createHash("sha256").update(JSON.stringify(inventory)).digest("hex").slice(0, 12)}`;
+}
+function formatMeasurement(label: string, value: MeasurementSummary, unit: string): string {
+	return `  ${label.padEnd(25)} observed=${value.observed}/${value.total} unknown=${value.unknown} ${value.observed === 0 ? "unavailable" : `min=${value.min} max=${value.max} mean=${value.mean} ${unit}`}`;
+}
+function formatCorpus(corpus: ReviewCorpus): string {
+	return `  ${corpus.family} input: ${corpus.availability}; invalid=${corpus.invalid}; undated=${corpus.undated}; excluded-by-cutoff=${corpus.excluded}`;
 }
 
 export interface PrRollup {
@@ -67,10 +222,12 @@ export interface PrRollup {
 	rolls: number;
 	distinctHeads: number;
 	cost: number;
+	costObserved: number;
 	passes: number;
 	blocks: number;
 	finalGate: string;
 	finalSurvivors: number;
+	finalSurvivorsObserved: boolean;
 	agreements: Record<string, number>;
 }
 
@@ -97,10 +254,12 @@ export function rollupByPr(records: readonly GateRecord[]): PrRollup[] {
 				rolls: rs.length,
 				distinctHeads: new Set(rs.map((r) => r.headSha)).size,
 				cost: rs.reduce((sum, r) => sum + (r.cost ?? 0), 0),
+				costObserved: rs.filter((r) => finiteNonnegative(r.cost)).length,
 				passes: rs.filter((r) => r.gate === "pass").length,
 				blocks: rs.filter((r) => r.gate === "block").length,
 				finalGate: last.gate,
 				finalSurvivors: last.survivorCount ?? 0,
+				finalSurvivorsObserved: finiteNonnegative(last.survivorCount) && Number.isInteger(last.survivorCount),
 				agreements,
 			};
 		})
@@ -140,6 +299,8 @@ function profileCoverage(records: readonly GateRecord[]): ProfileCoverage {
 }
 
 export interface Baseline {
+	costCoverage: MeasurementSummary;
+	survivorCoverage: MeasurementSummary;
 	reviewIntensity: ProfileCoverage;
 	prs: number;
 	rolls: number;
@@ -207,6 +368,11 @@ export function summarize(records: readonly GateRecord[]): Baseline {
 		redTeamOnlyMustFixes += redTeamOnly.size;
 	}
 	return {
+		costCoverage: measurementSummary(
+			records.map((record) => record.cost),
+			false,
+		),
+		survivorCoverage: measurementSummary(blocks.map((record) => record.survivorCount)),
 		reviewIntensity: profileCoverage(records),
 		prs: rollups.length,
 		rolls: records.length,
@@ -238,13 +404,15 @@ function validatedSecurityReview(value: unknown): PrReviewSecurityTelemetry | un
 
 /** Stable CLI table rows. Existing rows stay in order; the closure row is appended. */
 export function formatBaselineRows(s: Baseline): string {
+	const cost = s.costCoverage;
+	const survivors = s.survivorCoverage;
 	return [
 		`  PRs gated                ${s.prs}`,
 		`  rolls                    ${s.rolls}   (${s.rollsPerPr} per PR)`,
 		`  single-roll / repeat     ${s.singleRollPrs} / ${s.repeatRollPrs}`,
 		`  reached a pass           ${s.reachedPass} of ${s.prs}`,
-		`  cost                     $${s.totalCost}   ($${s.costPerRoll}/roll, $${s.costPerPassingPr}/passing PR)`,
-		`  survivors per block      ${s.survivorsPerBlock}`,
+		`  cost                     ${cost.observed === 0 ? "unavailable" : cost.unknown > 0 ? `$${cost.sum} observed (${cost.observed}/${cost.total} rolls; incomplete total)` : `$${s.totalCost}   ($${s.costPerRoll}/roll, $${s.costPerPassingPr}/passing PR)`}`,
+		`  survivors per block      ${survivors.observed === 0 ? "unavailable" : survivors.unknown > 0 ? `${survivors.mean} observed mean (${survivors.observed}/${survivors.total} block rolls)` : s.survivorsPerBlock}`,
 		`  agreement               ${Object.entries(s.agreements)
 			.map(([k, v]) => ` ${k}=${v}`)
 			.join("")}`,
@@ -271,25 +439,58 @@ export function corpusDigest(records: readonly GateRecord[]): string {
 
 function main(): void {
 	const args = process.argv.slice(2);
-	const untilFlag = args.indexOf("--until");
-	// Freeze the cutoff to reproduce a published figure; omit it to measure the live corpus.
-	const until = untilFlag === -1 ? undefined : args[untilFlag + 1];
-	const dir = args.find((a) => !a.startsWith("--") && a !== until) ?? join(repoRoot(), ".dev", "pr-review-gate-records");
-	const all = loadGateRecords(dir);
-	const records = until === undefined ? all : all.filter((r) => (r.reviewedAt ?? "") < until);
-	if (records.length === 0) {
-		process.stdout.write(`no gate records under ${dir}\n`);
+	const option = (flag: string): string | undefined => {
+		const index = args.indexOf(flag);
+		return index < 0 ? undefined : args[index + 1];
+	};
+	const until = option("--until");
+	const authoringDir = option("--authoring-dir");
+	if ((args.includes("--until") && !validDate(until)) || (args.includes("--authoring-dir") && (!authoringDir || authoringDir.startsWith("--")))) {
+		process.stdout.write("metrics unavailable: --until needs a valid date and --authoring-dir needs a directory\n");
 		return;
 	}
-	const s = summarize(records);
-	const span = `${records[0].reviewedAt?.slice(0, 10)} → ${records[records.length - 1].reviewedAt?.slice(0, 10)}`;
-	const digest = corpusDigest(records);
-	process.stdout.write(`\nFleet gate baseline  (${span})\n  corpus ${digest}${until ? `  --until ${until}` : "  (live)"}\n${"─".repeat(72)}\n`);
-	process.stdout.write(`${formatBaselineRows(s)}\n`);
-	process.stdout.write(`\n  per PR (by cost)\n  ${"─".repeat(68)}\n`);
-	process.stdout.write(`  ${"PR".padEnd(6)}${"item".padEnd(7)}${"rolls".padEnd(7)}${"heads".padEnd(7)}${"cost".padEnd(10)}${"final".padEnd(8)}surv\n`);
-	for (const r of rollupByPr(records)) {
-		process.stdout.write(`  ${String(r.prNumber).padEnd(6)}${(r.itemId ?? "—").padEnd(7)}${String(r.rolls).padEnd(7)}${String(r.distinctHeads).padEnd(7)}${`$${r.cost.toFixed(2)}`.padEnd(10)}${r.finalGate.padEnd(8)}${r.finalSurvivors}\n`);
+	const positional = args.filter((arg, index) => !arg.startsWith("--") && args[index - 1] !== "--until" && args[index - 1] !== "--authoring-dir");
+	const dir = positional[0] ?? join(repoRoot(), ".dev", "pr-review-gate-records");
+	const pr = loadReviewCorpus(dir, "pr", until);
+	const records = pr.records;
+	if (records.length === 0) process.stdout.write(`no gate records under ${dir}\n`);
+	else {
+		const s = summarize(records);
+		const span = `${records[0].reviewedAt?.slice(0, 10) ?? "unknown"} → ${records[records.length - 1].reviewedAt?.slice(0, 10) ?? "unknown"}`;
+		process.stdout.write(`\nFleet gate baseline  (${span})\n  corpus ${corpusDigest(records)}${until ? `  --until ${until}` : "  (live)"}\n${"─".repeat(72)}\n${formatBaselineRows(s)}\n`);
+		process.stdout.write(`\n  per PR (by cost)\n  ${"─".repeat(68)}\n`);
+		process.stdout.write(`  ${"PR".padEnd(6)}${"item".padEnd(7)}${"rolls".padEnd(7)}${"heads".padEnd(7)}${"cost".padEnd(10)}${"final".padEnd(8)}surv\n`);
+		for (const r of rollupByPr(records)) {
+			const cost = r.costObserved === 0 ? "unavailable" : r.costObserved < r.rolls ? `$${r.cost.toFixed(2)} observed (${r.costObserved}/${r.rolls})` : `$${r.cost.toFixed(2)}`;
+			process.stdout.write(
+				`  ${String(r.prNumber).padEnd(6)}${(r.itemId ?? "—").padEnd(7)}${String(r.rolls).padEnd(7)}${String(r.distinctHeads).padEnd(7)}${cost.padEnd(10)}${cost.length >= 10 ? " " : ""}${r.finalGate.padEnd(8)}${r.finalSurvivorsObserved ? r.finalSurvivors : "unavailable"}\n`,
+			);
+		}
+	}
+	process.stdout.write(
+		`\n  PR rolls                  ${records.length}\n${formatCorpus(pr)}\n${formatMeasurement("PR gate elapsed", measurementSummary(records.map((r) => r.elapsedMs)), "ms")}\n${formatMeasurement(
+			"PR recorded cost",
+			measurementSummary(
+				records.map((r) => r.cost),
+				false,
+			),
+			"USD",
+		)}\n`,
+	);
+	process.stdout.write("  PR cost/survivor rows disclose missing measurements; observed-only totals exclude unknown values.\n");
+	if (authoringDir !== undefined) {
+		const authoring = loadReviewCorpus(authoringDir, "authoring", until);
+		const s = summarizeAuthoring(authoring.records);
+		process.stdout.write(`\n  Widened corpus ${widenedCorpusDigest([pr, authoring])}\n  Authoring runs            ${authoring.records.length}\n${formatCorpus(authoring)}\n`);
+		for (const [label, measurement] of [
+			["Authoring loop elapsed", s.runs],
+			["Authoring pass elapsed", s.passes],
+			["Reviewer slot elapsed", s.reviewers],
+			["Judge record elapsed", s.judges],
+		] as const)
+			process.stdout.write(`${formatMeasurement(label, measurement, "ms")}\n`);
+		process.stdout.write(`${formatMeasurement("Authoring recorded cost", s.cost, "USD")}\n  Unavailable containers   ${s.unavailableContainers} (pass/seat denominators may be incomplete)\n`);
+		process.stdout.write("  Loop timing includes revision; pass excludes revision; seat timing excludes admission wait. Missing seat timing does not establish launch. Concurrent seat times are not wall time.\n");
 	}
 	process.stdout.write("\n");
 }
