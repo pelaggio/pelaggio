@@ -24,8 +24,10 @@ test("both scenarios publish exact captured bytes", () => {
 	assert.deepEqual(createExample(), example);
 });
 
-test("run meters name configured models, not the unpinned default", () => {
+test("authored run meters carry their illustrative provenance", () => {
 	for (const scenario of createExample().scenarios) {
+		assert.match(scenario.runEvidence, /authored examples, not measurements from this capture/);
+		assert.match(scenario.runEvidence, /unpinned models/);
 		assert.ok(scenario.run.steps.length > 0);
 		for (const step of scenario.run.steps) {
 			assert.notEqual(step.model, "default");

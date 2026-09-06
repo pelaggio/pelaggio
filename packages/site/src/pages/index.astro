@@ -154,6 +154,8 @@ function compact(n: number) {
 								</ul>
 							</div>
 							<div class="receipt-panel" data-receipt="run">
+								<p class="run-evidence"><strong>Illustrative run meter.</strong> {scenario.runEvidence}</p>
+								<p><a href={sitePath(`/example/${scenario.id}/attempts.json`)}>Captured attempts</a> · <a href={sitePath("/example/receipt.json")}>Capture manifest and digests</a></p>
 								<dl class="snapshot-metrics">
 									<div><dt>Wall clock</dt><dd>{scenario.run.elapsed}</dd></div>
 									<div><dt>Cost</dt><dd>~${totalCost.toFixed(2)}<span class="metric-sub">estimated</span></dd></div>
@@ -161,7 +163,7 @@ function compact(n: number) {
 									<div><dt>Turns</dt><dd>{totalTurns}</dd></div>
 								</dl>
 								<table class="step-meter">
-									<caption>Completed path · {scenario.run.attempts} attempts</caption>
+									<caption>Illustrative completed path · {scenario.run.attempts} example attempts</caption>
 									<thead>
 										<tr><th>Step</th><th>Provider</th><th>Model</th><th>Cost</th><th>Turns</th><th>Tokens</th></tr>
 									</thead>

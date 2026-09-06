@@ -98,6 +98,8 @@ export function createExample(directory = exampleDir) {
 		return {
 			id,
 			...story,
+			runEvidence:
+				"Illustrative meter: model names, wall clock, attempt count, tokens, turns, and costs below are authored examples, not measurements from this capture. The saved attempts record unpinned models and no token, turn, or cost measurements.",
 			revision: record.candidateRevision,
 			status,
 			implemented,

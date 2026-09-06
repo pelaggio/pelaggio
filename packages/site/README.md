@@ -28,6 +28,11 @@ the same component layout and native radio controls; the toggle works without Ja
 The experiment README documents preparation, execution, independent evaluation, and
 capture. Build scripts never invoke models or fetch fresh run evidence.
 
+The Run tab's numeric meter and model names are authored illustrations, explicitly
+labeled beside the meter. They are not captured telemetry. Links alongside it expose
+the actual attempts and digest manifest; those attempts have unpinned model identities
+and omit token, turn, and cost measurements.
+
 Each capture contains the actual charters, plans, attempt summaries, baseline checks,
 and any captured candidate checks. Digests are validated before publishing downloads.
 Candidate checks must identify the displayed revision. Missing candidate checks remain

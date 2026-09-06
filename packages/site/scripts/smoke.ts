@@ -74,6 +74,8 @@ try {
 			assert.equal(await panel.locator('[data-receipt="decisions"]').isVisible(), true);
 			await panel.getByRole("radio", { name: "Run", exact: true }).check();
 			assert.equal(await panel.locator('[data-receipt="run"]').isVisible(), true);
+			assert.match(await panel.locator(".run-evidence").innerText(), /authored examples, not measurements from this capture/);
+			assert.equal(await panel.getByRole("link", { name: "Captured attempts", exact: true }).getAttribute("href"), `${base}/example/${id}/attempts.json`);
 			assert.match(await panel.locator(".step-meter").innerText(), /gpt-5-codex/);
 			assert.match(await panel.locator(".step-meter").innerText(), /grok-code-fast-1/);
 			assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${id} expanded overflow at ${width}px`);
@@ -126,6 +128,7 @@ try {
 	assert.equal(await staticPage.locator('[data-scenario="csv"]').isVisible(), false);
 	await staticPage.locator('[data-scenario="import"]').getByRole("radio", { name: "Run", exact: true }).check();
 	assert.equal(await staticPage.locator('[data-scenario="import"] [data-receipt="run"]').isVisible(), true);
+	assert.match(await staticPage.locator('[data-scenario="import"] .run-evidence').innerText(), /authored examples, not measurements from this capture/);
 	assert.equal(await staticPage.locator('[data-scenario="import"] [data-receipt="charter"]').isVisible(), false);
 	assert.equal(await staticPage.locator("h1").textContent(), "Let the work run.");
 	assert.ok((await staticPage.locator("button.copy-cmd code").first().textContent())?.includes("npx pelaggio init"));
