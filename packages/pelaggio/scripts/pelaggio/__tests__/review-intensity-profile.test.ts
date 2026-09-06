@@ -73,6 +73,34 @@ describe("review intensity conservative corpus (#757)", () => {
 		];
 		for (const diff of changes) assert.equal(classifyReviewIntensity(["docs/guide.md"], diff), "full", diff);
 	});
+	it("rejects preserved header and hunk metadata while retaining ordinary content and valid EOF markers", () => {
+		const eof = "\\ No newline at end of file\n";
+		const malformed = [
+			patch() + "\\ unexpected metadata\n",
+			patch().replace("--- a/docs/guide.md\n", "--- a/docs/guide.md	unexpected metadata\n"),
+			patch().replace("+++ b/docs/guide.md\n", "+++ b/docs/guide.md	2026-09-05\n"),
+			patch("docs/guide.md", "\\ unexpected metadata\n-old\n+new\n"),
+			patch("docs/guide.md", eof + "-old\n+new\n"),
+			patch() + eof + eof,
+			patch("docs/guide.md", "-old\n" + eof + "+new\n") + "@@ -3,0 +4 @@\n+extra\n",
+			patch() + eof + "@@ -4 +3,0 @@\n-extra\n",
+			patch().replace("@@ -1 +1 @@", "@@ -0 +0 @@"),
+			patch() + "@@ -1 +1 @@\n-old\n+new\n",
+			patch() + "@@ -3 +5 @@\n-old\n+new\n",
+			patch() + "@@ -3 +3 @@\n unchanged\n",
+			patch("docs/guide.md", "-old\n" + eof + "-more\n+new\n").replace("@@ -1 +1 @@", "@@ -1,2 +1 @@"),
+			patch("docs/guide.md", "-old\n+new\n" + eof + "+more\n").replace("@@ -1 +1 @@", "@@ -1 +1,2 @@"),
+			patch() + eof + "@@ -3 +3 @@\n-before\n+after\n",
+		];
+		for (const diff of malformed) assert.equal(classifyReviewIntensity(["docs/guide.md"], diff), "full", diff);
+		for (const body of ["-old\n+new\n", "-old\n" + eof + "+new\n" + eof, "-old\n" + eof + "+new\n", "-old\n+new\n" + eof, "-old\n+\\ unexpected metadata\n", "-old\n+new	data\n"]) {
+			assert.equal(classifyReviewIntensity(["docs/guide.md"], patch("docs/guide.md", body)), "docs", body);
+		}
+		assert.equal(classifyReviewIntensity(["docs/guide.md"], patch("docs/guide.md", "-old\n+new\n same\n" + eof).replace("@@ -1 +1 @@", "@@ -1,2 +1,2 @@")), "docs");
+		assert.equal(classifyReviewIntensity(["docs/guide.md"], patch() + "@@ -3 +3 @@\n-before\n+after\n"), "docs");
+		assert.equal(classifyReviewIntensity(["docs/guide.md"], patch("docs/guide.md", "-old\n" + eof + "+new\n") + "@@ -1,0 +2 @@\n+extra\n"), "docs");
+		assert.equal(classifyReviewIntensity(["docs/guide.md"], patch("docs/guide.md", "-old\n+new\n+extra\n").replace("@@ -1 +1 @@", "@@ -1 +1,2 @@") + "@@ -3 +4 @@\n-before\n+after\n"), "docs");
+	});
 	it("self-review covers classifier, profile map and its focused test", () => {
 		for (const path of ["packages/pelaggio/scripts/pelaggio/review-intensity-profile.ts", "packages/pelaggio/scripts/pelaggio/__tests__/review-intensity-profile.test.ts"]) {
 			assert.equal(classifyReviewIntensity([path], patch(path)), "full");
