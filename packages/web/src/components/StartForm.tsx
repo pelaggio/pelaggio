@@ -86,80 +86,82 @@ export function StartForm() {
 		});
 	};
 
-	if (reposState.status === "loading") return <p className="text-slate-500">Loading…</p>;
+	if (reposState.status === "loading") return <p className="wrap pt-10 text-ink-soft">Loading…</p>;
 	if (reposState.status === "error") {
 		return (
-			<p className="text-red-700">
+			<p className="wrap pt-10 text-fail">
 				Failed to load repos: {reposState.error}
-				<button type="button" onClick={() => void retryInit()} className="ml-2 underline">
+				<button type="button" onClick={() => void retryInit()} className="btn-inline ml-2">
 					retry
 				</button>
 			</p>
 		);
 	}
-	if (reposState.status === "empty") return <p className="text-slate-500">No repos configured.</p>;
-	if (items === undefined && !error) return <p className="text-slate-500">Loading roadmap…</p>;
+	if (reposState.status === "empty") return <p className="wrap pt-10 text-ink-soft">No repos configured.</p>;
+	if (items === undefined && !error) return <p className="wrap pt-10 text-ink-soft">Loading roadmap…</p>;
 
 	const continuous = mode === "drain" || mode === "watch";
 
 	return (
-		<form onSubmit={submit} className="space-y-4">
-			<h1 className="text-2xl font-semibold">Start a run</h1>
-			<p className="text-sm text-slate-600">
-				repo: <code>{currentRepo}</code>
-			</p>
+		<form onSubmit={submit} className="wrap max-w-3xl pt-10 pb-20 md:pt-14">
+			<p className="eyebrow">This repository · {currentRepo}</p>
+			<h1 className="mt-3 font-display text-2xl font-medium tracking-tight text-ink md:text-[2.5rem] md:leading-[1.1]">Start a run</h1>
+			<p className="mt-3 max-w-xl text-[17px] text-ink-soft">Pick a work item, or drain / watch the open list. Shipping uses this repository’s configured policy unless you choose a ship target under Advanced.</p>
 
-			<section className="flex flex-wrap gap-2">
-				<button type="button" disabled={busy} onClick={() => void preset("drain", 1)}>
+			<section className="mt-8 flex flex-wrap gap-2">
+				<button type="button" className="btn-ghost" disabled={busy} onClick={() => void preset("drain", 1)}>
 					Drain ×1
 				</button>
-				<button type="button" disabled={busy} onClick={() => void preset("drain", 2)}>
+				<button type="button" className="btn-ghost" disabled={busy} onClick={() => void preset("drain", 2)}>
 					Drain ×2
 				</button>
-				<button type="button" disabled={busy} onClick={() => void preset("watch", 2)}>
+				<button type="button" className="btn-ghost" disabled={busy} onClick={() => void preset("watch", 2)}>
 					Watch ×2
 				</button>
 			</section>
 
-			<details className="rounded border border-slate-200 p-3">
-				<summary className="cursor-pointer text-sm font-medium">Advanced</summary>
-				<div className="mt-3 space-y-3">
+			{!continuous ? (
+				<label className="mt-10 block">
+					<span className="mb-1.5 block font-mono text-2xs tracking-label text-ink-soft uppercase">Item</span>
+					<select value={item} onChange={(e) => setItem(e.target.value)} required={!continuous}>
+						{items?.map((i) => (
+							<option key={i.id} value={i.id}>
+								{i.id} — {i.title}
+							</option>
+						))}
+					</select>
+				</label>
+			) : (
+				<p className="mt-8 text-sm text-ink-soft">{mode === "drain" ? "Drain picks the next open item until the list is empty." : "Watch stays up and picks when something is open, under the day budget."}</p>
+			)}
+
+			<details className="mt-8 border border-foam-line px-4 py-3">
+				<summary className="min-h-11 cursor-pointer text-sm font-semibold text-ink">Advanced</summary>
+				<div className="mt-4 space-y-3">
 					<label className="block">
-						<span className="mb-1 block text-sm font-medium">Mode</span>
+						<span className="mb-1.5 block font-mono text-2xs tracking-label text-ink-soft uppercase">Mode</span>
 						<select value={mode} onChange={(e) => setMode(e.target.value as StartFormState["mode"])}>
 							<option value="off">off (item run)</option>
 							<option value="drain">drain</option>
 							<option value="watch">watch</option>
 						</select>
 					</label>
-					{!continuous && (
-						<label className="block">
-							<span className="mb-1 block text-sm font-medium">Item</span>
-							<select value={item} onChange={(e) => setItem(e.target.value)} required={!continuous}>
-								{items?.map((i) => (
-									<option key={i.id} value={i.id}>
-										{i.id} — {i.title}
-									</option>
-								))}
-							</select>
-						</label>
-					)}
 					<label className="block">
-						<span className="mb-1 block text-sm font-medium">Parallel (optional)</span>
+						<span className="mb-1.5 block font-mono text-2xs tracking-label text-ink-soft uppercase">Parallel (optional)</span>
 						<input type="number" min="1" value={parallel} onChange={(e) => setParallel(e.target.value)} />
 					</label>
 					{mode === "watch" && (
 						<label className="block">
-							<span className="mb-1 block text-sm font-medium">Watch day budget USD (optional)</span>
+							<span className="mb-1.5 block font-mono text-2xs tracking-label text-ink-soft uppercase">Watch day budget USD (optional)</span>
 							<input type="number" min="0" step="any" value={watchDailyBudget} onChange={(e) => setWatchDailyBudget(e.target.value)} placeholder="config default / unlimited" />
 						</label>
 					)}
 					<label className="block">
-						<span className="mb-1 block text-sm font-medium">Cycles (optional)</span>
+						<span className="mb-1.5 block font-mono text-2xs tracking-label text-ink-soft uppercase">Cycles (optional)</span>
 						<input type="number" min="1" value={cycles} onChange={(e) => setCycles(e.target.value)} />
 					</label>
 					<label className="block">
-						<span className="mb-1 block text-sm font-medium">Ship target (optional)</span>
+						<span className="mb-1.5 block font-mono text-2xs tracking-label text-ink-soft uppercase">Ship target (optional)</span>
 						<select value={shipTarget} onChange={(e) => setShipTarget(e.target.value)}>
 							<option value="">(default)</option>
 							{SHIP_TARGETS.map((t) => (
@@ -169,15 +171,15 @@ export function StartForm() {
 							))}
 						</select>
 					</label>
-					<label className="flex items-center gap-2 text-sm">
-						<input type="checkbox" checked={verbose} onChange={(e) => setVerbose(e.target.checked)} />
+					<label className="flex min-h-11 items-center gap-2 text-sm">
+						<input type="checkbox" checked={verbose} onChange={(e) => setVerbose(e.target.checked)} className="size-4" />
 						Verbose logs
 					</label>
 				</div>
 			</details>
 
-			{error && <p className="rounded bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-			<button type="submit" disabled={busy || (mode === "off" && !item)}>
+			{error && <p className="mt-4 border border-fail/30 bg-fail/5 px-4 py-3 text-sm text-fail">{error}</p>}
+			<button type="submit" className="btn-primary mt-8" disabled={busy || (mode === "off" && !item)}>
 				{busy ? "Starting…" : continuous ? `Start ${mode}` : "Start run"}
 			</button>
 		</form>

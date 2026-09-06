@@ -87,7 +87,7 @@ describe("formatItemLabel", () => {
 describe("statusBadgeClass", () => {
 	it("returns a string class for every known status", () => {
 		for (const s of ["running", "completed", "failed", "parked", "paused", "abandoned"] as const) {
-			assert.match(statusBadgeClass(s), /rounded/);
+			assert.match(statusBadgeClass(s), /rounded-btn/);
 		}
 	});
 });
@@ -130,8 +130,8 @@ describe("formatRunState", () => {
 
 describe("runStateBadgeClass", () => {
 	it("returns activity-aware class for running decorations", () => {
-		assert.match(runStateBadgeClass("running", { kind: "parked" }), /amber/);
-		assert.match(runStateBadgeClass("running", { kind: "watch-idle", probeAt: "x" }), /slate/);
-		assert.match(runStateBadgeClass("completed"), /green/);
+		assert.match(runStateBadgeClass("running", { kind: "parked" }), /warn/);
+		assert.match(runStateBadgeClass("running", { kind: "watch-idle", probeAt: "x" }), /ink-soft/);
+		assert.match(runStateBadgeClass("completed"), /pass/);
 	});
 });

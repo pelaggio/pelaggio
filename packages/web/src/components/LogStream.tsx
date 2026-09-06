@@ -65,21 +65,21 @@ export function LogStream({ id }: LogStreamProps) {
 
 	return (
 		<div>
-			<pre ref={preRef} onScroll={onScroll} className="max-h-[60vh] min-h-[20rem] whitespace-pre-wrap">
-				{state.lines.length === 0 ? <span className="text-slate-400">Waiting for log…</span> : state.lines.join("\n")}
+			<pre ref={preRef} onScroll={onScroll} className="max-h-[min(60vh,32rem)] min-h-48 overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-foam">
+				{state.lines.length === 0 ? <span className="text-mist">Waiting for log…</span> : state.lines.join("\n")}
 			</pre>
-			<div className="mt-2 flex items-center gap-3 text-sm text-slate-600">
+			<div className="mt-3 font-mono text-2xs tracking-label text-mist uppercase">
 				{state.closed && state.exitCode !== undefined && <span>Stream ended (exit {state.exitCode})</span>}
 				{showRetry && (
 					<>
-						<span className="text-amber-700">Connection lost.</span>
-						<button type="button" onClick={retry}>
+						<span className="text-fail">Connection lost.</span>{" "}
+						<button type="button" onClick={retry} className="btn-inline text-foam normal-case tracking-normal">
 							Retry
 						</button>
 					</>
 				)}
-				{state.error && <span className="text-red-700">{state.error}</span>}
-				{!stickToBottom && <span>(paused — scroll to bottom to resume tail)</span>}
+				{state.error && <span className="text-fail"> {state.error}</span>}
+				{!stickToBottom && <span> (paused — scroll to bottom to resume tail)</span>}
 			</div>
 		</div>
 	);

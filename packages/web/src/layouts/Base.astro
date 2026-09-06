@@ -2,33 +2,48 @@
 import "../styles/global.css";
 import { RepoNav } from "../components/RepoNav.tsx";
 import { TokenPrompt } from "../components/TokenPrompt.tsx";
+
 const { title } = Astro.props as { title: string };
+const path = Astro.url.pathname;
+const runsActive = path === "/ui/" || path.startsWith("/ui/runs");
+const startActive = path.startsWith("/ui/start");
+const statsActive = path.startsWith("/ui/stats");
+
+function navClass(active: boolean): string {
+	return active ? "text-ink" : "text-ink-soft";
+}
 ---
+
 <!doctype html>
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-		<meta name="theme-color" content="#061423" />
+		<meta name="theme-color" content="#00736c" />
 		<link rel="manifest" href="/ui/manifest.webmanifest" />
 		<link rel="apple-touch-icon" href="/ui/apple-touch-icon.png" />
 		<link rel="icon" type="image/svg+xml" href="/ui/icon.svg" />
 		<title>{title} — Pelaggio</title>
 	</head>
-	<body class="min-h-screen">
-		<header class="border-b border-slate-200 bg-white">
-			<nav class="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3 text-sm font-medium">
-				<a href="/ui/" class="font-bold text-slate-900 no-underline">pelaggio</a>
-				<a href="/ui/" class="no-underline">runs</a>
-				<a href="/ui/start/" class="no-underline">start</a>
-				<a href="/ui/stats/" class="no-underline">stats</a>
-				<div class="ml-auto flex items-center gap-3">
-					<RepoNav client:load />
-					<button id="clear-token" type="button" class="text-xs text-slate-500 hover:text-slate-900">clear token</button>
+	<body class="onshore min-h-screen">
+		<header class="relative z-10 border-b border-foam-line">
+			<nav class="wrap flex flex-col gap-4 py-5 text-sm md:flex-row md:flex-wrap md:items-center md:justify-between" aria-label="Station">
+				<a href="/ui/" class="font-display flex items-center gap-2.5 text-xl font-semibold tracking-tight text-ink no-underline hover:no-underline" aria-label="Pelaggio home">
+					<img src="/ui/mark.png" width="512" height="361" alt="" draggable="false" class="block h-11 w-16 shrink-0 object-contain" aria-hidden="true" />
+					Pelaggio
+				</a>
+				<div class="flex flex-wrap items-center gap-x-5 gap-y-3">
+					<a href="/ui/" class:list={[navClass(runsActive), "hover:underline"]}>Runs</a>
+					<a href="/ui/start/" class:list={[navClass(startActive), "hover:underline"]}>Start</a>
+					<a href="/ui/stats/" class:list={[navClass(statsActive), "hover:underline"]}>Stats</a>
+					<div class="ml-auto flex items-center gap-3 md:ml-2">
+						<RepoNav client:load />
+						<button id="clear-token" type="button" class="btn-quiet font-mono text-2xs tracking-label uppercase">Clear token</button>
+					</div>
 				</div>
 			</nav>
 		</header>
-		<main class="mx-auto max-w-5xl px-4 py-6">
+		<main class="relative z-10">
 			<TokenPrompt client:load />
 			<slot />
 		</main>

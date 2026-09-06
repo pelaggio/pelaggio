@@ -56,59 +56,64 @@ export function RunDetail({ id }: RunDetailProps) {
 		}
 	};
 
-	if (error && !run) return <p className="text-red-700">Error: {error}</p>;
-	if (!run) return <p className="text-slate-500">Loading…</p>;
+	if (error && !run) return <p className="wrap pt-10 text-fail">Error: {error}</p>;
+	if (!run) return <p className="wrap pt-10 text-ink-soft">Loading…</p>;
 
 	const stateLabel = formatRunState(run.status, run.activity);
+	const live = LIVE.includes(run.status);
 
 	return (
-		<div className="space-y-6">
-			<header className="space-y-2">
-				<h1 className="text-2xl font-semibold">{formatRunTitle(run)}</h1>
-				<div className="flex flex-wrap items-center gap-3 text-sm">
+		<div>
+			<div className="wrap py-6 md:py-8">
+				<a href="/ui/" className="mb-4 flex min-h-11 w-fit items-center font-mono text-xs text-ink-soft">
+					← Runs
+				</a>
+				<p className="eyebrow">
+					{run.mode ?? "item run"}
+					{run.item ? ` · ${run.repo}#${run.item}` : ` · ${run.repo}`}
+				</p>
+				<div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+					<h1 className="max-w-3xl font-display text-xl font-medium tracking-tight text-ink md:text-2xl">{formatRunTitle(run)}</h1>
 					<span className={runStateBadgeClass(run.status, run.activity)}>{stateLabel}</span>
-					<span className="text-slate-600">
-						id: <code>{run.id}</code>
-					</span>
-					<span className="text-slate-600">
-						repo: <code>{run.repo}</code>
-					</span>
-					{run.mode && <span className="text-slate-600">mode: {run.mode}</span>}
-					{run.watchDailyBudget != null && <span className="text-slate-600">day-budget: ${run.watchDailyBudget}</span>}
-					{run.verbose === true && <span className="text-slate-600">verbose</span>}
-					{run.shipTarget && <span className="text-slate-600">ship: {run.shipTarget}</span>}
-					{run.parallel != null && <span className="text-slate-600">parallel: {run.parallel}</span>}
-					{run.cycles != null && <span className="text-slate-600">cycles: {run.cycles}</span>}
 				</div>
-				<div className="text-sm text-slate-600">
-					started {formatDate(run.startedAt)}
-					{run.endedAt && ` · ended ${formatDate(run.endedAt)}`}
-					{run.exitCode != null && ` · exit ${run.exitCode}`}
-				</div>
-				{run.error && <p className="rounded bg-red-50 p-3 text-sm text-red-800">{run.error}</p>}
-			</header>
+				<p className="mt-2 font-mono text-xs text-ink-soft">
+					{run.id}
+					{run.shipTarget ? ` · ship ${run.shipTarget}` : ""}
+					{run.watchDailyBudget != null ? ` · day-budget $${run.watchDailyBudget}` : ""}
+					{run.verbose === true ? " · verbose" : ""}
+					{run.parallel != null ? ` · parallel ${run.parallel}` : ""}
+					{run.cycles != null ? ` · cycles ${run.cycles}` : ""}
+					{` · ${formatDate(run.startedAt)}`}
+					{run.endedAt ? ` · ended ${formatDate(run.endedAt)}` : ""}
+					{run.exitCode != null ? ` · exit ${run.exitCode}` : ""}
+				</p>
+				{run.error && <p className="mt-4 border border-fail/30 bg-fail/5 px-4 py-3 text-sm text-fail">{run.error}</p>}
 
-			<section className="flex flex-wrap gap-2">
-				<button type="button" disabled={busy || !PAUSEABLE.includes(run.status)} onClick={() => act("Pause", () => pauseRun(id))}>
-					Pause
-				</button>
-				<button type="button" disabled={busy || !RESUMEABLE.includes(run.status)} onClick={() => act("Resume", () => resumeRun(id))}>
-					Resume
-				</button>
-				<button type="button" disabled={busy || !STOPPABLE.includes(run.status)} onClick={() => act("Stop", () => stopRun(id))}>
-					Stop
-				</button>
-				<button type="button" onClick={() => void refresh()}>
-					Refresh
-				</button>
+				<div className="mt-6 flex flex-wrap gap-2">
+					<button type="button" className="btn-primary" disabled={busy || !PAUSEABLE.includes(run.status)} onClick={() => act("Pause", () => pauseRun(id))}>
+						Pause
+					</button>
+					<button type="button" className="btn-primary" disabled={busy || !RESUMEABLE.includes(run.status)} onClick={() => act("Resume", () => resumeRun(id))}>
+						Resume
+					</button>
+					<button type="button" className="btn-quiet" disabled={busy || !STOPPABLE.includes(run.status)} onClick={() => act("Stop", () => stopRun(id))}>
+						Stop
+					</button>
+					<button type="button" className="btn-ghost" onClick={() => void refresh()}>
+						Refresh
+					</button>
+				</div>
+			</div>
+
+			<section className="offshore">
+				<div className="wrap py-8 md:py-10">
+					<p className="eyebrow">{live ? "Offshore" : "Returned"}</p>
+					<h2 className="mt-2 mb-5 font-display text-xl font-medium tracking-tight text-foam">{live ? "Live log" : "Log"}</h2>
+					<LogStream id={id} />
+				</div>
 			</section>
 
-			<section>
-				<h2 className="mb-2 text-lg font-semibold">Live log</h2>
-				<LogStream id={id} />
-			</section>
-
-			{error && <p className="text-sm text-red-700">{error}</p>}
+			{error && <p className="wrap py-4 text-sm text-fail">{error}</p>}
 		</div>
 	);
 }

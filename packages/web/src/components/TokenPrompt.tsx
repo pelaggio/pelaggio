@@ -26,13 +26,13 @@ export function TokenPrompt() {
 	};
 
 	return (
-		<dialog ref={dialogRef} onCancel={(e) => e.preventDefault()} className="rounded-lg p-0 backdrop:bg-slate-900/40">
+		<dialog ref={dialogRef} onCancel={(e) => e.preventDefault()} className="rounded-btn border border-foam-line bg-foam p-0 text-ink backdrop:bg-abyss/50">
 			<form onSubmit={submit} className="w-80 space-y-3 p-5">
-				<h2 className="text-lg font-semibold">Control-plane token</h2>
-				<p className="text-sm text-slate-600">Paste the bearer token from the operator's env file.</p>
-				{rejected && <p className="rounded bg-red-50 p-2 text-sm text-red-800">Token rejected — try again.</p>}
-				<input type="password" autoFocus value={value} onChange={(e) => setValue(e.target.value)} className="w-full rounded border border-slate-300 px-2 py-1 text-sm" aria-label="Control-plane token" />
-				<button type="submit" className="w-full rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white">
+				<h2 className="font-display text-lg font-medium tracking-tight">Control-plane token</h2>
+				<p className="text-sm text-ink-soft">Paste the bearer token from the operator's env file.</p>
+				{rejected && <p className="border border-fail/30 bg-fail/5 p-2 text-sm text-fail">Token rejected — try again.</p>}
+				<input type="password" autoFocus value={value} onChange={(e) => setValue(e.target.value)} aria-label="Control-plane token" />
+				<button type="submit" className="btn-primary w-full">
 					Save
 				</button>
 			</form>
