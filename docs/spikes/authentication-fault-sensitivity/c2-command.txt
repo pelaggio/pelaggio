@@ -1,0 +1,5 @@
+cwd=/home/chris/workspace/pelaggio-799
+fixture=/home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo
+label=c2
+patch=docs/spikes/authentication-fault-sensitivity/c2-hollow-success-handoff.patch
+node --import tsx --test --experimental-test-isolation=none --test-concurrency=1 --test-timeout=60000 --test-reporter=spec --test-reporter-destination=/home/chris/workspace/pelaggio-799/docs/spikes/authentication-fault-sensitivity/c2-spec.txt --test-reporter=./ci/assurance-observation-reporter.mjs --test-reporter-destination=/home/chris/workspace/pelaggio-799/docs/spikes/authentication-fault-sensitivity/c2-observations.jsonl /home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts /home/chris/workspace/pelaggio-799/.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts

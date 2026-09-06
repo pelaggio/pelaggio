@@ -1,0 +1,59 @@
+▶ createApp
+  [32m✔ GET /healthz bypasses bearer auth [90m(5.582356ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json bypasses bearer auth and returns JSON [90m(2.482273ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json returns JSON 404 when missing [90m(1.372655ms)[39m[39m
+  [32m✔ GET /repos lists registry entries with exists flag [90m(2.151343ms)[39m[39m
+  [32m✔ GET /repos/:slug/roadmap returns source name + items [90m(1.562623ms)[39m[39m
+  [32m✔ GET /repos/missing/roadmap returns 404 [90m(1.203209ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats returns stats payload [90m(1.48468ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list [90m(4.865754ms)[39m[39m
+  [32m✔ stats and runs preserve ID-only payloads when roadmap list fails [90m(4.727984ms)[39m[39m
+  [32m✔ omits itemTitle when the title is blank [90m(2.122629ms)[39m[39m
+  [32m✔ renders an id absent from the bounded title snapshot bare without error [90m(3.075803ms)[39m[39m
+  [32m✔ GET /repos/missing/stats returns 404 [90m(0.81079ms)[39m[39m
+  [32m✔ GET /roadmap and GET /stats are removed (404) [90m(0.822461ms)[39m[39m
+  [32m✔ POST /runs with missing body → 400 [90m(1.245888ms)[39m[39m
+  [32m✔ unauthenticated POST /runs rejects a text/plain simple request before spawning [90m(0.773983ms)[39m[39m
+  [32m✔ POST /runs missing repo → 400 [90m(0.971434ms)[39m[39m
+  [32m✔ POST /runs unknown repo → 400 (mapped from unknown-repo) [90m(0.850901ms)[39m[39m
+  [32m✔ POST /runs with invalid shipTarget → 400 [90m(0.755391ms)[39m[39m
+  [32m✔ POST /runs happy path → 200; persisted run carries repo [90m(1.335289ms)[39m[39m
+  [32m✔ POST /runs continuous omits item → 200 [90m(1.504983ms)[39m[39m
+  [32m✔ POST /runs continuous with item → 400 [90m(0.958379ms)[39m[39m
+  [32m✔ POST /runs missing item without mode → 400 [90m(0.951184ms)[39m[39m
+  [32m✔ POST /runs watchDailyBudget without watch mode → 400 [90m(0.898834ms)[39m[39m
+  [32m✔ POST /runs invalid mode → 400 [90m(0.742391ms)[39m[39m
+  [32m✔ GET /repos/:slug/config returns watchDailyBudget null when unset [90m(0.910724ms)[39m[39m
+  [32m✔ GET /repos/:slug/config 404 for unknown slug [90m(0.77838ms)[39m[39m
+  [32m✔ GET /runs/:id 404 for unknown id [90m(0.833357ms)[39m[39m
+  [32m✔ GET /runs lists current runs [90m(2.784879ms)[39m[39m
+  [32m✔ GET /runs keeps persisted rows whose repository was removed [90m(1.00112ms)[39m[39m
+  [32m✔ 1000 historical ids trigger one non-blocking roadmap list per repo [90m(9.862755ms)[39m[39m
+  [32m✔ GET /runs resolves identical item ids against each run's repository [90m(2.718338ms)[39m[39m
+  [32m✔ GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc [90m(1.847394ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters both supervised and external rows [90m(2.276098ms)[39m[39m
+  [32m✔ external ids are 404 on get/pause/resume/stop/log [90m(1.680962ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters by repo [90m(2.392377ms)[39m[39m
+  [32m✔ bearer gate: missing token → 401 except /healthz [90m(1.030623ms)[39m[39m
+  [32m✔ bearer gate: correct token → 200 [90m(0.790335ms)[39m[39m
+  [32m✔ static handler serves /ui/index.html when webDist is set [90m(5.120013ms)[39m[39m
+  [32m✔ API routes still return JSON when webDist is set (no /ui collision) [90m(1.241966ms)[39m[39m
+  [32m✔ GET / 302s to /ui/ when webDist is set [90m(1.20643ms)[39m[39m
+  [32m✔ no static handler / no redirect when webDist is undefined [90m(0.740138ms)[39m[39m
+[32m✔ createApp [90m(82.070017ms)[39m[39m
+▶ bearerAuth
+  [32m✔ missing Authorization header: 401 [90m(0.277018ms)[39m[39m
+  [32m✔ wrong token: 401 [90m(0.176093ms)[39m[39m
+  [32m✔ correct token: 200 [90m(0.185209ms)[39m[39m
+  [32m✔ correct token authenticates state changes [90m(0.163771ms)[39m[39m
+  [32m✔ token of different length: rejected without timingSafeEqual length crash [90m(0.137045ms)[39m[39m
+  [32m✔ non-Bearer scheme: 401 [90m(0.16167ms)[39m[39m
+[32m✔ bearerAuth [90m(1.210876ms)[39m[39m
+[34mℹ tests 47[39m
+[34mℹ suites 2[39m
+[34mℹ pass 47[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 870.48917[39m

@@ -1,0 +1,223 @@
+{
+	"c1": {
+		"named": 47,
+		"pass": 43,
+		"fail": 4,
+		"failedNames": [
+			"unauthenticated POST /runs rejects a text/plain simple request before spawning",
+			"bearer gate: missing token → 401 except /healthz",
+			"missing Authorization header: 401",
+			"non-Bearer scheme: 401"
+		],
+		"onPath": [
+			{
+				"name": "missing Authorization header: 401",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			},
+			{
+				"name": "non-Bearer scheme: 401",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			},
+			{
+				"name": "bearer gate: missing token → 401 except /healthz",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			},
+			{
+				"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			}
+		],
+		"controls": [
+			{
+				"name": "correct token: 200",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "wrong token: 401",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "correct token authenticates state changes",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "POST /runs happy path → 200; persisted run carries repo",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			}
+		],
+		"controlFailures": []
+	},
+	"c2": {
+		"named": 47,
+		"pass": 11,
+		"fail": 36,
+		"failedNames": [
+			"GET /repos lists registry entries with exists flag",
+			"GET /repos/:slug/roadmap returns source name + items",
+			"GET /repos/missing/roadmap returns 404",
+			"GET /repos/:slug/stats returns stats payload",
+			"GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list",
+			"stats and runs preserve ID-only payloads when roadmap list fails",
+			"omits itemTitle when the title is blank",
+			"renders an id absent from the bounded title snapshot bare without error",
+			"GET /repos/missing/stats returns 404",
+			"GET /roadmap and GET /stats are removed (404)",
+			"POST /runs with missing body → 400",
+			"POST /runs missing repo → 400",
+			"POST /runs unknown repo → 400 (mapped from unknown-repo)",
+			"POST /runs with invalid shipTarget → 400",
+			"POST /runs happy path → 200; persisted run carries repo",
+			"POST /runs continuous omits item → 200",
+			"POST /runs continuous with item → 400",
+			"POST /runs missing item without mode → 400",
+			"POST /runs watchDailyBudget without watch mode → 400",
+			"POST /runs invalid mode → 400",
+			"GET /repos/:slug/config returns watchDailyBudget null when unset",
+			"GET /repos/:slug/config 404 for unknown slug",
+			"GET /runs/:id 404 for unknown id",
+			"GET /runs lists current runs",
+			"GET /runs keeps persisted rows whose repository was removed",
+			"1000 historical ids trigger one non-blocking roadmap list per repo",
+			"GET /runs resolves identical item ids against each run's repository",
+			"GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc",
+			"GET /runs?repo=<slug> filters both supervised and external rows",
+			"external ids are 404 on get/pause/resume/stop/log",
+			"GET /runs?repo=<slug> filters by repo",
+			"bearer gate: correct token → 200",
+			"API routes still return JSON when webDist is set (no /ui collision)",
+			"no static handler / no redirect when webDist is undefined",
+			"correct token: 200",
+			"correct token authenticates state changes"
+		],
+		"onPath": [
+			{
+				"name": "correct token authenticates state changes",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			},
+			{
+				"name": "correct token: 200",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			},
+			{
+				"name": "POST /runs happy path → 200; persisted run carries repo",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			},
+			{
+				"name": "bearer gate: correct token → 200",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			}
+		],
+		"controls": [
+			{
+				"name": "missing Authorization header: 401",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "wrong token: 401",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			}
+		],
+		"controlFailures": []
+	},
+	"c3": {
+		"named": 47,
+		"pass": 46,
+		"fail": 1,
+		"failedNames": [
+			"unauthenticated POST /runs rejects a text/plain simple request before spawning"
+		],
+		"onPath": [
+			{
+				"name": "missing Authorization header: 401",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"classification": "survives"
+			},
+			{
+				"name": "non-Bearer scheme: 401",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"classification": "survives"
+			},
+			{
+				"name": "bearer gate: missing token → 401 except /healthz",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"classification": "survives"
+			},
+			{
+				"name": "unauthenticated POST /runs rejects a text/plain simple request before spawning",
+				"baseline": "test:pass",
+				"challenged": "test:fail",
+				"classification": "detects"
+			}
+		],
+		"controls": [
+			{
+				"name": "correct token: 200",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "wrong token: 401",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "correct token authenticates state changes",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "POST /runs happy path → 200; persisted run carries repo",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			},
+			{
+				"name": "bearer gate: correct token → 200",
+				"baseline": "test:pass",
+				"challenged": "test:pass",
+				"controlOk": true
+			}
+		],
+		"controlFailures": []
+	}
+}

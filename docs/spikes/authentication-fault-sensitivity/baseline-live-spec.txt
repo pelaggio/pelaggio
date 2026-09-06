@@ -1,0 +1,79 @@
+▶ createApp
+  [32m✔ GET /healthz bypasses bearer auth [90m(6.600792ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json bypasses bearer auth and returns JSON [90m(2.443661ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json returns JSON 404 when missing [90m(1.172183ms)[39m[39m
+  [32m✔ GET /repos lists registry entries with exists flag [90m(1.659737ms)[39m[39m
+  [32m✔ GET /repos/:slug/roadmap returns source name + items [90m(1.414813ms)[39m[39m
+  [32m✔ GET /repos/missing/roadmap returns 404 [90m(1.219351ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats returns stats payload [90m(1.594246ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list [90m(4.527297ms)[39m[39m
+  [32m✔ stats and runs preserve ID-only payloads when roadmap list fails [90m(4.467753ms)[39m[39m
+  [32m✔ omits itemTitle when the title is blank [90m(2.288026ms)[39m[39m
+  [32m✔ renders an id absent from the bounded title snapshot bare without error [90m(2.751122ms)[39m[39m
+  [32m✔ GET /repos/missing/stats returns 404 [90m(0.82529ms)[39m[39m
+  [32m✔ GET /roadmap and GET /stats are removed (404) [90m(0.82286ms)[39m[39m
+  [32m✔ POST /runs with missing body → 400 [90m(1.08799ms)[39m[39m
+  [32m✔ unauthenticated POST /runs rejects a text/plain simple request before spawning [90m(0.789906ms)[39m[39m
+  [32m✔ POST /runs missing repo → 400 [90m(0.859941ms)[39m[39m
+  [32m✔ POST /runs unknown repo → 400 (mapped from unknown-repo) [90m(0.879198ms)[39m[39m
+  [32m✔ POST /runs with invalid shipTarget → 400 [90m(0.735278ms)[39m[39m
+  [32m✔ POST /runs happy path → 200; persisted run carries repo [90m(1.251802ms)[39m[39m
+  [32m✔ POST /runs continuous omits item → 200 [90m(1.325359ms)[39m[39m
+  [32m✔ POST /runs continuous with item → 400 [90m(0.877559ms)[39m[39m
+  [32m✔ POST /runs missing item without mode → 400 [90m(0.834028ms)[39m[39m
+  [32m✔ POST /runs watchDailyBudget without watch mode → 400 [90m(0.868903ms)[39m[39m
+  [32m✔ POST /runs invalid mode → 400 [90m(0.903134ms)[39m[39m
+  [32m✔ GET /repos/:slug/config returns watchDailyBudget null when unset [90m(0.886577ms)[39m[39m
+  [32m✔ GET /repos/:slug/config 404 for unknown slug [90m(0.972676ms)[39m[39m
+  [32m✔ GET /runs/:id 404 for unknown id [90m(0.79425ms)[39m[39m
+  [32m✔ GET /runs lists current runs [90m(2.637119ms)[39m[39m
+  [32m✔ GET /runs keeps persisted rows whose repository was removed [90m(0.966484ms)[39m[39m
+  [32m✔ 1000 historical ids trigger one non-blocking roadmap list per repo [90m(9.043645ms)[39m[39m
+  [32m✔ GET /runs resolves identical item ids against each run's repository [90m(2.795069ms)[39m[39m
+  [32m✔ GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc [90m(1.901019ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters both supervised and external rows [90m(2.169224ms)[39m[39m
+  [32m✔ external ids are 404 on get/pause/resume/stop/log [90m(1.470115ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters by repo [90m(2.088581ms)[39m[39m
+  [32m✔ bearer gate: missing token → 401 except /healthz [90m(1.042273ms)[39m[39m
+  [32m✔ bearer gate: correct token → 200 [90m(0.738453ms)[39m[39m
+  [32m✔ static handler serves /ui/index.html when webDist is set [90m(5.153857ms)[39m[39m
+  [32m✔ API routes still return JSON when webDist is set (no /ui collision) [90m(1.221245ms)[39m[39m
+  [32m✔ GET / 302s to /ui/ when webDist is set [90m(1.206215ms)[39m[39m
+  [32m✔ no static handler / no redirect when webDist is undefined [90m(0.713139ms)[39m[39m
+[32m✔ createApp [90m(79.549656ms)[39m[39m
+▶ bearerAuth
+  [32m✔ missing Authorization header: 401 [90m(0.252063ms)[39m[39m
+  [32m✔ wrong token: 401 [90m(0.19145ms)[39m[39m
+  [32m✔ correct token: 200 [90m(0.17286ms)[39m[39m
+  [32m✔ correct token authenticates state changes [90m(0.174057ms)[39m[39m
+  [32m✔ token of different length: rejected without timingSafeEqual length crash [90m(0.140846ms)[39m[39m
+  [32m✔ non-Bearer scheme: 401 [90m(0.219286ms)[39m[39m
+[32m✔ bearerAuth [90m(1.28274ms)[39m[39m
+▶ loadServerConfig
+  [32m✔ defaults the roadmap title TTL to 60 seconds and accepts a positive override [90m(0.268318ms)[39m[39m
+  [32m✔ rejects a non-positive or non-integer roadmap title TTL [90m(0.302334ms)[39m[39m
+  [32m✔ registryPath defaults to $XDG_CONFIG_HOME/pelaggio-server/repos.yml [90m(0.34991ms)[39m[39m
+  [32m✔ registryPath defaults to ~/.config/pelaggio-server/repos.yml when XDG_CONFIG_HOME unset [90m(0.075854ms)[39m[39m
+  [32m✔ AUTOPILOT_SERVER_REGISTRY overrides defaults [90m(0.115173ms)[39m[39m
+  [32m✔ statePath defaults to $XDG_STATE_HOME/pelaggio-server/state.json [90m(0.33549ms)[39m[39m
+  [32m✔ statePath defaults to ~/.local/state/pelaggio-server/state.json when XDG_STATE_HOME unset [90m(0.077257ms)[39m[39m
+  [32m✔ AUTOPILOT_SERVER_STATE_PATH and AUTOPILOT_SERVER_LOG_DIR overrides [90m(0.067943ms)[39m[39m
+  [32m✔ trust manifest path defaults to docs/trust and can be overridden [90m(0.113151ms)[39m[39m
+  [32m✔ webDist is undefined when default path is missing (UI not built) [90m(0.056271ms)[39m[39m
+  [32m✔ webDist is undefined when explicit AUTOPILOT_SERVER_WEB_DIST does not exist [90m(0.05613ms)[39m[39m
+  [32m✔ webDist resolves the explicit env var when the directory exists [90m(0.2889ms)[39m[39m
+  [32m✔ rejects wildcard bind hosts [90m(0.156432ms)[39m[39m
+  [32m✔ fails closed when the token is unset, including on loopback [90m(0.213413ms)[39m[39m
+  [32m✔ trims surrounding whitespace from the token (env-file trailing space must not 401 every request) [90m(0.058498ms)[39m[39m
+  [32m✔ whitespace-only token fails closed [90m(0.05812ms)[39m[39m
+  [32m✔ token set on a non-loopback host is unchanged (does not throw; token preserved) [90m(0.042198ms)[39m[39m
+  [32m✔ token set on loopback hosts is unchanged [90m(0.077046ms)[39m[39m
+[32m✔ loadServerConfig [90m(2.92536ms)[39m[39m
+[34mℹ tests 65[39m
+[34mℹ suites 3[39m
+[34mℹ pass 65[39m
+[34mℹ fail 0[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 753.886177[39m

@@ -1,0 +1,657 @@
+▶ createApp
+  [32m✔ GET /healthz bypasses bearer auth [90m(6.726289ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json bypasses bearer auth and returns JSON [90m(2.649581ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json returns JSON 404 when missing [90m(1.294415ms)[39m[39m
+  [31m✖ GET /repos lists registry entries with exists flag [90m(4.119013ms)[39m[39m
+  [31m✖ GET /repos/:slug/roadmap returns source name + items [90m(2.336791ms)[39m[39m
+  [31m✖ GET /repos/missing/roadmap returns 404 [90m(1.131254ms)[39m[39m
+  [31m✖ GET /repos/:slug/stats returns stats payload [90m(0.988395ms)[39m[39m
+  [31m✖ GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list [90m(1.241315ms)[39m[39m
+  [31m✖ stats and runs preserve ID-only payloads when roadmap list fails [90m(3.395776ms)[39m[39m
+  [31m✖ omits itemTitle when the title is blank [90m(1.680374ms)[39m[39m
+  [31m✖ renders an id absent from the bounded title snapshot bare without error [90m(6.817819ms)[39m[39m
+  [31m✖ GET /repos/missing/stats returns 404 [90m(1.104182ms)[39m[39m
+  [31m✖ GET /roadmap and GET /stats are removed (404) [90m(0.897743ms)[39m[39m
+  [31m✖ POST /runs with missing body → 400 [90m(0.893853ms)[39m[39m
+  [32m✔ unauthenticated POST /runs rejects a text/plain simple request before spawning [90m(0.942633ms)[39m[39m
+  [31m✖ POST /runs missing repo → 400 [90m(0.964215ms)[39m[39m
+  [31m✖ POST /runs unknown repo → 400 (mapped from unknown-repo) [90m(0.871809ms)[39m[39m
+  [31m✖ POST /runs with invalid shipTarget → 400 [90m(0.861507ms)[39m[39m
+  [31m✖ POST /runs happy path → 200; persisted run carries repo [90m(0.890075ms)[39m[39m
+  [31m✖ POST /runs continuous omits item → 200 [90m(1.035425ms)[39m[39m
+  [31m✖ POST /runs continuous with item → 400 [90m(1.041241ms)[39m[39m
+  [31m✖ POST /runs missing item without mode → 400 [90m(0.995763ms)[39m[39m
+  [31m✖ POST /runs watchDailyBudget without watch mode → 400 [90m(0.981731ms)[39m[39m
+  [31m✖ POST /runs invalid mode → 400 [90m(1.017679ms)[39m[39m
+  [31m✖ GET /repos/:slug/config returns watchDailyBudget null when unset [90m(1.008779ms)[39m[39m
+  [31m✖ GET /repos/:slug/config 404 for unknown slug [90m(0.921219ms)[39m[39m
+  [31m✖ GET /runs/:id 404 for unknown id [90m(0.872391ms)[39m[39m
+  [31m✖ GET /runs lists current runs [90m(5.31764ms)[39m[39m
+  [31m✖ GET /runs keeps persisted rows whose repository was removed [90m(2.734825ms)[39m[39m
+  [31m✖ 1000 historical ids trigger one non-blocking roadmap list per repo [90m(3.437398ms)[39m[39m
+  [31m✖ GET /runs resolves identical item ids against each run's repository [90m(6.080466ms)[39m[39m
+  [31m✖ GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc [90m(1.604353ms)[39m[39m
+  [31m✖ GET /runs?repo=<slug> filters both supervised and external rows [90m(2.429579ms)[39m[39m
+  [31m✖ external ids are 404 on get/pause/resume/stop/log [90m(0.762306ms)[39m[39m
+  [31m✖ GET /runs?repo=<slug> filters by repo [90m(2.51612ms)[39m[39m
+  [32m✔ bearer gate: missing token → 401 except /healthz [90m(0.908742ms)[39m[39m
+  [31m✖ bearer gate: correct token → 200 [90m(0.824764ms)[39m[39m
+  [32m✔ static handler serves /ui/index.html when webDist is set [90m(3.779736ms)[39m[39m
+  [31m✖ API routes still return JSON when webDist is set (no /ui collision) [90m(1.20703ms)[39m[39m
+  [32m✔ GET / 302s to /ui/ when webDist is set [90m(1.006501ms)[39m[39m
+  [31m✖ no static handler / no redirect when webDist is undefined [90m(0.773921ms)[39m[39m
+[31m✖ createApp [90m(82.668822ms)[39m[39m
+▶ bearerAuth
+  [32m✔ missing Authorization header: 401 [90m(0.275923ms)[39m[39m
+  [32m✔ wrong token: 401 [90m(0.179861ms)[39m[39m
+  [31m✖ correct token: 200 [90m(0.339393ms)[39m[39m
+  [31m✖ correct token authenticates state changes [90m(0.281744ms)[39m[39m
+  [32m✔ token of different length: rejected without timingSafeEqual length crash [90m(0.175703ms)[39m[39m
+  [32m✔ non-Bearer scheme: 401 [90m(0.279584ms)[39m[39m
+[31m✖ bearerAuth [90m(1.666151ms)[39m[39m
+[34mℹ tests 47[39m
+[34mℹ suites 2[39m
+[34mℹ pass 11[39m
+[34mℹ fail 36[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 747.180093[39m
+
+[31m✖ failing tests:[39m
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:2711
+[31m✖ GET /repos lists registry entries with exists flag [90m(4.119013ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:157:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:3214
+[31m✖ GET /repos/:slug/roadmap returns source name + items [90m(2.336791ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:169:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:3523
+[31m✖ GET /repos/missing/roadmap returns 404 [90m(1.131254ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 404
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:179:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m404[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:3745
+[31m✖ GET /repos/:slug/stats returns stats payload [90m(0.988395ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:187:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:4025
+[31m✖ GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list [90m(1.241315ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:207:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:4798
+[31m✖ stats and runs preserve ID-only payloads when roadmap list fails [90m(3.395776ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:224:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:5711
+[31m✖ omits itemTitle when the title is blank [90m(1.680374ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:253:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:6464
+[31m✖ renders an id absent from the bounded title snapshot bare without error [90m(6.817819ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:278:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:7467
+[31m✖ GET /repos/missing/stats returns 404 [90m(1.104182ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 404
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:297:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m404[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:7621
+[31m✖ GET /roadmap and GET /stats are removed (404) [90m(0.897743ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 404
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:302:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m404[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:7815
+[31m✖ POST /runs with missing body → 400 [90m(0.893853ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:309:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:8502
+[31m✖ POST /runs missing repo → 400 [90m(0.964215ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:334:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:8834
+[31m✖ POST /runs unknown repo → 400 (mapped from unknown-repo) [90m(0.871809ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:347:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:9176
+[31m✖ POST /runs with invalid shipTarget → 400 [90m(0.861507ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:359:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:9451
+[31m✖ POST /runs happy path → 200; persisted run carries repo [90m(0.890075ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:369:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:9942
+[31m✖ POST /runs continuous omits item → 200 [90m(1.035425ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:385:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:10361
+[31m✖ POST /runs continuous with item → 400 [90m(1.041241ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:399:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:10628
+[31m✖ POST /runs missing item without mode → 400 [90m(0.995763ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:409:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:10873
+[31m✖ POST /runs watchDailyBudget without watch mode → 400 [90m(0.981731ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:419:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:11161
+[31m✖ POST /runs invalid mode → 400 [90m(1.017679ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 400
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:429:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m400[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:11408
+[31m✖ GET /repos/:slug/config returns watchDailyBudget null when unset [90m(1.008779ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:436:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:11670
+[31m✖ GET /repos/:slug/config 404 for unknown slug [90m(0.921219ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 404
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:445:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m404[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:11833
+[31m✖ GET /runs/:id 404 for unknown id [90m(0.872391ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 404
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:451:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m404[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:11976
+[31m✖ GET /runs lists current runs [90m(5.31764ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:460:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:12355
+[31m✖ GET /runs keeps persisted rows whose repository was removed [90m(2.734825ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:481:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:12890
+[31m✖ 1000 historical ids trigger one non-blocking roadmap list per repo [90m(3.437398ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:517:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:13786
+[31m✖ GET /runs resolves identical item ids against each run's repository [90m(6.080466ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:542:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:2:14570
+[31m✖ GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc [90m(1.604353ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:574:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:3:364
+[31m✖ GET /runs?repo=<slug> filters both supervised and external rows [90m(2.429579ms)[39m[39m
+  TypeError: Cannot read properties of undefined (reading 'length')
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:613:30[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:4:497
+[31m✖ external ids are 404 on get/pause/resume/stop/log [90m(0.762306ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 404
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:623:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m404[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:4:1005
+[31m✖ GET /runs?repo=<slug> filters by repo [90m(2.51612ms)[39m[39m
+  TypeError: Cannot read properties of undefined (reading 'length')
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:645:30[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:4:2392
+[31m✖ bearer gate: correct token → 200 [90m(0.824764ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:666:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:4:2993
+[31m✖ API routes still return JSON when webDist is set (no /ui collision) [90m(1.20703ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:684:10[90m)[39m
+  [90m    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:4:3824
+[31m✖ no static handler / no redirect when webDist is undefined [90m(0.773921ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 404
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/app.test.ts:703:10[90m)[39m
+  [90m    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m404[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts:1:834
+[31m✖ correct token: 200 [90m(0.339393ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts:32:10[90m)[39m
+  [90m    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts:1:1003
+[31m✖ correct token authenticates state changes [90m(0.281744ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  401 !== 200
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-cMXeSo/packages/server/__tests__/auth.test.ts:38:10[90m)[39m
+  [90m    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m401[39m,
+    expected: [33m200[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }

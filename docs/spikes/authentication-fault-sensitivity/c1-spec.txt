@@ -1,0 +1,133 @@
+▶ createApp
+  [32m✔ GET /healthz bypasses bearer auth [90m(7.592843ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json bypasses bearer auth and returns JSON [90m(2.616286ms)[39m[39m
+  [32m✔ GET /.well-known/pelaggio.trust.json returns JSON 404 when missing [90m(1.434371ms)[39m[39m
+  [32m✔ GET /repos lists registry entries with exists flag [90m(1.69626ms)[39m[39m
+  [32m✔ GET /repos/:slug/roadmap returns source name + items [90m(1.455367ms)[39m[39m
+  [32m✔ GET /repos/missing/roadmap returns 404 [90m(1.359595ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats returns stats payload [90m(1.612259ms)[39m[39m
+  [32m✔ GET /repos/:slug/stats enriches closed delivered and open failed items from one cached list [90m(5.940235ms)[39m[39m
+  [32m✔ stats and runs preserve ID-only payloads when roadmap list fails [90m(4.891112ms)[39m[39m
+  [32m✔ omits itemTitle when the title is blank [90m(2.420434ms)[39m[39m
+  [32m✔ renders an id absent from the bounded title snapshot bare without error [90m(7.943701ms)[39m[39m
+  [32m✔ GET /repos/missing/stats returns 404 [90m(1.783953ms)[39m[39m
+  [32m✔ GET /roadmap and GET /stats are removed (404) [90m(0.999325ms)[39m[39m
+  [32m✔ POST /runs with missing body → 400 [90m(1.625963ms)[39m[39m
+  [31m✖ unauthenticated POST /runs rejects a text/plain simple request before spawning [90m(4.105402ms)[39m[39m
+  [32m✔ POST /runs missing repo → 400 [90m(1.111979ms)[39m[39m
+  [32m✔ POST /runs unknown repo → 400 (mapped from unknown-repo) [90m(1.046252ms)[39m[39m
+  [32m✔ POST /runs with invalid shipTarget → 400 [90m(0.96268ms)[39m[39m
+  [32m✔ POST /runs happy path → 200; persisted run carries repo [90m(1.650333ms)[39m[39m
+  [32m✔ POST /runs continuous omits item → 200 [90m(1.598292ms)[39m[39m
+  [32m✔ POST /runs continuous with item → 400 [90m(1.082291ms)[39m[39m
+  [32m✔ POST /runs missing item without mode → 400 [90m(1.11376ms)[39m[39m
+  [32m✔ POST /runs watchDailyBudget without watch mode → 400 [90m(1.056528ms)[39m[39m
+  [32m✔ POST /runs invalid mode → 400 [90m(1.060424ms)[39m[39m
+  [32m✔ GET /repos/:slug/config returns watchDailyBudget null when unset [90m(1.074913ms)[39m[39m
+  [32m✔ GET /repos/:slug/config 404 for unknown slug [90m(0.914797ms)[39m[39m
+  [32m✔ GET /runs/:id 404 for unknown id [90m(1.087607ms)[39m[39m
+  [32m✔ GET /runs lists current runs [90m(7.240157ms)[39m[39m
+  [32m✔ GET /runs keeps persisted rows whose repository was removed [90m(1.090586ms)[39m[39m
+  [32m✔ 1000 historical ids trigger one non-blocking roadmap list per repo [90m(8.743526ms)[39m[39m
+  [32m✔ GET /runs resolves identical item ids against each run's repository [90m(2.658049ms)[39m[39m
+  [32m✔ GET /runs merges external summaries, stamps source, and sorts startedAt desc / id asc [90m(1.667325ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters both supervised and external rows [90m(1.992563ms)[39m[39m
+  [32m✔ external ids are 404 on get/pause/resume/stop/log [90m(1.437741ms)[39m[39m
+  [32m✔ GET /runs?repo=<slug> filters by repo [90m(2.136755ms)[39m[39m
+  [31m✖ bearer gate: missing token → 401 except /healthz [90m(0.891351ms)[39m[39m
+  [32m✔ bearer gate: correct token → 200 [90m(0.71229ms)[39m[39m
+  [32m✔ static handler serves /ui/index.html when webDist is set [90m(3.448101ms)[39m[39m
+  [32m✔ API routes still return JSON when webDist is set (no /ui collision) [90m(1.113775ms)[39m[39m
+  [32m✔ GET / 302s to /ui/ when webDist is set [90m(1.024252ms)[39m[39m
+  [32m✔ no static handler / no redirect when webDist is undefined [90m(0.754757ms)[39m[39m
+[31m✖ createApp [90m(97.858299ms)[39m[39m
+▶ bearerAuth
+  [31m✖ missing Authorization header: 401 [90m(0.502562ms)[39m[39m
+  [32m✔ wrong token: 401 [90m(0.229322ms)[39m[39m
+  [32m✔ correct token: 200 [90m(0.179317ms)[39m[39m
+  [32m✔ correct token authenticates state changes [90m(0.216533ms)[39m[39m
+  [32m✔ token of different length: rejected without timingSafeEqual length crash [90m(0.161696ms)[39m[39m
+  [31m✖ non-Bearer scheme: 401 [90m(0.275829ms)[39m[39m
+[31m✖ bearerAuth [90m(1.693243ms)[39m[39m
+[34mℹ tests 47[39m
+[34mℹ suites 2[39m
+[34mℹ pass 43[39m
+[34mℹ fail 4[39m
+[34mℹ cancelled 0[39m
+[34mℹ skipped 0[39m
+[34mℹ todo 0[39m
+[34mℹ duration_ms 790.218309[39m
+
+[31m✖ failing tests:[39m
+
+test at .dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts:2:8093
+[31m✖ unauthenticated POST /runs rejects a text/plain simple request before spawning [90m(4.105402ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 401
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts:321:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m200[39m,
+    expected: [33m401[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts:4:1884
+[31m✖ bearer gate: missing token → 401 except /healthz [90m(0.891351ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 401
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-dkQnhv/packages/server/__tests__/app.test.ts:655:10[90m)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m200[39m,
+    expected: [33m401[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts:1:460
+[31m✖ missing Authorization header: 401 [90m(0.502562ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 401
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts:18:10[90m)[39m
+  [90m    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+      at async Promise.all (index 0)
+  [90m    at async Suite.run (node:internal/test_runner/test:1442:7)[39m
+  [90m    at async Test.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m200[39m,
+    expected: [33m401[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
+
+test at .dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts:1:1428
+[31m✖ non-Bearer scheme: 401 [90m(0.275829ms)[39m[39m
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 401
+  
+      at TestContext.<anonymous> [90m(/home/chris/workspace/pelaggio-799/[39m.dev/assurance-mutation-dkQnhv/packages/server/__tests__/auth.test.ts:50:10[90m)[39m
+  [90m    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)[39m
+  [90m    at async Test.run (node:internal/test_runner/test:1054:7)[39m
+  [90m    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)[39m {
+    generatedMessage: [33mtrue[39m,
+    code: [32m'ERR_ASSERTION'[39m,
+    actual: [33m200[39m,
+    expected: [33m401[39m,
+    operator: [32m'strictEqual'[39m,
+    diff: [32m'simple'[39m
+  }
