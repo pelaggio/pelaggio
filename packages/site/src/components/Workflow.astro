@@ -1,18 +1,52 @@
 ---
 const stages = [
-  { work: "Plan", review: "Shakedown", note: "Review the approach and revise it." },
-  { work: "Implement", review: "Shakedown", note: "Review the change and work through findings." },
-  { work: "Ship", review: "PR review", note: "Review and revise on the pull request, when configured." },
+	{ work: "Plan", review: "Shakedown" },
+	{ work: "Implement", review: "Shakedown" },
+	{ work: "Ship", review: "Shakedown" },
 ];
+const arc = "M 33.8 151.7 A 84 84 0 1 1 166.2 151.7";
 ---
 <figure class="workflow" aria-labelledby="workflow-caption">
-  <figcaption id="workflow-caption">The work includes review and revision.</figcaption>
-  <ol class="workflow-stages">
-    {stages.map(stage => <li>
-      <div class="workflow-pair"><strong>{stage.work}</strong><span aria-hidden="true">→</span><strong>{stage.review}</strong></div>
-      <div class="workflow-return" aria-hidden="true"><span>↶</span> revise</div>
-      <p>{stage.note}</p>
-    </li>)}
-  </ol>
-  <p class="workflow-note">Planning depends on item scope. PR review needs repository setup; the demos below delivered to local git remotes.</p>
+	<figcaption id="workflow-caption">Each step includes a shakedown.</figcaption>
+	<ol class="staff">
+		{stages.map((stage) => (
+			<li>
+				<div class="eddy">
+					<svg class="eddy-ring" viewBox="0 0 200 200" aria-hidden="true">
+						<defs>
+							<marker
+								id={`eddy-arrow-${stage.work.toLowerCase()}`}
+								markerWidth="12"
+								markerHeight="12"
+								refX="10"
+								refY="6"
+								orient="auto"
+								markerUnits="userSpaceOnUse"
+							>
+								<path
+									d="M 1.5 1.5 L 10 6 L 1.5 10.5"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.7"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								></path>
+							</marker>
+						</defs>
+						<circle class="eddy-track" cx="100" cy="100" r="84" fill="none" pathLength="100"></circle>
+						<path
+							class="eddy-arc"
+							d={arc}
+							fill="none"
+							pathLength="100"
+							marker-end={`url(#eddy-arrow-${stage.work.toLowerCase()})`}
+						></path>
+					</svg>
+					<div class="eddy-hub"><strong>{stage.work}</strong></div>
+					<span class="eddy-gate">{stage.review}</span>
+				</div>
+			</li>
+		))}
+	</ol>
+	<p class="staff-return">Findings send the work back.</p>
 </figure>

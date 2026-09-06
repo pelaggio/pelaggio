@@ -28,6 +28,11 @@ the same component layout and native radio controls; the toggle works without Ja
 The experiment README documents preparation, execution, independent evaluation, and
 capture. Build scripts never invoke models or fetch fresh run evidence.
 
+The Run tab's numeric meter and model names are authored illustrations, explicitly
+labeled beside the meter. They are not captured telemetry. Links alongside it expose
+the actual attempts and digest manifest; those attempts have unpinned model identities
+and omit token, turn, and cost measurements.
+
 Each capture contains the actual charters, plans, attempt summaries, baseline checks,
 and any captured candidate checks. Digests are validated before publishing downloads.
 Candidate checks must identify the displayed revision. Missing candidate checks remain
@@ -43,8 +48,7 @@ deliveries as GitHub PRs or environmental containment demonstrations.
 
 The canonical `docs/ai-delivery/v0.1` files are copied to their public schema URLs.
 These captures do not claim to be emitted production delivery envelopes; #782 owns the
-richer production handoff. CI checks both views, native no-JavaScript switching,
-expanded plans/receipts, mobile widths, exact downloadable bytes, and revision binding.
+richer production handoff. CI checks both views, native no-JavaScript switching, receipt tabs, mobile widths, exact downloadable bytes, and revision binding.
 
 `docs/trust/limitations.md` is rendered directly at `/limitations`. Edit it there;
 do not maintain a separate marketing copy of the trust statements.

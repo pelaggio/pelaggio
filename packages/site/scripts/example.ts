@@ -19,22 +19,55 @@ const stories = {
 		request: "Let me export the filtered work list as CSV.",
 		context: "The app already filters by status and shows ten rows per page.",
 		charter: "Export every matching row, including later pages. Preserve text and order. Keep the header when nothing matches.",
-
 		plan: "The plan reuses the list’s filtering logic and adds a native download link. Its URL updates as soon as the selection changes.",
 		decision: "It preserves the existing exact-match filter semantics. Unknown status values produce an empty export with a header.",
-
 		result: "The independent checks exercise all 23 matching rows across pages, CSV text round-tripping, and downloads after changing the filter.",
+		joe: "The list’s filter, not the page you’re on. Unknown status keeps the header and writes nothing — they didn’t 400 it. Every field quoted, header left bare.",
+		acceptance: ["All matching rows, any page", "CSV round-trip, including punctuation", "Browser uses the current filter", "Store unchanged"],
+		bounds: "No auth · UTF-8 CSV, not spreadsheet apps",
+		forks: [
+			{ fork: "Status-query semantics", taken: "Exact-match, as the list. Unknown → header-only 200.", notTaken: "Reject unknown status with 400." },
+			{ fork: "Field quoting", taken: "Quote every data field; leave the header unquoted.", notTaken: "Quote only when a field contains comma, quote, or a break." },
+		],
+		run: {
+			elapsed: "37 min",
+			attempts: 4,
+			steps: [
+				{ name: "shakedown-plan", provider: "grok", model: "grok-code-fast-1", turns: 6, tokensIn: 48120, tokensOut: 2140, cost: 0.18 },
+				{ name: "implement", provider: "codex", model: "gpt-5-codex", turns: 14, tokensIn: 126400, tokensOut: 8420, cost: 0.42 },
+				{ name: "shakedown-code", provider: "grok", model: "grok-code-fast-1", turns: 8, tokensIn: 71880, tokensOut: 3210, cost: 0.24 },
+				{ name: "ship", provider: "grok", model: "grok-code-fast-1", turns: 4, tokensIn: 30650, tokensOut: 1080, cost: 0.08 },
+			],
+			constraints: ["Shakedown used a different provider than implement.", "Shipped to a local git remote, not a GitHub pull request.", "Grok ran with unsandboxed fallback — no Landlock on the host."],
+		},
 	},
 	import: {
 		label: "Interrupted import",
 		request: "Let me resume an interrupted import without starting over or duplicating the work.",
 		context: "The app saves each imported record. Restarting the original importer duplicates records already saved.",
 		charter: "Restart the same command without duplicates. Preserve existing records and report conflicting content explicitly.",
-
 		plan: "The plan uses stored records and their IDs as progress evidence. It compares complete records and checks conflicts before writing new rows.",
 		decision: "It chooses the existing store over a separate checkpoint journal. The boundary is one writer and process interruption.",
-
 		result: "The independent checks kill an import after partial progress, restart it, repeat a completed import, and exercise conflicting and invalid input.",
+		joe: "Same command after a kill, keyed off the records already there — not a journal. Conflicts named before any write. If the ids were already dirty, it stops and leaves the store.",
+		acceptance: ["Same command after a kill, no duplicates", "Completed import is idempotent", "Conflicts named before any write", "Malformed input fails before writes"],
+		bounds: "One writer · Process interrupt, not power loss or two processes",
+		forks: [
+			{ fork: "Restart identity", taken: "Persisted records, indexed by stable id.", notTaken: "Source hash and a separate checkpoint journal." },
+			{ fork: "Conflict timing", taken: "Preflight all conflicts before writing.", notTaken: "Stop at the first conflict during incremental commits." },
+			{ fork: "Pre-existing duplicate ids", taken: "Fail visibly; leave the store for repair.", notTaken: "Collapse equals, or migrate existing data." },
+		],
+		run: {
+			elapsed: "38 min",
+			attempts: 4,
+			steps: [
+				{ name: "shakedown-plan", provider: "grok", model: "grok-code-fast-1", turns: 7, tokensIn: 54310, tokensOut: 2680, cost: 0.21 },
+				{ name: "implement", provider: "codex", model: "gpt-5-codex", turns: 16, tokensIn: 141200, tokensOut: 9760, cost: 0.51 },
+				{ name: "shakedown-code", provider: "grok", model: "grok-code-fast-1", turns: 9, tokensIn: 80640, tokensOut: 3580, cost: 0.28 },
+				{ name: "ship", provider: "grok", model: "grok-code-fast-1", turns: 4, tokensIn: 28940, tokensOut: 940, cost: 0.07 },
+			],
+			constraints: ["Shakedown used a different provider than implement.", "Shipped to a local git remote, not a GitHub pull request.", "Grok ran with unsandboxed fallback — no Landlock on the host."],
+		},
 	},
 };
 export function createExample(directory = exampleDir) {
@@ -65,6 +98,8 @@ export function createExample(directory = exampleDir) {
 		return {
 			id,
 			...story,
+			runEvidence:
+				"Illustrative meter: model names, wall clock, attempt count, tokens, turns, and costs below are authored examples, not measurements from this capture. The saved attempts record unpinned models and no token, turn, or cost measurements.",
 			revision: record.candidateRevision,
 			status,
 			implemented,

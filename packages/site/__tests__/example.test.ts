@@ -23,6 +23,18 @@ test("both scenarios publish exact captured bytes", () => {
 	for (const artifact of example.receipt.artifacts) assert.equal(artifact.sha256, digest(example.files[artifact.path]!));
 	assert.deepEqual(createExample(), example);
 });
+
+test("authored run meters carry their illustrative provenance", () => {
+	for (const scenario of createExample().scenarios) {
+		assert.match(scenario.runEvidence, /authored examples, not measurements from this capture/);
+		assert.match(scenario.runEvidence, /unpinned models/);
+		assert.ok(scenario.run.steps.length > 0);
+		for (const step of scenario.run.steps) {
+			assert.notEqual(step.model, "default");
+			assert.match(step.model, /^(gpt-5-codex|grok-code-fast-1)$/);
+		}
+	}
+});
 test("altering a plan without updating its source receipt fails the build", () =>
 	withCapture((directory) => {
 		writeFileSync(join(directory, "csv/plan.md"), "Unrecorded replacement");

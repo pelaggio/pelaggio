@@ -115,7 +115,7 @@ jobs:
           const home = await get('/');
           if (process.env.IS_PREVIEW === 'true') assert.match(home.headers.get('x-robots-tag') ?? '', /noindex/);
           assert.match(await home.text(), /Let the work run/);
-          for (const path of ['/limitations', '/og.png', '/apple-touch-icon.png', '/ai-delivery/v0.1/predicate.schema.json']) await get(path);
+          for (const path of ['/limitations', '/og.jpg', '/apple-touch-icon.png', '/ai-delivery/v0.1/predicate.schema.json']) await get(path);
           const receipt = await (await get('/example/receipt.json')).json();
           assert.equal(receipt.kind, 'site-model-execution-capture');
           const { createHash } = await import('node:crypto');
