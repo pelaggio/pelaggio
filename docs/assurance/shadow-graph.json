@@ -1683,6 +1683,35 @@
 					"path": "packages/pelaggio/scripts/pelaggio/__tests__/local-autopilot-contract.test.ts"
 				}
 			]
+		},
+		{
+			"id": "CTR-0026",
+			"kind": "realization",
+			"slug": "durable-authoring-review-records",
+			"statement": "Authoring review records are written under the main worktree and remain readable after claim worktree deletion; metrics consume these persisted observations separately from PR-gate rolls.",
+			"sources": [
+				"ADR-0018",
+				"ADR-0024"
+			],
+			"codeEvidence": [
+				"packages/pelaggio/scripts/pelaggio/review/record.ts",
+				"packages/pelaggio/scripts/pelaggio/steps/shakedown-code.ts",
+				"packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts",
+				"ci/review-metrics.ts",
+				"ci/__tests__/review-metrics.test.ts"
+			],
+			"observations": [
+				{
+					"kind": "test",
+					"id": "preserves clean and split records and a committed decision source after deleting real claim worktrees",
+					"path": "packages/pelaggio/scripts/pelaggio/__tests__/pipeline.test.ts"
+				},
+				{
+					"kind": "test",
+					"id": "reads durable authoring runs with separate pass and seat coverage",
+					"path": "ci/__tests__/review-metrics.test.ts"
+				}
+			]
 		}
 	],
 	"edges": [
@@ -2500,6 +2529,16 @@
 			"from": "CTR-0023",
 			"relation": "implements",
 			"to": "CLM-0012"
+		},
+		{
+			"from": "CTR-0026",
+			"relation": "implements",
+			"to": "CLM-0008"
+		},
+		{
+			"from": "DEC-0014",
+			"relation": "implements",
+			"to": "CLM-0008"
 		}
 	],
 	"adrMap": {
@@ -2616,6 +2655,7 @@
 			"CLM-0008",
 			"CLM-0019",
 			"CON-0012",
+			"CTR-0026",
 			"DEC-0008",
 			"TC-005"
 		],
@@ -2667,6 +2707,7 @@
 			"CLM-0016",
 			"CON-0008",
 			"CTR-0003",
+			"CTR-0026",
 			"DEC-0014"
 		],
 		"ADR-0025": [

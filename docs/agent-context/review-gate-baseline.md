@@ -342,3 +342,29 @@ The profile reader was replayed over that exact frozen copy once for this dated 
 Coverage is **0/12 fleet rolls**: all12 historical classifications are unknown, not inferred full. These zeroes describe observed profile metadata only. Actual profile landings and post-landing must-fixes are **unavailable**, not zero; #793 tracks the missing durable observations. Future reports disclose overlapping profile PR cohorts and keep gate passes distinct from landings. The pre-change and post-change reports are `/tmp/pelaggio-757-before-metrics.txt` and `/tmp/pelaggio-757-after-metrics.txt`; reproduce while the frozen copy is available with `npx tsx ci/review-metrics.ts /tmp/pelaggio-757-frozen-corpus --until 2026-09-06`.
 
 Classifier validation uses the committed real-Git patch corpus in `__tests__/fixtures/review-intensity-profile-corpus.json` (synthetic repository, no historical outcome claims), adversarial no-false-reduction cases, and the unchanged #746 cohort. Unknown/incomplete historical diffs retain full review. This establishes the conservative selection boundary, not that reduced panels have measured equal defect-detection power.
+
+
+## 2026-09-06 UTC — #790 explicit authoring corpus expansion
+
+Before changing the metrics reader, the main-worktree registers were frozen in `/tmp/pelaggio-790-prechange-corpus`: **18 PR-gate records and zero authoring records**. The canonical raw-file manifest SHA-256 is `fa0a561776096e6130cf9c76fe3dd86e9e8a426a42cf6f38136bebfc5d116753`. This is a new cohort; earlier baselines above remain unchanged.
+
+The deliberate widened restamp, with `--until 2026-09-07`, is **18:09631b2b505f**. It binds family labels, cutoff, directory availability, relative filenames and file-content hashes, including unusable inputs; dated records beyond the cutoff are excluded. The separate legacy PR identity fingerprint remains **18:881e66a78153**. The PR-only replay retained the previous report rows exactly: 18 rolls, 10 gated PRs, 8 PRs reaching a pass, 1.8 rolls/PR, $366.78 recorded cost. Gate passes are not observed landings.
+
+| Persisted measurement | Observed / eligible | Mean | Minimum | Maximum |
+|---|---:|---:|---:|---:|
+| PR-gate invocation elapsed | 18 / 18 rolls | 1,237,234.61 ms | 376,816 ms | 3,332,283 ms |
+| Authoring whole-loop elapsed | 0 / 0 runs | unavailable | unavailable | unavailable |
+| Authoring pass elapsed | 0 / 0 passes | unavailable | unavailable | unavailable |
+| Authoring reviewer/Judge elapsed | 0 / 0 seat records | unavailable | unavailable | unavailable |
+
+Both frozen directories are readable, with no invalid files or undated records. The authoring directory is an empty frozen input, not a claim that no authoring reviews ever ran. No authoring timing or cost history is available in this cohort. Synthetic tests demonstrate consumption and missing-evidence behavior; they do not establish a production latency improvement. PR timing is the existing gate invocation boundary; authoring loop timing includes revision, pass timing excludes revision, and seat timing excludes admission wait. Concurrent seat durations must not be summed into wall time. Missing seat timing does not establish launch.
+
+Widening is explicit: `--authoring-dir` selects the durable main-worktree register or its frozen copy. Omitting it retains the PR-only view. Reports show separate family denominators, numerical coverage, invalid input counts and unavailable pass/seat containers. Missing or malformed timing is unavailable, while a measured zero remains an observation. Fully observed legacy PR cost/survivor rows remain reproducible; incomplete rows render unavailable or explicitly observed-only, with coverage, rather than treating absent fields as observed zero. Operator-adjudication records intentionally have no fleet elapsed/cost observation.
+
+Reproduce while the frozen copy remains available:
+
+```bash
+node --import tsx ci/review-metrics.ts /tmp/pelaggio-790-prechange-corpus/pr-review-gate-records --authoring-dir /tmp/pelaggio-790-prechange-corpus/review-records --until 2026-09-07
+```
+
+The original PR-only report is `/tmp/pelaggio-790-before-metrics.txt`; the widened dated report is `/tmp/pelaggio-790-dated-metrics.txt`. These local copies are not committed archival retention. Historical records are read as self-contained observations; the reader does not join current Git or provider state. Retention remains #613.
