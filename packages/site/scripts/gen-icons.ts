@@ -11,6 +11,7 @@ const targets: Array<{ file: string; width: number }> = [
 	{ file: "icon-192.png", width: 192 },
 	{ file: "icon-512.png", width: 512 },
 	{ file: "apple-touch-icon.png", width: 180 },
+	{ file: "mark.png", width: 512 },
 ];
 
 for (const { file, width } of targets) {

@@ -89,7 +89,7 @@ Pelaggio plays **two notes at once**:
 - **pelagos** *(the character)* — the open sea. Where Joe comes from, and why
   work runs *offshore*. It carries the warmth; it does not run the machine.
 
-Say it **peh-LAH-joh**. The orchestrator answers to **Joe**.
+The orchestrator answers to **Joe**.
 
 > Decision on record: the metaphor split is **arpeggio leads (name, pipeline
 > visual, icon grammar); pelagos is character (Joe, palette, onshore/offshore)**.
@@ -160,28 +160,25 @@ the appendix.
 
 ## 7. Logo
 
-The chosen mark is **Notes → Wing**: an arpeggio of three climbing notes whose
-top note lifts into a wing — the rolled chord (the pipeline) becoming the bird
-(Joe). It's the one mark where both halves of the name meet, and it can't read
-as a whistle. Run the logo prompt in the appendix to produce polished candidates
-before final lock. The working SVG — mark in `currentColor`, eye knocked out to
-the ground color:
+The locked mark is **Notes → pouch**: three climbing notes (the arpeggio) whose
+last note carries Joe — foam body, amber pouch, eye punched to the water. Teal
+is the sea, not the bird. Do not add a wing; do not rotate the tile. Source
+files and construction live in [`ASSETS.md`](./ASSETS.md).
 
 ```svg
-<svg viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
-  <rect x="14" y="58" width="11" height="30" rx="5.5" opacity="0.45"/>
-  <rect x="31" y="42" width="11" height="46" rx="5.5" opacity="0.7"/>
-  <rect x="48" y="26" width="11" height="62" rx="5.5"/>
-  <path d="M59 30c9-6 18-8 27-6 -6 5 -9 11 -9 18 -7-4 -13-8 -18-12z"/>
-  <circle cx="72" cy="34" r="3" fill="var(--bg)"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
+  <rect x="12" y="58" width="17" height="27" rx="8.5"/>
+  <rect x="39" y="41" width="17" height="44" rx="8.5"/>
+  <rect x="66" y="14" width="17" height="71" rx="8.5"/>
+  <path fill="#E7862A" d="M80 28 C92 28 98 36 98 46 C98 58 90 66 80 64 C76 52 76 36 80 28Z"/>
+  <circle cx="74.5" cy="30" r="4.2" fill="var(--bg, #0A6E60)"/>
 </svg>
 ```
 
-Use deep teal `#0A6E60` on foam and bright teal `#2BD9C2` on abyss (see
-`palette.md`). Four other directions were explored and set aside: **Flight**
-(a gliding seabird), **Little Joe** (a plump-beaked pelican), **Waterline**
-(a wading bird on the shore), and **Roundel** (a bird-over-horizon seal).
-Notes → Wing won for fusing the arpeggio and the bird in one mark.
+Shipped copies: `packages/site/public/favicon.svg` and `packages/web/public/icon.svg`
+(foam on deep teal `#0A6E60`). Dark twin is abyss `#061423` with pouch `#F6A340`.
+Four earlier directions stay retired: **Flight**, **Little Joe**, **Waterline**,
+**Roundel**, and the bolted-wing sketch that used to ship.
 
 ## 8. Color & type
 
@@ -198,15 +195,14 @@ anything technical.
 For polishing the logo and mascot with an image model (ChatGPT / Midjourney),
 past the ceiling of hand-drawn SVG while staying on-model.
 
-**Logo mark** (swap in the chosen direction, e.g. *Notes → Wing*):
+**Logo mark** (locked direction: *Notes → pouch*):
 
-> Minimalist vector logo mark: an arpeggio of three climbing note-bars whose top
-> note lifts into a wing. Single flat color, geometric, confident negative space;
+> Minimalist vector logo mark: an arpeggio of three climbing note-bars whose last
+> note carries a pelican pouch. Foam-white notes `#FBF9F2` on deep teal water
+> `#0A6E60`, amber pouch `#E7862A`, eye punched to the water. Geometric, no wing,
 > no gradients, outline, 3D, or text. Must read at 16px. Personality: calm,
-> trustworthy, a little dry — a working seabird, not cute. Brand is Pelaggio, a
-> control plane for coding agents; nautical but restrained. Palette: mark in deep
-> teal `#0A6E60` on warm foam `#F4F0E6`, plus a reversed version in bright teal
-> `#2BD9C2` on ink `#061423`. Avoid: a whistle, a duck, a dove, a thumbs-up/down.
+> trustworthy, a little dry — a working seabird, not cute. Dark twin: same drawing
+> on abyss `#061423`. Avoid: a whistle, a duck, a dove, a toucan beak, a wifi glyph.
 > Centered, generous clearspace, SVG-ready, flat.
 
 **Mascot — Joe character sheet:**
