@@ -10,6 +10,8 @@ Six dimensions — apply when planning, reviewing, or fixing code in this repo. 
 
 **Well-tested** — Pure helpers (`text.ts`, `git.ts`, `outcome-classify.ts`, `cycle-outcome.ts`, `skills.ts`, `pick-parse.ts`, `ship/freshness.ts`, `cycle-support.ts`) have unit tests in `__tests__/<module>.test.ts` via `node:test` + `npx tsx --test`. Pipeline integration is harder to test (it spawns real SDK sessions) — acceptable to leave untested until a mocking approach emerges. Edge cases matter especially in `parseResetTime`, `parseWaitFlag`, `parseItemId`, `parseVerdict` — all of which are regex-driven and failure-prone.
 
+When establishing or strengthening a consequential guarantee, ask: **What plausible violation could leave the cited checks green?** Inspect the assertions and prefer an existing observation that detects the violation. If a concrete uncertainty remains, consider a bounded fault challenge within the task's scope and execution permissions; read-only review can recommend it. Report what was observed, what it establishes, its limits, and the smallest justified action. Missing mutation evidence alone is not a blocker or a reason to add a gate.
+
 **Well-factored** — Strict module boundaries:
 - `step-names.ts` — `STEPS` / `Step`: the source of truth for step names; adding a step means updating every step-indexed map in `config.ts`.
 - `config.ts` — static configuration (BUDGETS, TURN_LIMITS, EFFORT, MODEL_PROFILES, REPO path). No business logic. No hardcoded model strings anywhere else.
