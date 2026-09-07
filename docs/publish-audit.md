@@ -14,10 +14,10 @@ gitleaks detect --source . --log-opts "--all"
 trufflehog git file://. --since-commit $(git rev-list --max-parents=0 HEAD)
 ```
 
-- [ ] Date run:
-- [ ] Tool + version:
-- [ ] Result (paste summary, or "clean"):
-- [ ] If findings: remediation (rewrite history / rotate credentials / accept)
+- [x] Date run: 2026-09-07
+- [x] Tool + version: gitleaks 8.30.1 (`detect --source . --log-opts "--all"`; 941 commits, 16.71 MB)
+- [x] Result: 16 hits, all false positives. No live credentials. GitHub secret scanning is currently disabled on the repo (API 404).
+- [x] If findings: accept — 7 hits are synthetic keys/JWT in `secret-hygiene.test.ts`; 1 is the placeholder `cf-token-with-tunnel-and-dns-edit-scopes` in `infra/cloudflare/terraform.tfvars.example`; 8 are SHA-256 source fingerprints (`authTestSha256` / `EXPECTED_AUTH_SHA256`) in the authentication-fault-sensitivity spike, not tokens. No history rewrite, no rotation.
 
 Not wired into CI: by the time a release workflow runs, history is already on the remote.
 
