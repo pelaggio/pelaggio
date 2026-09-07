@@ -24,17 +24,17 @@ Not wired into CI: by the time a release workflow runs, history is already on th
 ## 2. npm account hardening
 
 - [ ] 2FA enabled on the npm account (authenticator, not SMS). Date confirmed:
-- [ ] Granular access token created for CI, scoped to `pelaggio` publish only. Token ID / last-four:
-- [ ] Legacy / classic tokens on the account revoked. Date:
-- [ ] Token stored as `NPM_TOKEN` in the repo's GitHub Actions secrets. Date:
+- [ ] Trusted publisher added on the `pelaggio` package (GitHub Actions). Date:
+  - Organization or user: `pelaggio`
+  - Repository: `pelaggio`
+  - Workflow filename: `publish.yml`
+  - Environment name: `npm`
+  - Allowed actions: `npm publish` (direct) enabled
+- [ ] Legacy / classic / granular publish tokens on the account revoked. Date:
 
-## 3. Package-level 2FA
+## 3. Disallow tokens
 
-After the first publish succeeds:
-
-```bash
-npm access 2fa-required pelaggio
-```
+After the first Trusted Publishing publish succeeds, package Settings → Publishing access → **Require two-factor authentication and disallow tokens**:
 
 - [ ] Enabled. Date:
 
@@ -70,4 +70,4 @@ If something ships that shouldn't have:
 
 - `npm deprecate pelaggio@<version> "reason"` — immediate, preserves install graphs.
 - `npm unpublish pelaggio@<version>` — only within 72 hours and only if no other package depends on it. Prefer `deprecate`.
-- Rotate `NPM_TOKEN` if a leak is suspected.
+- Remove the trusted publisher on npmjs.com if the GitHub workflow is compromised.

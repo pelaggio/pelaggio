@@ -69,14 +69,23 @@ jobs:
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm --filter pelaggio check:publish
 
+      # Auth is npm Trusted Publishing (OIDC). Do not set NODE_AUTH_TOKEN / NPM_TOKEN.
+      # The trusted publisher on npmjs.com must match: org pelaggio, repo pelaggio,
+      # workflow filename publish.yml, environment npm, and allow npm publish.
       - name: Publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ steps.meta.outputs.dist_tag }}
-        run: npm publish --tag "$DIST_TAG" --provenance --access public
+        run: |
+          set -euo pipefail
+          if [ -n "${NODE_AUTH_TOKEN:-}" ] || [ -n "${NPM_TOKEN:-}" ]; then
+            echo "Trusted publishing must not see a long-lived npm token in the job env." >&2
+            exit 1
+          fi
+          npm publish --tag "$DIST_TAG" --provenance --access public
         working-directory: packages/pelaggio

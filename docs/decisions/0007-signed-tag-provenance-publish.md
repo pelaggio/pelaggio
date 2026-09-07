@@ -21,7 +21,7 @@ The human-facing pause is a **draft GitHub Release**, not a signed tag. Publishi
 ## Decision
 
 1. **Publish only from a published GitHub Release** whose tag is `v` + the version in the published package manifest, and whose commit is an ancestor of `main`.
-2. **The build that talks to npm runs on a GitHub-hosted runner** and publishes with provenance.
+2. **The build that talks to npm runs on a GitHub-hosted runner**, authenticates with npm Trusted Publishing (OIDC), and publishes with provenance. No long-lived npm write token.
 3. **A GitHub prerelease and a hyphenated semver are the same event** (npm dist-tag `next`). A stable semver is dist-tag `latest`. Mixed pairings are refused.
 
 ## Constraints on any implementation
@@ -29,6 +29,7 @@ The human-facing pause is a **draft GitHub Release**, not a signed tag. Publishi
 - **Must not publish from a tag push, a draft, a laptop `npm publish`, or a self-hosted runner.** Tag-push workflows take their YAML from the tagged commit; a write-access tag on a malicious commit can rewrite the job. Drafts exist so notes can be edited without contacting npm.
 - **Must refuse a version/tag mismatch and a tag that is not on `main`'s history.** Otherwise a UI click can ship the wrong tree.
 - **Must not treat a self-hosted machine as the public provenance identity.** Consumers verify GitHub-hosted OIDC, not an unnamed box.
+- **Must not use a long-lived npm write token for CI publish.** Trusted Publishing is the auth; a bypass-2FA token is the thing npm warns against.
 
 ## Alternatives not taken
 
@@ -40,7 +41,7 @@ The human-facing pause is a **draft GitHub Release**, not a signed tag. Publishi
 ## Consequences
 
 - (+) One irreversible human action (Publish release), with notes attached, provenance on the tarball, and a refuse-closed mismatch check.
-- (−) Relies on GitHub-hosted identity and an npm automation token (or later, trusted publishing). Live attestation lookup remains network-only.
+- (−) Relies on GitHub-hosted OIDC and the trusted-publisher binding on npmjs.com. Live attestation lookup remains network-only.
 
 ## Construction
 

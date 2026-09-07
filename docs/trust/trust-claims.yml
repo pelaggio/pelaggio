@@ -88,7 +88,7 @@ claims:
     evidence_command: "grep -q 'id-token: write' .github/workflows/publish.yml && grep -q 'ubuntu-latest' .github/workflows/publish.yml && grep -q 'npm publish --provenance' .github/workflows/publish.yml"
     test_file: ".github/workflows/publish.yml"
     failure_mode: "publish aborts if the tag is not v + package version on main; provenance publication depends on the npm publish step"
-    known_limits: "GitHub-hosted runner OIDC + automation token are the trust anchors (no interactive 2FA). Live npm attestation lookup is network-only, so it is not claimed as a local guarantee."
+    known_limits: "GitHub-hosted runner OIDC (npm Trusted Publishing) is the trust anchor. Live npm attestation lookup is network-only, so it is not claimed as a local guarantee."
     standards: ["SLSA-BuildL3", "OWASP-LLM03"]
     adr: "ADR-7"
     last_verified: "2026-09-07"
