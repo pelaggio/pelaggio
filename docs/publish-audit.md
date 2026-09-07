@@ -24,7 +24,7 @@ Not wired into CI: by the time a release workflow runs, history is already on th
 ## 2. npm account hardening
 
 - [ ] 2FA enabled on the npm account (authenticator, not SMS). Date confirmed:
-- [ ] Trusted publisher added on the `pelaggio` package (GitHub Actions). Date:
+- [x] Trusted publisher added on the `pelaggio` package (GitHub Actions). Date: 2026-09-07
   - Organization or user: `pelaggio`
   - Repository: `pelaggio`
   - Workflow filename: `publish.yml`
@@ -52,7 +52,7 @@ npm view pelaggio --json | jq '.dist.attestations'
 
 `pnpm check:publish` fails if `package.json` declares `preinstall`, `install`, or `postinstall`.
 
-- [ ] `pnpm check:publish` green against the tree being published. Date:
+- [x] `pnpm check:publish` green against the tree being published. Date: 2026-09-07 (202 files)
 
 ## 6. First release
 
