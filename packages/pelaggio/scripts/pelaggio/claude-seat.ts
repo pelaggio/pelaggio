@@ -284,6 +284,8 @@ export type ClaudeSeatSpawner = typeof spawn;
 export interface ClaudeSeatBuildOptions {
 	cwd: string;
 	bwrap: string;
+	/** Native launcher selected by preflight. `bwrap` remains the Linux fixture input. */
+	launcher?: ClaudeSeatLauncher;
 	/** Required role. Compile-time catch for omitted seat construction; the exhaustive record classifies it. */
 	step: Step;
 	/** Explicit locators; defaults to `resolveHarnessSocketPaths()`. */
@@ -299,6 +301,8 @@ export interface ClaudeSeatBuildOptions {
 	/** Anthropic profile root; defaults to `process.env.ANTHROPIC_CONFIG_DIR`, then the SDK's XDG/HOME location. */
 	anthropicConfigDir?: string;
 }
+
+export type ClaudeSeatLauncher = { kind: "bubblewrap"; path: string } | { kind: "seatbelt"; path: string };
 
 export interface ClaudeSeatSpawnOptions extends ClaudeSeatBuildOptions {
 	onChildSpawn?: (info: { pid: number; cwd: string }) => void;
@@ -331,10 +335,13 @@ export interface ClaudeSeatPreflightOptions {
 	claudeConfigDir?: string;
 	anthropicConfigDir?: string;
 	envAllowlist?: readonly string[];
+	/** Deliberate preview gate; without it macOS preserves the historic fail-closed refusal. */
+	macosSeatbeltPreview?: boolean;
+	sandboxExecPath?: string;
 	probe?: ClaudeSeatProbe;
 }
 
-export type ClaudeSeatPreflight = { ok: true; bwrap: string } | { ok: false; message: string };
+export type ClaudeSeatPreflight = { ok: true; launcher: ClaudeSeatLauncher } | { ok: false; message: string };
 
 export type ClaudeSeatProbe = (command: string, args: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => { error?: Error; status: number | null; signal?: NodeJS.Signals | null; stderr?: string | Buffer | null };
 
@@ -452,6 +459,19 @@ export function resolveClaudeSeatBwrap(pathValue = process.env.PATH, platform: N
 		}
 	}
 	throw seatFailure("requires Bubblewrap in a trusted system directory on PATH; install the bubblewrap package or switch provider (user-writable locations are ignored)");
+}
+
+/** macOS ships the Seatbelt profile runner at this system-owned location. */
+export function resolveClaudeSeatSeatbelt(platform: NodeJS.Platform = process.platform, candidate = "/usr/bin/sandbox-exec"): string {
+	if (platform !== "darwin") throw seatFailure("requires Linux with Bubblewrap or an enabled macOS Seatbelt preview");
+	if (!isAbsolute(candidate) || candidate.includes("\0")) throw seatFailure("requires an absolute Seatbelt launcher path");
+	try {
+		if (!statSync(candidate).isFile()) throw new Error("not a file");
+		accessSync(candidate, constants.X_OK);
+		return realpathSync(candidate);
+	} catch {
+		throw seatFailure("requires the macOS sandbox-exec Seatbelt launcher");
+	}
 }
 
 /** Collect nonblank `HARNESS_ONLY_SOCKET_ENVS` values from the harness env bag. */
@@ -644,6 +664,7 @@ function createScrubbedStderrStream(env: NodeJS.ProcessEnv): Transform {
 }
 
 export function buildClaudeSeatInvocation(spawnOpts: Pick<SpawnOptions, "command" | "args" | "cwd">, options: ClaudeSeatBuildOptions): ClaudeSeatInvocation {
+	if (options.launcher?.kind === "seatbelt") return buildClaudeSeatSeatbeltInvocation(spawnOpts, options, options.launcher.path);
 	if (!isAbsolute(options.bwrap) || options.bwrap.includes("\0")) {
 		throw seatFailure("requires an absolute Bubblewrap path");
 	}
@@ -661,6 +682,32 @@ export function buildClaudeSeatInvocation(spawnOpts: Pick<SpawnOptions, "command
 	return { command: options.bwrap, args, cwd, socketParents, maskedDirectories };
 }
 
+function seatbeltString(value: string): string {
+	return JSON.stringify(value);
+}
+
+/**
+ * Narrow macOS counterpart to the Linux seat: preserve ordinary host access needed by a CLI,
+ * but deny the dedicated harness and forge-config directories at the one spawn chokepoint.
+ * Runtime canaries, rather than profile text alone, are the authority that this policy holds.
+ */
+export function buildClaudeSeatSeatbeltInvocation(spawnOpts: Pick<SpawnOptions, "command" | "args" | "cwd">, options: ClaudeSeatBuildOptions, sandboxExec: string): ClaudeSeatInvocation {
+	if (!isAbsolute(sandboxExec) || sandboxExec.includes("\0")) throw seatFailure("requires an absolute Seatbelt launcher path");
+	const cwd = resolve(spawnOpts.cwd ?? options.cwd);
+	const locators = options.socketPaths ?? resolveHarnessSocketPaths();
+	const protectedRoots = protectedRootsFrom(options, cwd);
+	const socketParents = resolveProtectedSocketParents(locators, protectedRoots);
+	const credentialDirectories = resolveGitHubCredentialDirectories(options, cwd, protectedRoots);
+	const maskedDirectories = collapseMountTargets([...socketParents, ...credentialDirectories]);
+	const deny = maskedDirectories.flatMap((directory) => [
+		`(deny file-read* (subpath ${seatbeltString(directory)}))`,
+		`(deny file-write* (subpath ${seatbeltString(directory)}))`,
+		`(deny file-read-metadata (subpath ${seatbeltString(directory)}))`,
+	]);
+	const profile = ["(version 1)", "(allow default)", ...deny].join("\n");
+	return { command: sandboxExec, args: ["-p", profile, spawnOpts.command, ...spawnOpts.args], cwd, socketParents, maskedDirectories };
+}
+
 /**
  * Launch the SDK command under Bubblewrap. Reports the host-visible outer
  * `bwrap` PID (the #369 session-binding handle) and returns the ChildProcess
@@ -676,6 +723,8 @@ export function spawnClaudeSeat(spawnOpts: SpawnOptions, options: ClaudeSeatSpaw
 		env: childEnv,
 		stdio: ["pipe", "pipe", "pipe"],
 		signal: spawnOpts.signal,
+		// Bubblewrap supplies --new-session. Node's POSIX detached mode supplies setsid() for Seatbelt.
+		detached: options.launcher?.kind === "seatbelt",
 	});
 	// Scrub from the unfiltered SDK bag so a stripped forge token that still appears on stderr is redacted.
 	child.stderr?.pipe(createScrubbedStderrStream(unfilteredEnv)).pipe(options.stderr ?? process.stderr, { end: false });
@@ -690,7 +739,15 @@ export function spawnClaudeSeat(spawnOpts: SpawnOptions, options: ClaudeSeatSpaw
 export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): ClaudeSeatPreflight {
 	let canaryRoot: string | undefined;
 	try {
-		const bwrap = resolveClaudeSeatBwrap(options.pathValue ?? process.env.PATH, options.platform ?? process.platform);
+		const platform = options.platform ?? process.platform;
+		const launcher: ClaudeSeatLauncher =
+			platform === "darwin"
+				? options.macosSeatbeltPreview
+					? { kind: "seatbelt", path: resolveClaudeSeatSeatbelt(platform, options.sandboxExecPath) }
+					: (() => {
+							throw seatFailure("requires Linux with Bubblewrap; enable the macOS Seatbelt preview or switch provider");
+						})()
+				: { kind: "bubblewrap", path: resolveClaudeSeatBwrap(options.pathValue ?? process.env.PATH, platform) };
 		// Exercise the socket-parent mask even when no operational harness socket is
 		// configured. Without this canary the namespace probe's successful exit says
 		// nothing about --tmpfs masking on the common unconfigured path.
@@ -705,7 +762,8 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 			},
 			{
 				cwd: options.cwd,
-				bwrap,
+				bwrap: launcher.path,
+				launcher,
 				step: options.step,
 				socketPaths: [...resolveHarnessSocketPaths(options.env ?? process.env), canaryPath],
 				home: options.home ?? process.env.HOME,
@@ -740,7 +798,7 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 			const outcome = result.signal ? `signal ${result.signal}` : `exit ${result.status ?? "unknown"}`;
 			throw seatFailure(`Bubblewrap namespace probe returned ${outcome}${stderr ? `: ${stderr}` : ""}`);
 		}
-		return { ok: true, bwrap };
+		return { ok: true, launcher };
 	} catch (error) {
 		return { ok: false, message: error instanceof Error ? error.message : String(error) };
 	} finally {

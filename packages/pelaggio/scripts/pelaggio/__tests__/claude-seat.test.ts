@@ -11,6 +11,7 @@ import type { SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import {
 	buildClaudeSeatEnv,
 	buildClaudeSeatInvocation,
+	buildClaudeSeatSeatbeltInvocation,
 	type ClaudeSeatBuildOptions,
 	type ClaudeSeatSpawner,
 	claudeSeatHoldsForgeAuthority,
@@ -357,6 +358,19 @@ describe("buildClaudeSeatInvocation", () => {
 		assert.deepEqual(tmpfsTargets(invocation.args), ["/run/pelaggio-other", "/run/pelaggio-signer"]);
 	});
 
+	it("builds a Seatbelt invocation with explicit protected-directory denials and no shell", () => {
+		const invocation = buildClaudeSeatSeatbeltInvocation(
+			{ command: "/opt/claude code/cli", args: ["--flag", "bar baz"], cwd },
+			deniedBuildOpts({ cwd, bwrap, socketPaths: ["/run/pelaggio-signer/sock"], home: "/home/operator", tmpdir: "/tmp" }),
+			"/usr/bin/sandbox-exec",
+		);
+		assert.equal(invocation.command, "/usr/bin/sandbox-exec");
+		assert.deepEqual(invocation.args.slice(0, 2), ["-p", invocation.args[1]]);
+		assert.match(invocation.args[1] ?? "", /\(deny file-read\* \(subpath "\/run\/pelaggio-signer"/);
+		assert.deepEqual(invocation.args.slice(2), ["/opt/claude code/cli", "--flag", "bar baz"]);
+		assert.equal(invocation.args.includes("sh"), false);
+	});
+
 	it("still emits --tmpfs when the dedicated parent does not exist on the host", () => {
 		const missingParent = join(tempDir("pelaggio-missing-parent-"), "dedicated");
 		const locator = join(missingParent, "sock");
@@ -582,7 +596,7 @@ describe("preflightClaudeSeat", () => {
 				return { status: 0 };
 			},
 		});
-		assert.deepEqual(result, { ok: true, bwrap });
+		assert.deepEqual(result, { ok: true, launcher: { kind: "bubblewrap", path: bwrap } });
 		assert.ok(canaryPath);
 		assert.equal(existsSync(dirname(canaryPath)), false, "the private canary directory must be removed after preflight");
 	});
@@ -626,7 +640,7 @@ describe("preflightClaudeSeat", () => {
 			home: "/home/operator",
 			tmpdir: "/tmp",
 		});
-		assert.deepEqual(result, { ok: true, bwrap });
+		assert.deepEqual(result, { ok: true, launcher: { kind: "bubblewrap", path: bwrap } });
 	});
 
 	it("fails closed when Bubblewrap cannot create the requested namespaces", { skip: trustedSystemBwrap === undefined }, () => {
@@ -1030,7 +1044,7 @@ describe("preflightClaudeSeat filtered probe env", () => {
 				return { status: 0 };
 			},
 		});
-		assert.deepEqual(result, { ok: true, bwrap });
+		assert.deepEqual(result, { ok: true, launcher: { kind: "bubblewrap", path: bwrap } });
 		assert.ok(probeEnv);
 		assert.equal(probeEnv.MY_CUSTOM_VAR, "configured-addition");
 		assert.equal(probeEnv.ANTHROPIC_API_KEY, "sk-ant-cli-auth-value");

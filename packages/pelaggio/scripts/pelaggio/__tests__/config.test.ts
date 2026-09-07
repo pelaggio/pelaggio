@@ -1144,6 +1144,7 @@ describe("loadConfig — providers.<name>.bin (#241)", () => {
 		const cfg = loadConfig({ repo, configPath: join(repo, ".pelaggio.yml") });
 		assert.deepEqual(cfg.providerBins, {});
 		assert.equal(cfg.grokAllowUnsandboxedFallback, false);
+		assert.equal(cfg.claudeMacosSeatbeltPreview, false);
 	});
 
 	it("parses a per-provider bin override", () => {
@@ -1173,12 +1174,22 @@ describe("loadConfig — providers.<name>.bin (#241)", () => {
 		assert.equal(loadConfig({ repo, configPath: path }).grokAllowUnsandboxedFallback, true);
 	});
 
+	it("parses the Claude-only macOS Seatbelt preview", () => {
+		const repo = tmpRepo();
+		const path = writeYml(repo, "providers:\n  claude:\n    macos-seatbelt-preview: true\n");
+		assert.equal(loadConfig({ repo, configPath: path }).claudeMacosSeatbeltPreview, true);
+	});
+
 	it("rejects invalid or non-Grok unsandboxed fallback settings", () => {
 		const repo = tmpRepo();
 		const invalid = writeYml(repo, "providers:\n  grok:\n    allow-unsandboxed-fallback: yes\n");
 		assert.throws(() => loadConfig({ repo, configPath: invalid }), /providers\.grok\.allow-unsandboxed-fallback.*boolean/);
 		const unsupported = writeYml(repo, "providers:\n  codex:\n    allow-unsandboxed-fallback: true\n");
 		assert.throws(() => loadConfig({ repo, configPath: unsupported }), /only supported for grok/);
+		const unsupportedMacosPreview = writeYml(repo, "providers:\n  codex:\n    macos-seatbelt-preview: true\n");
+		assert.throws(() => loadConfig({ repo, configPath: unsupportedMacosPreview }), /only supported for claude/);
+		const invalidMacosPreview = writeYml(repo, "providers:\n  claude:\n    macos-seatbelt-preview: yes\n");
+		assert.throws(() => loadConfig({ repo, configPath: invalidMacosPreview }), /providers\.claude\.macos-seatbelt-preview.*boolean/);
 	});
 
 	it("rejects an unknown provider name", () => {
