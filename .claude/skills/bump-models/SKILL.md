@@ -7,7 +7,7 @@ consumer: false
 
 # /bump-models — Claude model ID refresh
 
-Manual, low-frequency. Anthropic doesn't ship `-latest` aliases, so the `OPUS` and `SONNET` constants in `packages/pelaggio/scripts/pelaggio/config.ts` must be bumped by hand. Package deps are Renovate-managed — this skill does not touch them.
+Manual, low-frequency. Anthropic doesn't ship `-latest` aliases, so the `OPUS` and `SONNET` constants in `packages/pelaggio/scripts/pelaggio/config.ts` must be bumped by hand. This skill does not touch package dependencies.
 
 ## 1. Fetch current model IDs
 

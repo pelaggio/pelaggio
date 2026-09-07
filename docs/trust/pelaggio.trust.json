@@ -229,7 +229,7 @@
   ],
   "provenance": {
     "npm_provenance": true,
-    "signed_tag": true,
+    "signed_tag": false,
     "sigstore_bundle": "planned",
     "evidence": [
       "TC-005"

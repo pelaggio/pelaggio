@@ -1,10 +1,10 @@
 name: Publish to npm
 
+# The human action is "Publish release" on a reviewed GitHub draft.
+# Drafts do not run this job. Tag pushes do not publish. See docs/releasing.md.
 on:
-  push:
-    tags:
-      - "v*"
-      - "!v*-next*"
+  release:
+    types: [published]
 
 permissions:
   id-token: write
@@ -12,37 +12,71 @@ permissions:
 
 jobs:
   publish:
-    if: ${{ !contains(github.ref_name, '-next') }}
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
     steps:
-      - name: Checkout at tag
+      - name: Checkout the release tag
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
 
-      - name: Verify tag is signed
+      - name: Check tag, version, and ancestry
+        id: meta
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
-          git config gpg.ssh.allowedSignersFile .github/allowed_signers
-          git tag -v "${GITHUB_REF_NAME}"
+          set -euo pipefail
+          case "$TAG" in
+            v*) ;;
+            *) echo "Release tag must start with v (got ${TAG})" >&2; exit 1 ;;
+          esac
+          VERSION="${TAG#v}"
+          PKG="$(node -p "require('./packages/pelaggio/package.json').version")"
+          if [ "$PKG" != "$VERSION" ]; then
+            echo "packages/pelaggio/package.json version ${PKG} does not match tag ${TAG}" >&2
+            exit 1
+          fi
+          DIST_TAG=latest
+          case "$VERSION" in
+            *-*)
+              if [ "$PRERELEASE" != "true" ]; then
+                echo "Semver prerelease ${VERSION} must be published as a GitHub prerelease (npm dist-tag next)." >&2
+                exit 1
+              fi
+              DIST_TAG=next
+              ;;
+            *)
+              if [ "$PRERELEASE" = "true" ]; then
+                echo "GitHub prerelease requires a hyphenated semver (got ${VERSION})." >&2
+                exit 1
+              fi
+              ;;
+          esac
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tag ${TAG} is not an ancestor of origin/main. Publish only from main." >&2
+            exit 1
+          fi
+          echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Publishing pelaggio@${VERSION} with npm dist-tag ${DIST_TAG}"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
 
-      - name: Setup Node
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: "24"
           registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
-      - name: Run publish safeguards
-        run: pnpm --filter pelaggio check:publish
+      - run: pnpm --filter pelaggio check:publish
 
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+          DIST_TAG: ${{ steps.meta.outputs.dist_tag }}
+        run: npm publish --tag "$DIST_TAG" --provenance --access public
         working-directory: packages/pelaggio

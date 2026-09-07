@@ -48,4 +48,4 @@ These commands manage Pelaggio's local files and skill substrate; they do not ch
 
 ## Release Hardening
 
-The release workflow requires signed tags and `npm publish --provenance` (`TC-005`). The local guarantee is narrower: the checked package manifests have no install lifecycle scripts (`TC-004`), and the docs disclose that transitive dependencies can still run lifecycle scripts during a normal install (`TC-016`).
+The release workflow requires a published GitHub Release and `npm publish --provenance` (`TC-005`, [releasing](../releasing.md)). The local guarantee is narrower: the checked package manifests have no install lifecycle scripts (`TC-004`), and the docs disclose that transitive dependencies can still run lifecycle scripts during a normal install (`TC-016`).
