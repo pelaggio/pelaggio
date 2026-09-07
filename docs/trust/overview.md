@@ -33,7 +33,7 @@ In pull-request mode, the review gate fails closed: each successful review must 
 
 ### 5. Can I trust the package/install path?
 
-Pelaggio's own published package and workspace manifests do not use `preinstall`, `install`, or `postinstall` lifecycle scripts, and the release gate checks that (`TC-004`, [reproducible install](./reproducible-install.md)). Signed tags plus npm provenance harden releases, but live downstream attestation verification is not a local guarantee (`TC-005`). Normal installs can still execute transitive dependency lifecycle scripts; that is documented rather than hidden (`TC-016`). The repo license is AGPL-3.0-or-later — OSI-approved free and open source software ([license](./license.md)).
+Pelaggio's own published package and workspace manifests do not use `preinstall`, `install`, or `postinstall` lifecycle scripts, and the release gate checks that (`TC-004`, [reproducible install](./reproducible-install.md)). GitHub Releases plus npm provenance harden releases, but live downstream attestation verification is not a local guarantee (`TC-005`). Normal installs can still execute transitive dependency lifecycle scripts; that is documented rather than hidden (`TC-016`). The repo license is AGPL-3.0-or-later — OSI-approved free and open source software ([license](./license.md)).
 
 ## What Is Still Open
 

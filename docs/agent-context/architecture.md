@@ -19,7 +19,7 @@
 
 ## Publishing Shape
 
-`packages/pelaggio/scripts/pack-prepare.ts` copies `.claude/skills/`, `.claude-templates/`, and `LICENSE` from the repo root into `packages/pelaggio/` during `prepack`. `pack-cleanup.ts` removes those copied paths during `postpack`. Both copied paths are listed in `packages/pelaggio/.gitignore` so the working copy stays single-sourced. `check-publish` imports `copySkillsIn`/`cleanSkillsOut` directly and runs `npm pack --dry-run --ignore-scripts` (synthesizing the prepack tree while keeping `postpack` from firing mid-inspection, since the secret scan still reads the copied files after `npm pack` returns).
+The published package is `packages/pelaggio` only. A GitHub Release published from `main` is the npm trigger (see `docs/releasing.md`). `packages/pelaggio/scripts/pack-prepare.ts` copies `.claude/skills/`, `.claude-templates/`, and `LICENSE` from the repo root into `packages/pelaggio/` during `prepack`. `pack-cleanup.ts` removes those copied paths during `postpack`. Both copied paths are listed in `packages/pelaggio/.gitignore` so the working copy stays single-sourced. `check-publish` imports `copySkillsIn`/`cleanSkillsOut` directly and runs `npm pack --dry-run --ignore-scripts` (synthesizing the prepack tree while keeping `postpack` from firing mid-inspection, since the secret scan still reads the copied files after `npm pack` returns).
 
 Do not move the canonical skill tree without updating:
 

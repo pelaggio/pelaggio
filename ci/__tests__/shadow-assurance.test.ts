@@ -165,8 +165,8 @@ describe("shadow assurance graph integrity", () => {
 				replacement: "no bolt-on gives an agent-landed, review-excluded file genuine integrity",
 			},
 			"docs/trust/trust-claims.yml": {
-				snippet: "publish.yml verifies an SSH-signed tag",
-				replacement: "publish.yml checks an SSH-signed tag",
+				snippet: "publish.yml runs on ubuntu-latest from release published",
+				replacement: "publish.yml runs on ubuntu-latest after a GitHub Release is published",
 			},
 			"docs/agent-context/guarded-actions.md": {
 				snippet: "the issue cluster was closed and re-cut into the G-series on 2026-08-07",

@@ -81,17 +81,17 @@ claims:
     last_verified: "2026-07-07"
 
   - id: TC-005
-    claim: "Release workflow requires signed tags and npm provenance; live downstream attestation verification is not a local guarantee yet."
+    claim: "Release workflow requires a published GitHub Release and npm provenance; live downstream attestation verification is not a local guarantee yet."
     status: best_effort
     applies_to: ">=0.1.0"
-    mechanism: "publish.yml verifies an SSH-signed tag (git tag -v against allowed_signers), then npm publish --provenance (id-token: write)."
-    evidence_command: "grep -q 'id-token: write' .github/workflows/publish.yml && grep -q 'git tag -v' .github/workflows/publish.yml && grep -q 'npm publish --provenance' .github/workflows/publish.yml"
+    mechanism: "publish.yml runs on ubuntu-latest from release published, refuses tag/version mismatch and off-main tags, then npm publish --provenance (id-token: write)."
+    evidence_command: "grep -q 'id-token: write' .github/workflows/publish.yml && grep -q 'ubuntu-latest' .github/workflows/publish.yml && grep -q 'npm publish --provenance' .github/workflows/publish.yml"
     test_file: ".github/workflows/publish.yml"
-    failure_mode: "publish aborts if the tag signature fails; provenance publication depends on the npm publish step"
-    known_limits: "Self-hosted publish runner + automation token are the trust anchors (no interactive 2FA). Live npm attestation lookup is network-only, so it is not claimed as a local guarantee."
+    failure_mode: "publish aborts if the tag is not v + package version on main; provenance publication depends on the npm publish step"
+    known_limits: "GitHub-hosted runner OIDC (npm Trusted Publishing) is the trust anchor. Live npm attestation lookup is network-only, so it is not claimed as a local guarantee."
     standards: ["SLSA-BuildL3", "OWASP-LLM03"]
     adr: "ADR-7"
-    last_verified: "2026-07-07"
+    last_verified: "2026-09-07"
 
   - id: TC-006
     claim: "Your code goes only where you point it: the model provider you configure, and the roadmap/notify integrations you enable. Nowhere else."
@@ -336,7 +336,7 @@ manifest:
       evidence: [TC-003, TC-013]
   provenance:
     npm_provenance: true
-    signed_tag: true
+    signed_tag: false
     sigstore_bundle: planned
     evidence: [TC-005]
   permission_tiers:

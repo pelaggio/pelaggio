@@ -27,6 +27,7 @@ pnpm -r test
 pnpm check
 pnpm check:skills
 pnpm check:publish
+pnpm release:draft
 ```
 
 Run targeted tests with `npx tsx --test <test-file>`. Tests use `node:test`, not Jest or Vitest.

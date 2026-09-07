@@ -104,7 +104,7 @@ at all (§3). The gap is not a missing format and not missing evidence — it is
 | **Delivery (claim)** | `claimId` | named "delivery identity" in the flow envelope (`types.ts:294`); nothing joins on it | **the gap** |
 | Item (charter) | `itemId` | charter contract: `AC-n`/`A-n` anchors, criteria table | designed (§8 there) |
 | Campaign (lineage) | `rootId` projection | `(rootId, depth)` on lineage children | designed (charter §7) |
-| Release | version/tag | trust manifest binds product posture to a release version; signed tags (ADR-0007) | built |
+| Release | version/tag | trust manifest binds product posture to a release version; GitHub Release + npm provenance (ADR-0007) | built |
 
 The delivery packet is **claim-scoped**; the attestation stays **cycle-scoped**, as its
 schema demands. That is a composition, not a conflict: a delivery is one claim's
@@ -352,8 +352,8 @@ is ordinary human work on an ordinary branch, outside this mechanism.
 ## 5. The honesty ladder ("signed and bound," said precisely)
 
 Signing exists in this tree at exactly one granularity: the **release**. ADR-0007's
-publish flow verifies SSH-signed tags against `.github/allowed_signers`, npm provenance
-is on, and the trust manifest records `signed_tag: true` — while
+publish flow ships from a published GitHub Release on a GitHub-hosted runner with npm
+provenance, and the trust manifest records `signed_tag: false` — while
 `provenance.sigstore_bundle: "planned"` keeps the manifest's posture at `intent`.
 **Per-delivery** signing does not exist — the ai-delivery spec is explicit that
 "signing, upload, and merge-gate enforcement remain separate work" — and three
@@ -399,7 +399,7 @@ a render.
   carrying commit lies in the range (in-candidate: the packet file's own ancestry;
   forge: the merge commit of the packet's PR), joined with the trust manifest at that
   release version. "Product posture at this release, plus the deliveries in it" is the
-  release-notes shape; the manifest and the signed tag are already bound to a release.
+  release-notes shape; the manifest and the GitHub Release are already bound to a release.
 
 All three are non-authoritative projections, rebuildable, deletable. A consumer may
 build prettier equivalents from the same packets; these CLI renders are the reference

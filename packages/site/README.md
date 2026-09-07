@@ -112,10 +112,8 @@ Host redirect rules (301, preserve query string):
 Keep these rules independent of the path-only `_redirects` file. Ensure DNS is proxied
 for host redirect rules, and enable HTTPS redirection for the canonical host.
 
-Do not route this site through the daemon tunnel. Site copy changes do not match the
-daemon workflow. **A shared lockfile change still triggers `deploy-server.yml`, including
-a site dependency update.** That existing deployment coupling is not solved by adding
-this site. Keep dependency updates deliberate; this PR adds no new runtime guard.
+Do not route this site through the daemon tunnel. Site copy changes do not
+restart the control-plane daemon. Keep dependency updates deliberate.
 
 For rollback, use Cloudflare Pages' rollback to an earlier successful **production**
 deployment, then revert the source change and let CI redeploy it. The 14-day Actions

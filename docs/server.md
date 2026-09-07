@@ -350,15 +350,20 @@ For dev: run the daemon on its tailnet IP, then
 Vite proxies the API paths (incl. SSE) to the daemon and serves the UI at
 `http://localhost:4321/ui/`.
 
-## Deploy workflow
+## Deploy
 
-`.github/workflows/deploy-server.yml` runs on `[self-hosted, pelaggio]` (the
-target box). Triggers on `push` to `main` touching `packages/server/**`,
-`packages/pelaggio/**`, or the workspace lockfile. Steps: install →
-`pnpm --filter @pelaggio/server build` (parse-check via
-`tsx -e "import('./src/app.ts')"` — matches repo ethos of no formal build) →
-`systemctl --user restart pelaggio-server`. `concurrency` prevents
-overlapping deploys; `timeout-minutes: 10` bounds stuck jobs.
+There is no GitHub Actions deploy for the daemon. On the host that runs it:
+
+```bash
+git pull
+pnpm install --frozen-lockfile
+pnpm --filter @pelaggio/web build
+systemctl --user restart pelaggio-server
+```
+
+The daemon is not a static app: it supervises `pnpm pelaggio` children against local
+checkouts. Host it on a machine you control (VPS or homelab), not on a public-repo
+Actions runner. Remote *access* is Tailscale plus the Cloudflare Tunnel below.
 
 ## Cloudflare Tunnel setup
 
@@ -403,8 +408,8 @@ journalctl --user -u cloudflared -f             # confirm "Connection registered
 
 The unit mirrors `pelaggio-server.service` conventions: user-level,
 `EnvironmentFile` for the token, `Restart=on-failure`, journal logging.
-Keeping cloudflared on its own unit means server redeploys
-(`.github/workflows/deploy-server.yml`) don't interrupt the tunnel.
+Keeping cloudflared on its own unit means a daemon restart does not
+interrupt the tunnel.
 
 ### 3. Enable the bearer token
 
