@@ -2,13 +2,13 @@
 	"name": "Pelaggio Control",
 	"short_name": "Pelaggio",
 	"display": "standalone",
-	"theme_color": "#00736c",
-	"background_color": "#fff6e8",
+	"theme_color": "#0A6E60",
+	"background_color": "#F4F0E6",
 	"scope": "/ui/",
 	"start_url": "/ui/",
 	"icons": [
 		{ "src": "/ui/icon.svg", "type": "image/svg+xml", "sizes": "any" },
-		{ "src": "/ui/icon-192.png", "type": "image/png", "sizes": "192x192" },
-		{ "src": "/ui/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+		{ "src": "/ui/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+		{ "src": "/ui/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
 	]
 }

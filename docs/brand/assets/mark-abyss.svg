@@ -1,14 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Pelaggio">
-  <rect width="100" height="100" rx="22" fill="#0A6E60"/>
+  <rect width="100" height="100" rx="22" fill="#061423"/>
   <g fill="#FBF9F2">
     <rect x="12" y="58" width="17" height="27" rx="8.5"/>
     <rect x="39" y="41" width="17" height="44" rx="8.5"/>
     <rect x="66" y="14" width="17" height="71" rx="8.5"/>
   </g>
-  <path fill="#E7862A" d="
+  <path fill="#F6A340" d="
     M80 28
     C92 28 98 36 98 46
     C98 58 90 66 80 64
     C76 52 76 36 80 28Z"/>
-  <circle cx="74.5" cy="30" r="4.2" fill="#0A6E60"/>
+  <circle cx="74.5" cy="30" r="4.2" fill="#061423"/>
 </svg>
