@@ -13,8 +13,7 @@ Codex, Grok Build, or OpenCode), every change behind a bounded blast radius.
 > note — the way every work item moves through the pipeline in legible, interruptible
 > sequence. A chord struck all at once is a black box; rolled as an arpeggio, every note
 > can be heard. And *pelagos*, the open sea: its agents work **pelagic** — out in open
-> water, far from the shore of direct control. Say it *peh-LAH-joh*. The orchestrator
-> answers to **Joe**.
+> water, far from the shore of direct control. The orchestrator answers to **Joe**.
 
 ## Why Pelaggio
 
