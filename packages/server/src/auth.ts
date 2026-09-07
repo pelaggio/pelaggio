@@ -2,6 +2,9 @@ import { timingSafeEqual } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
 
 export function bearerAuth(token: string): MiddlewareHandler {
+	if (token.trim() === "") {
+		throw new Error("bearer token must not be empty");
+	}
 	const expected = Buffer.from(token, "utf-8");
 	return async (c, next) => {
 		const header = c.req.header("Authorization") ?? "";
