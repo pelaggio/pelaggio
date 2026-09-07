@@ -51,6 +51,6 @@ The Actions environment `npm` is the publish job’s extra pause. You can add a 
 
 ## If it goes wrong
 
-- Workflow failed before npm accepted the version: fix, re-run the job, or delete the GitHub Release and the tag and start the draft again.
+- Workflow failed before npm accepted the version: land the fix on `main`, then `gh workflow run "Publish to npm" -f tag=vX.Y.Z` (uses current `main`'s workflow against the existing tag). Do not cut a new version. Re-running the original failed job reuses the old workflow file.
 - npm accepted the version: `npm deprecate pelaggio@<version> "reason"`. Unpublish only within 72 hours and only if nothing depends on it. Prefer deprecate.
 - Remove the trusted publisher on npmjs.com if the GitHub workflow is compromised, then add it back after the workflow is fixed.
