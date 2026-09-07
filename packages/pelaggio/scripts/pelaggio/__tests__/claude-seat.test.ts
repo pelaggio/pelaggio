@@ -510,6 +510,20 @@ describe("spawnClaudeSeat", () => {
 });
 
 describe("preflightClaudeSeat", () => {
+	it("runs the zero-spend macOS Seatbelt protected-directory canary", { skip: process.platform !== "darwin" }, () => {
+		const cwd = tempDir("pelaggio-seatbelt-worktree-");
+		const signer = join(tempDir("pelaggio-seatbelt-signer-"), "sock");
+		writeFileSync(signer, "private", { mode: 0o600 });
+		const result = preflightClaudeSeat({
+			cwd,
+			step: "plan",
+			platform: "darwin",
+			macosSeatbeltPreview: true,
+			sandboxExecPath: "/usr/bin/sandbox-exec",
+			env: { PATH: process.env.PATH, HOME: process.env.HOME, PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET: signer },
+		});
+		assert.deepEqual(result, { ok: true, launcher: { kind: "seatbelt", path: "/usr/bin/sandbox-exec" } });
+	});
 	it("returns a confinement diagnostic on non-Linux or missing Bubblewrap without using reserved error words", () => {
 		const cwd = "/tmp/pelaggio-seat-work/item";
 		const missing = preflightClaudeSeat({ cwd, step: "pr-review", platform: "linux", pathValue: tempDir("pelaggio-preflight-missing-") });
