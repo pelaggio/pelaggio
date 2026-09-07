@@ -56,7 +56,7 @@ jobs:
               ;;
           esac
           git fetch origin main --quiet
-          if ! git merge-base --is-ancestor HEAD origin/main; then
+          if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
             echo "Release tag ${TAG} is not an ancestor of origin/main. Publish only from main." >&2
             exit 1
           fi
