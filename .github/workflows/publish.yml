@@ -5,6 +5,12 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (e.g. v0.1.0)
+        required: true
+        type: string
 
 permissions:
   id-token: write
@@ -19,14 +25,14 @@ jobs:
       - name: Checkout the release tag
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
           fetch-depth: 0
 
       - name: Check tag, version, and ancestry
         id: meta
         env:
-          TAG: ${{ github.event.release.tag_name }}
-          PRERELEASE: ${{ github.event.release.prerelease }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          PRERELEASE: ${{ github.event.release.prerelease || false }}
         run: |
           set -euo pipefail
           case "$TAG" in
@@ -75,17 +81,16 @@ jobs:
 
       - run: pnpm --filter pelaggio check:publish
 
-      # Auth is npm Trusted Publishing (OIDC). Do not set NODE_AUTH_TOKEN / NPM_TOKEN.
-      # The trusted publisher on npmjs.com must match: org pelaggio, repo pelaggio,
-      # workflow filename publish.yml, environment npm, and allow npm publish.
+      # Auth is npm Trusted Publishing (OIDC). Do not pass NPM_TOKEN.
+      # setup-node with registry-url always exports a dummy NODE_AUTH_TOKEN
+      # (XXXXX-...); unset it so npm uses OIDC instead of that placeholder.
+      # Trusted publisher on npmjs.com must match: org pelaggio, repo pelaggio,
+      # workflow filename publish.yml, environment npm, allow npm publish.
       - name: Publish
         env:
           DIST_TAG: ${{ steps.meta.outputs.dist_tag }}
         run: |
           set -euo pipefail
-          if [ -n "${NODE_AUTH_TOKEN:-}" ] || [ -n "${NPM_TOKEN:-}" ]; then
-            echo "Trusted publishing must not see a long-lived npm token in the job env." >&2
-            exit 1
-          fi
+          unset NODE_AUTH_TOKEN NPM_TOKEN
           npm publish --tag "$DIST_TAG" --provenance --access public
         working-directory: packages/pelaggio
