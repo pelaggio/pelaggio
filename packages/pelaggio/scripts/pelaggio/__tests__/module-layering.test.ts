@@ -175,6 +175,7 @@ const LAYERS: Record<string, 0 | 1 | 2 | 3 | 4 | 5> = {
 	"revise-cli.ts": 5,
 	"roadmap-cli.ts": 5,
 	"run-contained-cli.ts": 5,
+	"claude-seat-report-cli.ts": 5,
 	"sessions-cli.ts": 5,
 	"taxonomy-cli.ts": 5,
 	"local-autopilot-cli.ts": 5,

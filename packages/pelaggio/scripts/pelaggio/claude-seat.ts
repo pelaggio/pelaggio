@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir as systemTmpdir } from "node:os";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { Transform, type Writable } from "node:stream";
@@ -19,7 +20,9 @@ export const HARNESS_ONLY_SOCKET_ENVS = ["PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET
 const WIDE_SOCKET_PARENTS = new Set(["/", "/tmp", "/var", "/var/tmp", "/run", "/var/run", "/dev", "/proc", "/sys", "/home", "/root", "/usr", "/etc", "/opt"]);
 const MAX_BUFFERED_STDERR_BYTES = 64 * 1024;
 const SOCKET_MASK_CANARY_PREFIX = "pelaggio-claude-seat-mask-";
-const SOCKET_MASK_CANARY_VISIBLE_EXIT = 73;
+const SOCKET_CONNECT_DENIED = new Set(["ENOENT", "EACCES", "EPERM"]);
+const TTY_ISOLATED = new Set(["ENXIO", "ENOTTY", "EPERM", "EACCES", "ENOENT"]);
+const CLAUDE_SEAT_DIAGNOSTIC_SCHEMA_VERSION = 1;
 
 /** Non-secret SDK control markers installed `@anthropic-ai/claude-agent-sdk@0.3.220` writes onto SpawnOptions.env. */
 const CLAUDE_SDK_CONTROL_VARS = [
@@ -341,9 +344,27 @@ export interface ClaudeSeatPreflightOptions {
 	probe?: ClaudeSeatProbe;
 }
 
-export type ClaudeSeatPreflight = { ok: true; launcher: ClaudeSeatLauncher } | { ok: false; message: string };
+export type ClaudeSeatPreflight = { ok: true; launcher: ClaudeSeatLauncher; report: ClaudeSeatDiagnosticReport } | { ok: false; message: string; report?: ClaudeSeatDiagnosticReport };
 
-export type ClaudeSeatProbe = (command: string, args: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => { error?: Error; status: number | null; signal?: NodeJS.Signals | null; stderr?: string | Buffer | null };
+export type ClaudeSeatProbeName = "socket-connect" | "worktree-write" | "github-config" | "session" | "tty";
+export type ClaudeSeatProbeOutcome = "pass" | "fail" | "skip";
+export interface ClaudeSeatProbeRecord {
+	name: ClaudeSeatProbeName;
+	outcome: ClaudeSeatProbeOutcome;
+	/** Isolation primitive result (errno, "connected", "detached", …). Never a filesystem path. */
+	detail: string;
+}
+export interface ClaudeSeatDiagnosticReport {
+	schemaVersion: typeof CLAUDE_SEAT_DIAGNOSTIC_SCHEMA_VERSION;
+	platform: "linux" | "darwin" | "other";
+	launcherKind: ClaudeSeatLauncher["kind"];
+	preview: boolean;
+	ok: boolean;
+	probes: ClaudeSeatProbeRecord[];
+}
+
+export type ClaudeSeatProbeResult = { error?: Error; status: number | null; signal?: NodeJS.Signals | null; stderr?: string | Buffer | null; stdout?: string | Buffer | null };
+export type ClaudeSeatProbe = (command: string, args: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv; detached?: boolean }) => ClaudeSeatProbeResult | Promise<ClaudeSeatProbeResult>;
 
 function seatFailure(detail: string): Error {
 	return new Error(`Claude seat isolation ${detail}`);
@@ -426,7 +447,7 @@ function isTrustedRootOwnedPath(filePath: string, rootOwnerUid: number, kind: "f
 	return expectedKind && info.uid === rootOwnerUid && (info.mode & 0o022) === 0 && invokingUid !== rootOwnerUid && !isWritableByInvokingUser(filePath);
 }
 
-function isTrustedBwrap(candidate: string): boolean {
+function isTrustedSystemExecutable(candidate: string): boolean {
 	const rootOwnerUid = statSync("/").uid;
 	if (!isTrustedRootOwnedPath(candidate, rootOwnerUid, "file")) return false;
 	try {
@@ -441,6 +462,10 @@ function isTrustedBwrap(candidate: string): boolean {
 		if (directory === "/") return true;
 		directory = dirname(directory);
 	}
+}
+
+function isTrustedBwrap(candidate: string): boolean {
+	return isTrustedSystemExecutable(candidate);
 }
 
 /** Linux-only synchronous PATH walk of a trusted system `bwrap`. Uses the harness PATH, never `spawnOpts.env.PATH`. */
@@ -466,11 +491,11 @@ export function resolveClaudeSeatSeatbelt(platform: NodeJS.Platform = process.pl
 	if (platform !== "darwin") throw seatFailure("requires Linux with Bubblewrap or an enabled macOS Seatbelt preview");
 	if (!isAbsolute(candidate) || candidate.includes("\0")) throw seatFailure("requires an absolute Seatbelt launcher path");
 	try {
-		if (!statSync(candidate).isFile()) throw new Error("not a file");
-		accessSync(candidate, constants.X_OK);
-		return realpathSync(candidate);
+		const resolved = realpathSync(candidate);
+		if (!isTrustedSystemExecutable(resolved)) throw new Error("untrusted");
+		return resolved;
 	} catch {
-		throw seatFailure("requires the macOS sandbox-exec Seatbelt launcher");
+		throw seatFailure("requires a trusted macOS sandbox-exec Seatbelt launcher");
 	}
 }
 
@@ -699,11 +724,24 @@ export function buildClaudeSeatSeatbeltInvocation(spawnOpts: Pick<SpawnOptions, 
 	const socketParents = resolveProtectedSocketParents(locators, protectedRoots);
 	const credentialDirectories = resolveGitHubCredentialDirectories(options, cwd, protectedRoots);
 	const maskedDirectories = collapseMountTargets([...socketParents, ...credentialDirectories]);
-	const deny = maskedDirectories.flatMap((directory) => [
-		`(deny file-read* (subpath ${seatbeltString(directory)}))`,
-		`(deny file-write* (subpath ${seatbeltString(directory)}))`,
-		`(deny file-read-metadata (subpath ${seatbeltString(directory)}))`,
-	]);
+	const deny = [
+		...maskedDirectories.flatMap((directory) => [
+			`(deny file-read* (subpath ${seatbeltString(directory)}))`,
+			`(deny file-write* (subpath ${seatbeltString(directory)}))`,
+			`(deny file-read-metadata (subpath ${seatbeltString(directory)}))`,
+			`(deny file-ioctl (subpath ${seatbeltString(directory)}))`,
+			`(deny network-outbound (remote unix-socket (subpath ${seatbeltString(directory)})))`,
+		]),
+		...locators.flatMap((locator) => {
+			if (locator.trim() === "") return [];
+			try {
+				const normalized = validateAbsolutePath(locator, "harness socket locator");
+				return [`(deny network-outbound (remote unix-socket (literal ${seatbeltString(normalized)})))`];
+			} catch {
+				return [];
+			}
+		}),
+	];
 	const profile = ["(version 1)", "(allow default)", ...deny].join("\n");
 	return { command: sandboxExec, args: ["-p", profile, spawnOpts.command, ...spawnOpts.args], cwd, socketParents, maskedDirectories };
 }
@@ -735,9 +773,201 @@ export function spawnClaudeSeat(spawnOpts: SpawnOptions, options: ClaudeSeatSpaw
 	return child as unknown as SpawnedProcess;
 }
 
-/** Sync preflight used by `claudeRunStep` before `query()` so seat setup failures cannot become `error_sdk`. */
-export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): ClaudeSeatPreflight {
+const CLAUDE_SEAT_PREFLIGHT_PROBE = `
+const { closeSync, openSync, readFileSync, writeFileSync, rmSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const { createConnection } = require("node:net");
+const [socketPath, writePath, ghPath, parentSid] = process.argv.slice(1);
+function code(err) { return err && err.code ? String(err.code) : "error"; }
+function connect(path) {
+	return new Promise((resolve) => {
+		const c = createConnection({ path });
+		const done = (value) => { try { c.destroy(); } catch {} resolve(value); };
+		c.setTimeout(1000, () => done("timeout"));
+		c.once("connect", () => done("connected"));
+		c.once("error", (e) => done(code(e)));
+	});
+}
+function tty() {
+	let fd;
+	try { fd = openSync("/dev/tty", "r"); return "ok"; }
+	catch (e) { return code(e); }
+	finally { if (fd !== undefined) try { closeSync(fd); } catch {} }
+}
+function sid() {
+	try {
+		const stat = readFileSync("/proc/self/stat", "utf8");
+		const after = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\\s+/);
+		if (after[3]) return after[3];
+	} catch {}
+	const r = spawnSync("ps", ["-o", "sid=", "-p", String(process.pid)], { encoding: "utf8", timeout: 2000 });
+	return (r.stdout || "").trim().split(/\\s+/).filter(Boolean)[0] || "";
+}
+function github() {
+	if (!ghPath) return "skipped";
+	try { readFileSync(ghPath); return "readable"; }
+	catch (e) { return code(e); }
+}
+(async () => {
+	let write = "ok";
+	try { writeFileSync(writePath, "ok"); rmSync(writePath, { force: true }); }
+	catch (e) { write = code(e); }
+	const childSid = sid();
+	const session = parentSid && childSid ? (childSid === parentSid ? "shared" : "detached") : "inconclusive";
+	process.stdout.write(JSON.stringify({ socket: await connect(socketPath), write, tty: tty(), session, githubConfig: github() }) + "\\n");
+})().catch((e) => { process.stderr.write(String(e)); process.exit(1); });
+`.trim();
+
+function listenUnixCanary(path: string): Promise<Server> {
+	return new Promise((resolveListen, reject) => {
+		const server = createServer();
+		server.on("connection", (socket) => {
+			socket.destroy();
+		});
+		const onError = (error: Error) => {
+			server.close();
+			reject(error);
+		};
+		server.once("error", onError);
+		server.listen({ path }, () => {
+			server.off("error", onError);
+			resolveListen(server);
+		});
+	});
+}
+
+function closeUnixCanary(server: Server | undefined): Promise<void> {
+	if (!server) return Promise.resolve();
+	return new Promise((resolveClose) => {
+		server.close(() => resolveClose());
+	});
+}
+
+function harnessSessionId(pid = process.pid): string {
+	if (process.platform === "linux") {
+		try {
+			const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+			const after = stat
+				.slice(stat.lastIndexOf(")") + 1)
+				.trim()
+				.split(/\s+/);
+			if (after[3]) return after[3] ?? "";
+		} catch {
+			/* fall through to ps */
+		}
+	}
+	const result = spawnSync("ps", ["-o", "sid=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 });
+	return (result.stdout ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
+}
+
+function diagnosticPlatform(platform: NodeJS.Platform): ClaudeSeatDiagnosticReport["platform"] {
+	if (platform === "linux" || platform === "darwin") return platform;
+	return "other";
+}
+
+interface ClaudeSeatProbeRaw {
+	socket: string;
+	write: string;
+	tty: string;
+	session: string;
+	githubConfig: string;
+}
+
+function parseProbeRaw(stdout: string | Buffer | null | undefined): ClaudeSeatProbeRaw {
+	const text = stdout?.toString().trim() ?? "";
+	if (text === "") throw seatFailure("confinement probe returned no outcomes");
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text.split("\n").filter(Boolean).at(-1) ?? "");
+	} catch {
+		throw seatFailure("confinement probe returned unreadable outcomes");
+	}
+	if (!parsed || typeof parsed !== "object") throw seatFailure("confinement probe returned unreadable outcomes");
+	const record = parsed as Record<string, unknown>;
+	for (const key of ["socket", "write", "tty", "session", "githubConfig"] as const) {
+		if (typeof record[key] !== "string" || record[key] === "") throw seatFailure("confinement probe returned incomplete outcomes");
+	}
+	return record as unknown as ClaudeSeatProbeRaw;
+}
+
+function evaluatePreflightProbes(raw: ClaudeSeatProbeRaw, step: Step): { ok: boolean; probes: ClaudeSeatProbeRecord[]; message?: string } {
+	const forge = claudeSeatHoldsForgeAuthority(step);
+	const probes: ClaudeSeatProbeRecord[] = [
+		{ name: "socket-connect", outcome: SOCKET_CONNECT_DENIED.has(raw.socket) ? "pass" : "fail", detail: raw.socket },
+		{ name: "worktree-write", outcome: raw.write === "ok" ? "pass" : "fail", detail: raw.write },
+		{ name: "tty", outcome: TTY_ISOLATED.has(raw.tty) ? "pass" : "fail", detail: raw.tty },
+		{ name: "session", outcome: raw.session === "detached" ? "pass" : "fail", detail: raw.session },
+		{
+			name: "github-config",
+			outcome: forge ? "skip" : SOCKET_CONNECT_DENIED.has(raw.githubConfig) ? "pass" : "fail",
+			detail: forge ? "skipped" : raw.githubConfig,
+		},
+	];
+	const failed = probes.find((probe) => probe.outcome === "fail");
+	if (!failed) return { ok: true, probes };
+	const messages: Record<ClaudeSeatProbeName, string> = {
+		"socket-connect": "socket-connect probe reached the harness socket",
+		"worktree-write": "worktree-write probe could not write inside the seat cwd",
+		tty: "tty probe inherited a controlling terminal",
+		session: "session probe did not prove a distinct process session",
+		"github-config": "github-config probe could read a forge-denied hosts file",
+	};
+	return { ok: false, probes, message: messages[failed.name] };
+}
+
+export function renderClaudeSeatDiagnosticReport(report: ClaudeSeatDiagnosticReport): string {
+	return `${JSON.stringify(report)}\n`;
+}
+
+function defaultPreflightProbe(command: string, args: readonly string[], options: { cwd: string; env: NodeJS.ProcessEnv; detached?: boolean }): Promise<ClaudeSeatProbeResult> {
+	return new Promise((resolveProbe) => {
+		const child = spawn(command, [...args], {
+			cwd: options.cwd,
+			env: options.env,
+			detached: options.detached,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const stdout: Buffer[] = [];
+		const stderr: Buffer[] = [];
+		child.stdout?.on("data", (chunk: Buffer) => {
+			stdout.push(chunk);
+		});
+		child.stderr?.on("data", (chunk: Buffer) => {
+			stderr.push(chunk);
+		});
+		let settled = false;
+		const finish = (value: ClaudeSeatProbeResult) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolveProbe(value);
+		};
+		const timer = setTimeout(() => {
+			if (typeof child.pid === "number" && child.pid > 1 && options.detached === true) {
+				try {
+					process.kill(-child.pid, "SIGKILL");
+				} catch {
+					child.kill("SIGKILL");
+				}
+			} else {
+				child.kill("SIGKILL");
+			}
+			finish({ status: null, error: new Error("confinement probe timed out"), stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) });
+		}, 10_000);
+		child.once("error", (error) => {
+			finish({ error, status: null, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) });
+		});
+		child.once("close", (status, signal) => {
+			finish({ status, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) });
+		});
+	});
+}
+
+/** Async preflight used by `claudeRunStep` before `query()` so seat setup failures cannot become `error_sdk`. */
+export async function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Promise<ClaudeSeatPreflight> {
 	let canaryRoot: string | undefined;
+	let socketServer: Server | undefined;
+	let report: ClaudeSeatDiagnosticReport | undefined;
 	try {
 		const platform = options.platform ?? process.platform;
 		const launcher: ClaudeSeatLauncher =
@@ -748,16 +978,23 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 							throw seatFailure("requires Linux with Bubblewrap; enable the macOS Seatbelt preview or switch provider");
 						})()
 				: { kind: "bubblewrap", path: resolveClaudeSeatBwrap(options.pathValue ?? process.env.PATH, platform) };
-		// Exercise the socket-parent mask even when no operational harness socket is
-		// configured. Without this canary the namespace probe's successful exit says
-		// nothing about --tmpfs masking on the common unconfigured path.
 		canaryRoot = mkdtempSync(join(resolve(options.tmpdir ?? process.env.TMPDIR ?? systemTmpdir()), SOCKET_MASK_CANARY_PREFIX));
-		const canaryPath = join(canaryRoot, "visible-from-host");
-		writeFileSync(canaryPath, "must be hidden from the Claude seat\n", { mode: 0o600 });
+		const socketDir = join(canaryRoot, "signer");
+		mkdirSync(socketDir, { mode: 0o700 });
+		const socketPath = join(socketDir, "sock");
+		socketServer = await listenUnixCanary(socketPath);
+		const writePath = join(resolve(options.cwd), ".pelaggio-seat-preflight-write");
+		const denyForge = !claudeSeatHoldsForgeAuthority(options.step);
+		const ghDir = join(canaryRoot, "gh");
+		const ghHosts = join(ghDir, "hosts.yml");
+		if (denyForge) {
+			mkdirSync(ghDir, { mode: 0o700 });
+			writeFileSync(ghHosts, "github.com:\n    oauth_token: pelaggio-seat-canary\n", { mode: 0o600 });
+		}
 		const invocation = buildClaudeSeatInvocation(
 			{
 				command: process.execPath,
-				args: ["-e", `process.exit(require("node:fs").existsSync(process.argv[1]) ? ${SOCKET_MASK_CANARY_VISIBLE_EXIT} : 0)`, canaryPath],
+				args: ["-e", CLAUDE_SEAT_PREFLIGHT_PROBE, socketPath, writePath, denyForge ? ghHosts : "", harnessSessionId()],
 				cwd: options.cwd,
 			},
 			{
@@ -765,43 +1002,49 @@ export function preflightClaudeSeat(options: ClaudeSeatPreflightOptions): Claude
 				bwrap: launcher.path,
 				launcher,
 				step: options.step,
-				socketPaths: [...resolveHarnessSocketPaths(options.env ?? process.env), canaryPath],
+				socketPaths: [...resolveHarnessSocketPaths(options.env ?? process.env), socketPath],
 				home: options.home ?? process.env.HOME,
 				tmpdir: options.tmpdir ?? process.env.TMPDIR,
 				xdgRuntimeDir: options.xdgRuntimeDir ?? process.env.XDG_RUNTIME_DIR,
 				xdgConfigHome: options.xdgConfigHome ?? process.env.XDG_CONFIG_HOME,
-				ghConfigDir: options.ghConfigDir ?? process.env.GH_CONFIG_DIR,
+				ghConfigDir: denyForge ? ghDir : (options.ghConfigDir ?? process.env.GH_CONFIG_DIR),
 				claudeConfigDir: options.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR,
 				anthropicConfigDir: options.anthropicConfigDir ?? process.env.ANTHROPIC_CONFIG_DIR,
 			},
 		);
 		validateSocketParentMountTargets(invocation.socketParents);
-		const probe =
-			options.probe ??
-			((command, args, probeOptions) =>
-				spawnSync(command, [...args], {
-					...probeOptions,
-					stdio: ["ignore", "ignore", "pipe"],
-				}));
-		const result = probe(invocation.command, invocation.args, {
-			cwd: invocation.cwd,
-			env: buildClaudeSeatEnv(options.env ?? process.env, options.step, options.envAllowlist ?? []),
-		});
+		const probe = options.probe ?? defaultPreflightProbe;
+		const result = await Promise.resolve(
+			probe(invocation.command, invocation.args, {
+				cwd: invocation.cwd,
+				env: buildClaudeSeatEnv(options.env ?? process.env, options.step, options.envAllowlist ?? []),
+				detached: launcher.kind === "seatbelt",
+			}),
+		);
 		if (result.error) {
-			throw seatFailure(`could not run the Bubblewrap namespace probe: ${result.error.message}`);
-		}
-		if (result.status === SOCKET_MASK_CANARY_VISIBLE_EXIT) {
-			throw seatFailure("Bubblewrap socket-mask probe left its host canary visible");
+			throw seatFailure(`could not run the confinement probe: ${result.error.message}`);
 		}
 		if (result.status !== 0) {
 			const stderr = result.stderr?.toString().trim();
 			const outcome = result.signal ? `signal ${result.signal}` : `exit ${result.status ?? "unknown"}`;
-			throw seatFailure(`Bubblewrap namespace probe returned ${outcome}${stderr ? `: ${stderr}` : ""}`);
+			throw seatFailure(`confinement probe returned ${outcome}${stderr ? `: ${stderr}` : ""}`);
 		}
-		return { ok: true, launcher };
+		const evaluated = evaluatePreflightProbes(parseProbeRaw(result.stdout), options.step);
+		report = {
+			schemaVersion: CLAUDE_SEAT_DIAGNOSTIC_SCHEMA_VERSION,
+			platform: diagnosticPlatform(platform),
+			launcherKind: launcher.kind,
+			preview: platform === "darwin",
+			ok: evaluated.ok,
+			probes: evaluated.probes,
+		};
+		if (!evaluated.ok) throw seatFailure(evaluated.message ?? "confinement probe failed");
+		return { ok: true, launcher, report };
 	} catch (error) {
-		return { ok: false, message: error instanceof Error ? error.message : String(error) };
+		return { ok: false, message: error instanceof Error ? error.message : String(error), ...(report ? { report } : {}) };
 	} finally {
+		await closeUnixCanary(socketServer);
 		if (canaryRoot !== undefined) rmSync(canaryRoot, { recursive: true, force: true });
+		rmSync(join(resolve(options.cwd), ".pelaggio-seat-preflight-write"), { force: true });
 	}
 }
