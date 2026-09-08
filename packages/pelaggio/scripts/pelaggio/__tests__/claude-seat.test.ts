@@ -11,13 +11,18 @@ import type { SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import {
 	buildClaudeSeatEnv,
 	buildClaudeSeatInvocation,
+	buildClaudeSeatSeatbeltInvocation,
 	type ClaudeSeatBuildOptions,
+	type ClaudeSeatLauncher,
+	type ClaudeSeatPreflight,
 	type ClaudeSeatSpawner,
 	claudeSeatHoldsForgeAuthority,
 	HARNESS_ONLY_SOCKET_ENVS,
 	isGitAuthChannelVar,
 	preflightClaudeSeat,
+	renderClaudeSeatDiagnosticReport,
 	resolveClaudeSeatBwrap,
+	resolveClaudeSeatSeatbelt,
 	resolveHarnessSocketPaths,
 	spawnClaudeSeat,
 } from "../claude-seat.js";
@@ -181,6 +186,26 @@ function afterSeparator(args: readonly string[]): string[] {
 	return args.slice(idx + 1);
 }
 
+function passingProbeStdout(overrides: Record<string, string> = {}): string {
+	return `${JSON.stringify({ socket: "ENOENT", write: "ok", tty: "ENXIO", session: "detached", githubConfig: "EACCES", ...overrides })}\n`;
+}
+
+function passingProbeResult(): { status: number; stdout: string } {
+	return { status: 0, stdout: passingProbeStdout() };
+}
+
+function assertPreflightOk(result: ClaudeSeatPreflight, launcher: ClaudeSeatLauncher): asserts result is Extract<ClaudeSeatPreflight, { ok: true }> {
+	assert.equal(result.ok, true, result.ok ? undefined : result.message);
+	if (!result.ok) return;
+	assert.deepEqual(result.launcher, launcher);
+	assert.equal(result.report.ok, true);
+	assert.equal(result.report.schemaVersion, 1);
+	assert.equal(
+		result.report.probes.every((probe) => probe.outcome !== "fail"),
+		true,
+	);
+}
+
 function isolatedHarnessPaths(): { home: string; tmpdir: string; xdgRuntimeDir: string; xdgConfigHome: string; ghConfigDir: string; claudeConfigDir: string; anthropicConfigDir: string } {
 	const root = tempDir("pelaggio-seat-iso-");
 	return {
@@ -313,6 +338,23 @@ describe("resolveClaudeSeatBwrap", () => {
 	});
 });
 
+describe("resolveClaudeSeatSeatbelt", () => {
+	it("fails closed on a non-macOS host", () => {
+		assert.throws(() => resolveClaudeSeatSeatbelt("linux"), /enabled macOS Seatbelt preview/);
+	});
+
+	it("rejects a relative launcher path", () => {
+		assert.throws(() => resolveClaudeSeatSeatbelt("darwin", "sandbox-exec"), /absolute Seatbelt launcher path/);
+	});
+
+	it("rejects a user-owned launcher the same way Bubblewrap rejects plantable PATH entries", () => {
+		const planted = join(tempDir("pelaggio-seatbelt-untrusted-"), "sandbox-exec");
+		writeFileSync(planted, "#!/bin/sh\n");
+		chmodSync(planted, 0o755);
+		assert.throws(() => resolveClaudeSeatSeatbelt("darwin", planted), /trusted macOS sandbox-exec/);
+	});
+});
+
 describe("resolveHarnessSocketPaths", () => {
 	it("collects nonblank harness locators and ignores spawn-env invention", () => {
 		assert.deepEqual(resolveHarnessSocketPaths({}), []);
@@ -355,6 +397,23 @@ describe("buildClaudeSeatInvocation", () => {
 			}),
 		);
 		assert.deepEqual(tmpfsTargets(invocation.args), ["/run/pelaggio-other", "/run/pelaggio-signer"]);
+	});
+
+	it("builds a Seatbelt invocation with explicit protected-directory denials and no shell", () => {
+		const invocation = buildClaudeSeatSeatbeltInvocation(
+			{ command: "/opt/claude code/cli", args: ["--flag", "bar baz"], cwd },
+			deniedBuildOpts({ cwd, bwrap, socketPaths: ["/run/pelaggio-signer/sock"], home: "/home/operator", tmpdir: "/tmp" }),
+			"/usr/bin/sandbox-exec",
+		);
+		assert.equal(invocation.command, "/usr/bin/sandbox-exec");
+		assert.deepEqual(invocation.args.slice(0, 2), ["-p", invocation.args[1]]);
+		const profile = invocation.args[1] ?? "";
+		assert.match(profile, /\(deny file-read\* \(subpath "\/run\/pelaggio-signer"/);
+		assert.match(profile, /\(deny file-ioctl \(subpath "\/run\/pelaggio-signer"/);
+		assert.match(profile, /\(deny network-outbound \(remote unix-socket \(subpath "\/run\/pelaggio-signer"\)\)\)/);
+		assert.match(profile, /\(deny network-outbound \(remote unix-socket \(literal "\/run\/pelaggio-signer\/sock"\)\)\)/);
+		assert.deepEqual(invocation.args.slice(2), ["/opt/claude code/cli", "--flag", "bar baz"]);
+		assert.equal(invocation.args.includes("sh"), false);
 	});
 
 	it("still emits --tmpfs when the dedicated parent does not exist on the host", () => {
@@ -493,18 +552,58 @@ describe("spawnClaudeSeat", () => {
 			assert.deepEqual(reported, []);
 		}
 	});
+
+	it("uses POSIX detached spawn only for the Seatbelt launcher", () => {
+		const cwd = resolve(tempDir("pelaggio-seat-detached-"));
+		const seen: boolean[] = [];
+		const spawnFake = ((_command: string, _args: readonly string[], options: { detached?: boolean }) => {
+			seen.push(options.detached === true);
+			return { pid: 11, stderr: new PassThrough() } as unknown as ChildProcess;
+		}) as ClaudeSeatSpawner;
+		spawnClaudeSeat(spawnOpts({ cwd }), {
+			...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp" }),
+			launcher: { kind: "bubblewrap", path: "/usr/bin/bwrap" },
+			spawn: spawnFake,
+		});
+		spawnClaudeSeat(spawnOpts({ cwd }), {
+			...deniedBuildOpts({ cwd, bwrap: "/usr/bin/bwrap", home: "/home/operator", tmpdir: "/tmp" }),
+			launcher: { kind: "seatbelt", path: "/usr/bin/sandbox-exec" },
+			spawn: spawnFake,
+		});
+		assert.deepEqual(seen, [false, true]);
+	});
 });
 
 describe("preflightClaudeSeat", () => {
-	it("returns a confinement diagnostic on non-Linux or missing Bubblewrap without using reserved error words", () => {
+	it("runs the zero-spend macOS Seatbelt holistic canaries", { skip: process.platform !== "darwin" }, async () => {
+		const cwd = tempDir("pelaggio-seatbelt-worktree-");
+		const result = await preflightClaudeSeat({
+			cwd,
+			step: "plan",
+			platform: "darwin",
+			macosSeatbeltPreview: true,
+			sandboxExecPath: "/usr/bin/sandbox-exec",
+			env: { PATH: process.env.PATH, HOME: process.env.HOME },
+			...isolatedHarnessPaths(),
+		});
+		assertPreflightOk(result, { kind: "seatbelt", path: "/usr/bin/sandbox-exec" });
+		const byName = Object.fromEntries(result.report.probes.map((probe) => [probe.name, probe]));
+		assert.equal(byName["socket-connect"]?.outcome, "pass");
+		assert.equal(byName["worktree-write"]?.outcome, "pass");
+		assert.equal(byName.session?.outcome, "pass");
+		assert.equal(byName.tty?.outcome, "pass");
+		assert.equal(byName["github-config"]?.outcome, "pass");
+	});
+
+	it("returns a confinement diagnostic on non-Linux or missing Bubblewrap without using reserved error words", async () => {
 		const cwd = "/tmp/pelaggio-seat-work/item";
-		const missing = preflightClaudeSeat({ cwd, step: "pr-review", platform: "linux", pathValue: tempDir("pelaggio-preflight-missing-") });
+		const missing = await preflightClaudeSeat({ cwd, step: "pr-review", platform: "linux", pathValue: tempDir("pelaggio-preflight-missing-") });
 		assert.equal(missing.ok, false);
 		if (!missing.ok) {
 			assert.match(missing.message, /Bubblewrap in a trusted system directory on PATH/);
 			assert.doesNotMatch(missing.message, /abort|budget|rate.?limit|usage.?limit|quota|max.*turns|turn.?limit/i);
 		}
-		const platform = preflightClaudeSeat({ cwd, step: "pr-review", platform: "darwin", pathValue: "/usr/bin" });
+		const platform = await preflightClaudeSeat({ cwd, step: "pr-review", platform: "darwin", pathValue: "/usr/bin" });
 		assert.equal(platform.ok, false);
 		if (!platform.ok) {
 			assert.match(platform.message, /Linux with Bubblewrap/);
@@ -512,11 +611,11 @@ describe("preflightClaudeSeat", () => {
 		}
 	});
 
-	it("fails closed on an invalid configured locator before any spawn", { skip: trustedSystemBwrap === undefined }, () => {
+	it("fails closed on an invalid configured locator before any spawn", { skip: trustedSystemBwrap === undefined }, async () => {
 		const cwd = "/tmp/pelaggio-seat-work/item";
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
-		const result = preflightClaudeSeat({
+		const result = await preflightClaudeSeat({
 			cwd,
 			step: "pr-review",
 			platform: "linux",
@@ -530,12 +629,12 @@ describe("preflightClaudeSeat", () => {
 		if (!result.ok) assert.match(result.message, /too wide to mask/);
 	});
 
-	it("reports a missing configured socket parent before the namespace probe", { skip: trustedSystemBwrap === undefined }, () => {
+	it("reports a missing configured socket parent before the confinement probe", { skip: trustedSystemBwrap === undefined }, async () => {
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
 		const missingParent = join(tempDir("pelaggio-preflight-parent-"), "missing");
 		let probed = false;
-		const result = preflightClaudeSeat({
+		const result = await preflightClaudeSeat({
 			cwd: tempDir("pelaggio-preflight-cwd-"),
 			step: "pr-review",
 			platform: "linux",
@@ -546,7 +645,7 @@ describe("preflightClaudeSeat", () => {
 			tmpdir: "/tmp",
 			probe: () => {
 				probed = true;
-				return { status: 0 };
+				return passingProbeResult();
 			},
 		});
 		assert.equal(result.ok, false);
@@ -554,13 +653,15 @@ describe("preflightClaudeSeat", () => {
 		assert.equal(probed, false);
 	});
 
-	it("always mounts a private canary parent and asks the probe to reject a visible canary", { skip: trustedSystemBwrap === undefined }, () => {
+	it("always mounts a private canary parent and asks the probe to reject a reachable socket", { skip: trustedSystemBwrap === undefined }, async () => {
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
 		const cwd = tempDir("pelaggio-preflight-canary-cwd-");
 		const scratch = tempDir("pelaggio-preflight-canary-tmp-");
 		let canaryPath: string | undefined;
-		const result = preflightClaudeSeat({
+		let ghHosts: string | undefined;
+		let detached: boolean | undefined;
+		const result = await preflightClaudeSeat({
 			cwd,
 			step: "pr-review",
 			platform: "linux",
@@ -571,27 +672,35 @@ describe("preflightClaudeSeat", () => {
 			tmpdir: scratch,
 			xdgConfigHome: join(scratch, "xdg-missing"),
 			ghConfigDir: join(scratch, "gh-missing"),
-			probe: (_command, args) => {
+			probe: (_command, args, options) => {
 				const commandArgs = afterSeparator(args);
 				assert.equal(commandArgs[0], process.execPath);
-				assert.match(commandArgs[2] ?? "", /existsSync/);
+				assert.match(commandArgs[2] ?? "", /createConnection/);
 				canaryPath = commandArgs[3];
+				ghHosts = commandArgs[5];
+				detached = options.detached === true;
 				assert.ok(canaryPath);
-				assert.equal(existsSync(canaryPath), true, "the host-side canary must exist while the probe runs");
-				assert.deepEqual(tmpfsTargets(args), [dirname(canaryPath)]);
-				return { status: 0 };
+				assert.equal(existsSync(canaryPath), true, "the host-side canary socket must exist while the probe runs");
+				assert.ok(ghHosts);
+				assert.equal(existsSync(ghHosts), true, "the host-side GitHub-config canary must exist while the probe runs");
+				assert.deepEqual(tmpfsTargets(args).sort(), [dirname(canaryPath), dirname(ghHosts)].sort());
+				return passingProbeResult();
 			},
 		});
-		assert.deepEqual(result, { ok: true, bwrap });
+		assertPreflightOk(result, { kind: "bubblewrap", path: bwrap });
+		assert.equal(detached, false);
 		assert.ok(canaryPath);
 		assert.equal(existsSync(dirname(canaryPath)), false, "the private canary directory must be removed after preflight");
+		const rendered = renderClaudeSeatDiagnosticReport(result.report);
+		assert.equal(rendered.includes(canaryPath), false);
+		assert.equal(rendered.includes(cwd), false);
 	});
 
-	it("fails closed when the mask probe can still see its host-side canary", { skip: trustedSystemBwrap === undefined }, () => {
+	it("fails closed when the socket-connect probe can still reach the host canary", { skip: trustedSystemBwrap === undefined }, async () => {
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
 		let canaryPath: string | undefined;
-		const result = preflightClaudeSeat({
+		const result = await preflightClaudeSeat({
 			cwd: tempDir("pelaggio-preflight-visible-cwd-"),
 			step: "pr-review",
 			platform: "linux",
@@ -603,20 +712,20 @@ describe("preflightClaudeSeat", () => {
 			probe: (_command, args, options) => {
 				const commandArgs = afterSeparator(args);
 				canaryPath = commandArgs[3];
-				return spawnSync(commandArgs[0] as string, commandArgs.slice(1), { ...options, stdio: ["ignore", "ignore", "pipe"] });
+				return spawnSync(commandArgs[0] as string, commandArgs.slice(1), { ...options, stdio: ["ignore", "pipe", "pipe"] });
 			},
 		});
 		assert.equal(result.ok, false);
-		if (!result.ok) assert.match(result.message, /socket-mask probe left its host canary visible/);
+		if (!result.ok) assert.match(result.message, /socket-connect probe reached the harness socket/);
 		assert.ok(canaryPath);
 		assert.equal(existsSync(dirname(canaryPath)), false, "a failed probe must still remove the canary directory");
 	});
 
-	it("returns the resolved absolute bwrap path when the host is ready", { skip: trustedSystemBwrap === undefined }, () => {
+	it("returns the resolved absolute bwrap path when the host is ready", { skip: trustedSystemBwrap === undefined }, async () => {
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
 		const cwd = tempDir("pelaggio-preflight-ready-");
-		const result = preflightClaudeSeat({
+		const result = await preflightClaudeSeat({
 			cwd,
 			step: "pr-review",
 			platform: "linux",
@@ -626,14 +735,16 @@ describe("preflightClaudeSeat", () => {
 			home: "/home/operator",
 			tmpdir: "/tmp",
 		});
-		assert.deepEqual(result, { ok: true, bwrap });
+		assertPreflightOk(result, { kind: "bubblewrap", path: bwrap });
+		assert.equal(result.report.launcherKind, "bubblewrap");
+		assert.equal(result.report.preview, false);
 	});
 
-	it("fails closed when Bubblewrap cannot create the requested namespaces", { skip: trustedSystemBwrap === undefined }, () => {
+	it("fails closed when Bubblewrap cannot create the requested namespaces", { skip: trustedSystemBwrap === undefined }, async () => {
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
 		const cwd = tempDir("pelaggio-preflight-namespace-");
-		const result = preflightClaudeSeat({
+		const result = await preflightClaudeSeat({
 			cwd,
 			step: "pr-review",
 			platform: "linux",
@@ -645,14 +756,14 @@ describe("preflightClaudeSeat", () => {
 			probe: () => ({ status: 1, stderr: "Creating new namespace failed: Operation not permitted" }),
 		});
 		assert.equal(result.ok, false);
-		if (!result.ok) assert.match(result.message, /Bubblewrap namespace probe returned exit 1: Creating new namespace failed/);
+		if (!result.ok) assert.match(result.message, /confinement probe returned exit 1: Creating new namespace failed/);
 	});
 
-	it("fails closed when the Bubblewrap namespace probe cannot spawn", { skip: trustedSystemBwrap === undefined }, () => {
+	it("fails closed when the confinement probe cannot spawn", { skip: trustedSystemBwrap === undefined }, async () => {
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
 		const cwd = tempDir("pelaggio-preflight-spawn-");
-		const result = preflightClaudeSeat({
+		const result = await preflightClaudeSeat({
 			cwd,
 			step: "pr-review",
 			platform: "linux",
@@ -664,7 +775,46 @@ describe("preflightClaudeSeat", () => {
 			probe: () => ({ status: null, error: new Error("spawn denied") }),
 		});
 		assert.equal(result.ok, false);
-		if (!result.ok) assert.match(result.message, /could not run the Bubblewrap namespace probe: spawn denied/);
+		if (!result.ok) assert.match(result.message, /could not run the confinement probe: spawn denied/);
+	});
+
+	it("fails closed when the probe reports a shared session", { skip: trustedSystemBwrap === undefined }, async () => {
+		assert.ok(trustedSystemBwrap);
+		const bwrap = trustedSystemBwrap;
+		const result = await preflightClaudeSeat({
+			cwd: tempDir("pelaggio-preflight-session-"),
+			step: "plan",
+			platform: "linux",
+			pathValue: dirname(bwrap),
+			env: {},
+			...isolatedHarnessPaths(),
+			home: "/home/operator",
+			tmpdir: "/tmp",
+			probe: () => ({ status: 0, stdout: passingProbeStdout({ session: "shared" }) }),
+		});
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.match(result.message, /distinct process session/);
+			assert.equal(result.report?.probes.find((probe) => probe.name === "session")?.outcome, "fail");
+		}
+	});
+
+	it("skips github-config for forge-capable steps even if a hosts file would be readable", { skip: trustedSystemBwrap === undefined }, async () => {
+		assert.ok(trustedSystemBwrap);
+		const bwrap = trustedSystemBwrap;
+		const result = await preflightClaudeSeat({
+			cwd: tempDir("pelaggio-preflight-forge-"),
+			step: "ship",
+			platform: "linux",
+			pathValue: dirname(bwrap),
+			env: {},
+			...isolatedHarnessPaths(),
+			home: "/home/operator",
+			tmpdir: "/tmp",
+			probe: () => ({ status: 0, stdout: passingProbeStdout({ githubConfig: "readable" }) }),
+		});
+		assertPreflightOk(result, { kind: "bubblewrap", path: bwrap });
+		assert.equal(result.report.probes.find((probe) => probe.name === "github-config")?.outcome, "skip");
 	});
 });
 
@@ -1011,12 +1161,12 @@ describe("spawnClaudeSeat filtered environment", () => {
 });
 
 describe("preflightClaudeSeat filtered probe env", () => {
-	it("filters the probe environment the same way as production spawn", { skip: trustedSystemBwrap === undefined }, () => {
+	it("filters the probe environment the same way as production spawn", { skip: trustedSystemBwrap === undefined }, async () => {
 		assert.ok(trustedSystemBwrap);
 		const bwrap = trustedSystemBwrap;
 		const isolated = isolatedHarnessPaths();
 		let probeEnv: NodeJS.ProcessEnv | undefined;
-		const result = preflightClaudeSeat({
+		const result = await preflightClaudeSeat({
 			cwd: tempDir("pelaggio-preflight-env-cwd-"),
 			step: "pr-review",
 			platform: "linux",
@@ -1027,10 +1177,10 @@ describe("preflightClaudeSeat filtered probe env", () => {
 			envAllowlist: ["MY_CUSTOM_VAR", "GH_TOKEN"],
 			probe: (_command, _args, options) => {
 				probeEnv = options.env;
-				return { status: 0 };
+				return passingProbeResult();
 			},
 		});
-		assert.deepEqual(result, { ok: true, bwrap });
+		assertPreflightOk(result, { kind: "bubblewrap", path: bwrap });
 		assert.ok(probeEnv);
 		assert.equal(probeEnv.MY_CUSTOM_VAR, "configured-addition");
 		assert.equal(probeEnv.ANTHROPIC_API_KEY, "sk-ant-cli-auth-value");
@@ -1179,7 +1329,7 @@ describe("GitHub credential-directory masks", () => {
 	});
 });
 
-describe("linux conformance", { skip: process.platform !== "linux" }, () => {
+describe("linux conformance", { skip: process.platform !== "linux" || trustedSystemBwrap === undefined }, () => {
 	it("proves host-proc hide, socket mask, terminal detachment, device access, worktree write, shared net, and outer PID binding", { timeout: 15_000 }, async () => {
 		const bwrap = resolveClaudeSeatBwrap();
 		const worktree = tempDir("pelaggio-seat-wt-");

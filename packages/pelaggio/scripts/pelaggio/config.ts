@@ -85,6 +85,8 @@ export interface ResolvedConfig {
 	providerBins: Partial<Record<ProviderName, string>>;
 	/** Explicit escape hatch for Linux hosts whose kernel does not expose Landlock. */
 	grokAllowUnsandboxedFallback: boolean;
+	/** Explicit, fail-closed preview for the macOS Claude Seatbelt launcher. */
+	claudeMacosSeatbeltPreview: boolean;
 	shipTarget: ShipTargetName;
 	/** Checks that must be present + green for the `--admin` red-merge guard (#292). Default
 	 *  `["ci"]`; an explicit `[]` is the "no gating CI" escape hatch. */
@@ -887,6 +889,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 	// before #136) fails loudly rather than silently no-op'ing.
 	const providerBins: Partial<Record<ProviderName, string>> = {};
 	let grokAllowUnsandboxedFallback = false;
+	let claudeMacosSeatbeltPreview = false;
 	const providersBlock = yml.providers;
 	if (providersBlock !== undefined) {
 		if (!isPlainObject(providersBlock)) {
@@ -913,6 +916,14 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 					throw new Error(`${configPath}: expected \`providers.grok.allow-unsandboxed-fallback\` to be a boolean, got ${typeof allowUnsandboxedFallback}`);
 				}
 				grokAllowUnsandboxedFallback = allowUnsandboxedFallback;
+			}
+			const macosSeatbeltPreview = entry["macos-seatbelt-preview"];
+			if (macosSeatbeltPreview !== undefined) {
+				if (name !== "claude") throw new Error(`${configPath}: \`providers.${name}.macos-seatbelt-preview\` is only supported for claude`);
+				if (typeof macosSeatbeltPreview !== "boolean") {
+					throw new Error(`${configPath}: expected \`providers.claude.macos-seatbelt-preview\` to be a boolean, got ${typeof macosSeatbeltPreview}`);
+				}
+				claudeMacosSeatbeltPreview = macosSeatbeltPreview;
 			}
 		}
 	}
@@ -951,6 +962,7 @@ export function loadConfig(opts: { repo?: string; configPath?: string } = {}): R
 		profileProviders,
 		providerBins,
 		grokAllowUnsandboxedFallback,
+		claudeMacosSeatbeltPreview,
 		shipTarget,
 		shipRequiredChecks,
 		roadmapSource,

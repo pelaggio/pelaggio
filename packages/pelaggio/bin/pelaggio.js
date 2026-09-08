@@ -31,6 +31,7 @@ Commands:
   revise  On-demand operator revision of a red-review PR (--pr <n> [--allow-repeat]); --allow-repeat bypasses only the one-pass label.
   worktree-deps  Symlink/install node_modules for a worktree (called by /pick).
   run-contained  Run one command in the Linux contained-execution jail, or verify it with --self-test.
+  claude-seat-report  Print a scrubbed local Claude-seat confinement report (no paths, credentials, or upload).
   sessions-sweep  Remove content-expired cross-process session records under .dev/sessions/ (called by /tidy).
 
 See README for full options.
@@ -57,6 +58,7 @@ const routes = {
 	revise: ["scripts/pelaggio/revise-cli.ts"],
 	"worktree-deps": ["scripts/pelaggio/worktree-deps.ts"],
 	"run-contained": ["scripts/pelaggio/run-contained-cli.ts"],
+	"claude-seat-report": ["scripts/pelaggio/claude-seat-report-cli.ts"],
 	"sessions-sweep": ["scripts/pelaggio/sessions-cli.ts"],
 };
 

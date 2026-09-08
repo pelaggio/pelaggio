@@ -453,20 +453,40 @@ a no-op — the Agent SDK still owns the CLI path via
 
 ### Claude seat isolation
 
-The Claude provider always starts the Agent SDK CLI through Pelaggio's
-Bubblewrap seat wrapper (`spawnClaudeSeat`). On Linux, every Claude step
-requires `bubblewrap` on `PATH`. Missing Bubblewrap, a non-Linux host, a
-malformed or overly wide harness-only socket locator, or a namespace setup
-failure refuses the step with `error_confinement`. There is no unisolated
-fallback: use another provider, or run on Linux with Bubblewrap installed.
+The Claude provider always starts the Agent SDK CLI through Pelaggio's seat
+wrapper (`spawnClaudeSeat`). On Linux, every Claude step requires `bubblewrap`
+on `PATH`. macOS remains refused by default; an operator may try the
+fail-closed Seatbelt preview explicitly:
 
-The wrapper creates a new PID namespace and a fresh `/proc`, detaches the child
-from the harness terminal session, binds the host root, and masks the dedicated
-parent directory of each configured harness-only socket
-(`PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` is the first locator). It does not
-restrict the host network, hide the rest of the host filesystem, or replace the
-SDK environment. Harness-only sockets must live in a dedicated directory (for
-example `/run/pelaggio-signer/`), not a shared parent such as `/tmp` or `/run`.
+```yaml
+providers:
+  claude:
+    macos-seatbelt-preview: true
+```
+
+The preview requires `/usr/bin/sandbox-exec` and a successful zero-spend
+confinement probe before the SDK starts. Missing Bubblewrap, a non-Linux host
+without that explicit preview, a malformed or overly wide harness-only socket
+locator, or a failed probe refuses the step with `error_confinement`. There is
+no unisolated fallback. The preview is not yet supported for unattended, CI,
+or shared-host use. Volunteer evidence is a scrubbed local report with no
+repository paths, credentials, prompt content, or automatic upload:
+
+```bash
+npx pelaggio claude-seat-report
+```
+
+On Linux the wrapper creates a new PID namespace and a fresh `/proc`, detaches
+the child from the harness terminal session, binds the host root, and masks the
+dedicated parent directory of each configured harness-only socket
+(`PELAGGIO_REVIEW_EVIDENCE_SIGNER_SOCKET` is the first locator). The macOS
+Seatbelt preview instead denies file and unix-socket access to those same
+harness and forge-denied GitHub-config directories and starts the child in a
+new process session; it does not create a PID namespace, a fresh `/proc`, or
+tmpfs mounts. Neither path restricts the host network, hides the rest of the
+host filesystem, or replaces the SDK environment. Harness-only sockets must
+live in a dedicated directory (for example `/run/pelaggio-signer/`), not a
+shared parent such as `/tmp` or `/run`.
 
 ### Grok sandbox
 
