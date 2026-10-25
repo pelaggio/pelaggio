@@ -29,11 +29,12 @@ review:
     enabled: local
     provider-diversity: prefer
     # Ongoing two-provider panel; both available providers remain required.
-    judge: { id: judge, provider: codex }
+    # TEMPORARY Codex outage (2026-10-25): judge and reviewer swapped to claude;
+    # revert with the profile change below. (Restored form: judge codex; reviewers
+    # codex — no codex-model pin, 'gpt-5-codex' 400s on this ChatGPT account — and grok.)
+    judge: { id: judge, provider: claude }
     reviewers:
-      # No codex-model pin: this environment's Codex runs on a ChatGPT account
-      # where 'gpt-5-codex' 400s; the CLI default is correct here.
-      - { id: codex, provider: codex }
+      - { id: claude, provider: claude }
       - { id: grok, provider: grok }
   # Dogfooding posture: highest-quality gate, still auto-merging. Two independent
   # review iterations over Codex + Grok, with Codex verification and Grok diversity.
@@ -62,30 +63,32 @@ models:
     standard:
       providers:
         pick: claude
-        # Balanced posture (2026-10-25): equal 1x subscription capacity on Claude,
-        # Codex and Grok, so the token-heavy authoring selection sets rotate all
-        # three evenly (`implement` alone was 52% of all-time spend). These are
-        # selection sets: exactly one driver runs per cycle.
-        plan: [claude, codex, grok]
-        shakedown-plan: [claude, codex, grok]
-        implement: [claude, codex, grok]
-        # Author-excluded review uses another available provider.
-        shakedown-code: [claude, codex, grok]
+        # TEMPORARY Codex outage (2026-10-25): codex is removed from every pool until
+        # its subscription limit resets; revert this commit to restore the balanced
+        # posture (authoring [claude, codex, grok]; review [codex, grok], verify codex).
+        # Profiles are edited in place, not via a new profile, because Claude model
+        # pins come only from the built-in standard/quick tables and the local review
+        # drain always resolves `standard`.
+        plan: [claude, grok]
+        shakedown-plan: [claude, grok]
+        implement: [claude, grok]
+        # Author-excluded review uses the other available provider.
+        shakedown-code: [claude, grok]
         ship: claude
         shipwreck: claude
-        # Every driver × label cell must pass. Grok differs from the Codex verifier,
+        # Every driver × label cell must pass. Grok differs from the Claude verifier,
         # preserving provider-diversity: require with both reviewers mandatory.
-        pr-review: [codex, grok]
-        pr-verify: codex
+        pr-review: [claude, grok]
+        pr-verify: claude
     # Quick mode (S/XS/bug) skips plan+shakedown-plan and runs implement-only under
     # this profile. Its implement mirrors the standard profile's balanced rotation;
     # a claude-* id is never forwarded to codex/grok, so each uses its own default model.
     quick:
       providers:
-        pr-review: [codex, grok]
-        pr-verify: codex
+        pr-review: [claude, grok]
+        pr-verify: claude
         pick: claude
-        implement: [claude, codex, grok]
-        shakedown-code: [claude, codex, grok]
+        implement: [claude, grok]
+        shakedown-code: [claude, grok]
         ship: claude
         shipwreck: claude
