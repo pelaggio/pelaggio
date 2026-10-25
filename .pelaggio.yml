@@ -62,16 +62,15 @@ models:
     standard:
       providers:
         pick: claude
-        # Claude-conservation posture (2026-08-05): the token-heavy authoring
-        # selection sets exclude Claude entirely and rotate grok/codex, with grok
-        # first — it currently has the most subscription room. `implement` alone was
-        # 52% of all-time spend, so this is where conservation actually bites.
-        # These are selection sets: exactly one driver runs per cycle.
-        plan: [grok, codex]
-        shakedown-plan: [grok, codex]
-        implement: [grok, codex]
-        # Author-excluded review uses the other available provider.
-        shakedown-code: [grok, codex]
+        # Balanced posture (2026-10-25): equal 1x subscription capacity on Claude,
+        # Codex and Grok, so the token-heavy authoring selection sets rotate all
+        # three evenly (`implement` alone was 52% of all-time spend). These are
+        # selection sets: exactly one driver runs per cycle.
+        plan: [claude, codex, grok]
+        shakedown-plan: [claude, codex, grok]
+        implement: [claude, codex, grok]
+        # Author-excluded review uses another available provider.
+        shakedown-code: [claude, codex, grok]
         ship: claude
         shipwreck: claude
         # Every driver × label cell must pass. Grok differs from the Codex verifier,
@@ -79,15 +78,14 @@ models:
         pr-review: [codex, grok]
         pr-verify: codex
     # Quick mode (S/XS/bug) skips plan+shakedown-plan and runs implement-only under
-    # this profile. Its implement mirrors the standard profile's Claude-conservation
-    # posture so small bugs lean on grok/codex too; a claude-* id is never forwarded
-    # to those drivers, so each uses its own default model.
+    # this profile. Its implement mirrors the standard profile's balanced rotation;
+    # a claude-* id is never forwarded to codex/grok, so each uses its own default model.
     quick:
       providers:
         pr-review: [codex, grok]
         pr-verify: codex
         pick: claude
-        implement: [grok, codex]
-        shakedown-code: [grok, codex]
+        implement: [claude, codex, grok]
+        shakedown-code: [claude, codex, grok]
         ship: claude
         shipwreck: claude
