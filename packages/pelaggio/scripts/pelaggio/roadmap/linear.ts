@@ -88,16 +88,12 @@ export class LinearRoadmap implements RoadmapSource {
 		const issues = await api.listIssues({ teamId: this.teamId, label: this.label || undefined, includeDone: opts?.includeDone });
 		return issues.map((it) => {
 			const inverseRelations = it.inverseRelations ?? [];
-			const blocked = hasBlocker(inverseRelations);
-			// Server-side claim markers double as the cross-host claim signal (issue #12).
-			const claimed = it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL);
-			const status: ItemStatus = blocked ? "blocked" : claimed ? "in-progress" : "open";
 			const item: RoadmapItemStatus = {
 				id: it.identifier,
 				title: it.title,
 				deps: formatBlockers(inverseRelations),
 				sourceRef: it.identifier,
-				status,
+				status: issueStatus(it.stateType, inverseRelations, it.labels),
 			};
 			if ((it.labels ?? []).includes(DEFERRED_LABEL)) item.deferred = true;
 			return item;
@@ -109,16 +105,12 @@ export class LinearRoadmap implements RoadmapSource {
 		const issue = await api.getIssue(id);
 		if (!issue) return null;
 		const inverseRelations = issue.inverseRelations ?? [];
-		let status: ItemStatus = "open";
-		if (issue.stateType === "completed" || issue.stateType === "canceled") status = "done";
-		else if (hasBlocker(inverseRelations)) status = "blocked";
-		else if (issue.stateType === "started" || (issue.labels ?? []).includes(IN_PROGRESS_LABEL)) status = "in-progress";
 		const item: RoadmapItemStatus = {
 			id: issue.identifier,
 			title: issue.title,
 			deps: formatBlockers(inverseRelations),
 			sourceRef: issue.identifier,
-			status,
+			status: issueStatus(issue.stateType, inverseRelations, issue.labels),
 			body: issue.description ?? "",
 			labels: issue.labels ?? [],
 		};
@@ -275,6 +267,18 @@ export class LinearRoadmap implements RoadmapSource {
 		}
 		return null;
 	}
+}
+
+/**
+ * Shared by `listItems` and `getItem`. Done takes precedence: `roadmap next` and the continuous
+ * loop list with `includeDone`, so a completed/canceled (incl. duplicate) issue must not read as
+ * open. Server-side claim markers double as the cross-host claim signal (issue #12).
+ */
+function issueStatus(stateType: string | undefined, inverseRelations: LinearIssueRelation[], labels: string[] | undefined): ItemStatus {
+	if (stateType === "completed" || stateType === "canceled") return "done";
+	if (hasBlocker(inverseRelations)) return "blocked";
+	if (stateType === "started" || (labels ?? []).includes(IN_PROGRESS_LABEL)) return "in-progress";
+	return "open";
 }
 
 function hasBlocker(inverseRelations: LinearIssueRelation[]): boolean {
