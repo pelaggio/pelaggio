@@ -29,15 +29,19 @@ review:
     enabled: local
     provider-diversity: prefer
     # Ongoing two-provider panel; both available providers remain required.
-    # TEMPORARY Codex outage (2026-10-25): judge and reviewer swapped to claude;
-    # revert with the profile change below. (Restored form: judge codex; reviewers
-    # codex — no codex-model pin, 'gpt-5-codex' 400s on this ChatGPT account — and grok.)
-    judge: { id: judge, provider: claude }
+    # During the TEMPORARY Codex outage (2026-10-25) cycles run with
+    # PELAGGIO_AUTHORING_ENABLED=off, since this judge and one reviewer are codex.
+    # (Swapping them here breaks the authoring-review pipeline tests, which read
+    # this file.)
+    judge: { id: judge, provider: codex }
     reviewers:
-      - { id: claude, provider: claude }
+      # No codex-model pin: this environment's Codex runs on a ChatGPT account
+      # where 'gpt-5-codex' 400s; the CLI default is correct here.
+      - { id: codex, provider: codex }
       - { id: grok, provider: grok }
   # Dogfooding posture: highest-quality gate, still auto-merging. Two independent
-  # review iterations over Codex + Grok, with Codex verification and Grok diversity.
+  # review iterations over the profile's pr-review pool (normally Codex + Grok with
+  # Codex verification; Claude + Grok with Claude verification during the outage).
   max-passes: 2
   # reservation = labels × drivers × (pr-review $5 + pr-verify $5), reserved per
   # iteration; budget-cap is the aggregate across passes. Red-team trigger doubles

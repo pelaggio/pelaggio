@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { after, before, describe, it, mock } from "node:test";
 import { allocateAttempt } from "../attempt-identity.js";
-import { REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
+import { CONFIG, REVIEW_CONFIG, WORKTREE_PREFIX } from "../config.js";
 import { appendReviewEscalation, lookupReviewEscalation, type ReviewEscalationWriteInput, resolveDecision, reviewEscalationCommands, reviewEscalationId } from "../decisions.js";
 import { dispatchStepEffects, EffectsManifestError, effectManifestPath, writeEffectsManifest } from "../effects.js";
 import { createEventWriter, readEventLog } from "../flow-events.js";
@@ -35,6 +35,30 @@ import {
 	setupHermeticPipelineEnv,
 	teardownHermeticPipelineEnv,
 } from "./mocks.js";
+
+/**
+ * The authoring-review suites assert author rotation and reviewer exclusion, which follow the
+ * standard profile's provider pools. Pin those pools for the suite so an edit to the repo's
+ * `.pelaggio.yml` cannot silently change what the tests expect.
+ */
+function pinStandardProviderPools(): void {
+	let saved: (typeof CONFIG.profileProviders)[string] | undefined;
+	before(() => {
+		saved = CONFIG.profileProviders.standard;
+		CONFIG.profileProviders.standard = {
+			...saved,
+			plan: ["claude", "codex", "grok"],
+			"shakedown-plan": ["claude", "codex", "grok"],
+			implement: ["claude", "codex", "grok"],
+			"shakedown-code": ["claude", "codex", "grok"],
+			"pr-review": ["codex", "grok"],
+			"pr-verify": "codex",
+		};
+	});
+	after(() => {
+		if (saved) CONFIG.profileProviders.standard = saved;
+	});
+}
 
 function failedError(r: CycleResult): string | undefined {
 	return r.outcome === "failed" ? r.error : undefined;
@@ -3891,6 +3915,8 @@ describe("runOrchestrator — SIGUSR2 pause handler", () => {
 });
 
 describe("runPipeline — authoring review capability seating + effects (#337)", () => {
+	pinStandardProviderPools();
+
 	const cleanFindings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "clean review", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 	const cleanJudge = `AUTHORING_REVIEW_JUDGE\n${JSON.stringify({ schemaVersion: 1, decisions: [] })}\nEND_AUTHORING_REVIEW_JUDGE`;
 
@@ -4464,6 +4490,8 @@ describe("runPipeline — resolved escalation acknowledgement", () => {
 });
 
 describe("runPipeline — authoring review split packet (#580)", () => {
+	pinStandardProviderPools();
+
 	const passFindings = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "looks good", findings: [] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 	const judgmentBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "behavior is wrong", findings: [{ severity: "must-fix", message: "boom", ruleId: "pelaggio/judgment/style" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
 	const safetyBlock = `AUTHORING_REVIEW_FINDINGS\n${JSON.stringify({ schemaVersion: 3, summary: "security regression", findings: [{ severity: "must-fix", message: "unsafe", ruleId: "pelaggio/security/secret-leak" }] })}\nEND_AUTHORING_REVIEW_FINDINGS`;
@@ -5338,6 +5366,8 @@ describe("runPipeline — PR pre-flight and freshness (#424)", () => {
 });
 
 describe("runPipeline — durable authoring record root (#788)", () => {
+	pinStandardProviderPools();
+
 	it("preserves clean and split records and a committed decision source after deleting real claim worktrees", async () => {
 		const saved = { enabled: REVIEW_CONFIG.authoring.enabled, reviewers: REVIEW_CONFIG.authoring.reviewers, judge: REVIEW_CONFIG.authoring.judge };
 		REVIEW_CONFIG.authoring.enabled = "local";
