@@ -235,6 +235,26 @@ describe("LinearRoadmap.listItems", () => {
 			],
 		);
 	});
+
+	it("reports completed/canceled issues as done under includeDone (roadmap next must not offer them)", async () => {
+		const { api } = makeStub({
+			issues: [
+				{ id: "u1", identifier: "ENG-1", title: "Shipped", description: null, stateType: "completed", labels: ["in-progress"] },
+				{ id: "u2", identifier: "ENG-2", title: "Duplicate", description: null, stateType: "canceled", inverseRelations: [{ type: "blocks", relatedIdentifier: "ENG-9" }] },
+				{ id: "u3", identifier: "ENG-3", title: "Open", description: null, stateType: "unstarted" },
+			],
+		});
+		const items = await mk({ repo: "/tmp", api }).listItems({ includeDone: true });
+
+		assert.deepEqual(
+			items.map(({ id, status }) => ({ id, status })),
+			[
+				{ id: "ENG-1", status: "done" },
+				{ id: "ENG-2", status: "done" },
+				{ id: "ENG-3", status: "open" },
+			],
+		);
+	});
 });
 
 describe("LinearRoadmap.listOpenItems", () => {

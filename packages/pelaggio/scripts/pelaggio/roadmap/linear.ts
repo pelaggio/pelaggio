@@ -7,6 +7,7 @@ import type { CreateItemOpts, ItemStatus, LinearRoadmapConfig, MarkDoneContext, 
 
 const PLAN_MARKER = "<!-- pelaggio-plan -->";
 const IN_PROGRESS_LABEL = "in-progress";
+const DEFERRED_LABEL = "deferred";
 
 interface LinearIssueRelation {
 	type: string;
@@ -70,7 +71,7 @@ export class LinearRoadmap implements RoadmapSource {
 
 	private async api(): Promise<LinearApi> {
 		if (this.apiSeed) return this.apiSeed;
-		if (!this.cachedApi) this.cachedApi = await defaultLinearApi();
+		if (!this.cachedApi) this.cachedApi = await defaultLinearApi(this.teamId);
 		return this.cachedApi;
 	}
 
@@ -87,17 +88,15 @@ export class LinearRoadmap implements RoadmapSource {
 		const issues = await api.listIssues({ teamId: this.teamId, label: this.label || undefined, includeDone: opts?.includeDone });
 		return issues.map((it) => {
 			const inverseRelations = it.inverseRelations ?? [];
-			const blocked = hasBlocker(inverseRelations);
-			// Server-side claim markers double as the cross-host claim signal (issue #12).
-			const claimed = it.stateType === "started" || (it.labels ?? []).includes(IN_PROGRESS_LABEL);
-			const status: ItemStatus = blocked ? "blocked" : claimed ? "in-progress" : "open";
-			return {
+			const item: RoadmapItemStatus = {
 				id: it.identifier,
 				title: it.title,
 				deps: formatBlockers(inverseRelations),
 				sourceRef: it.identifier,
-				status,
+				status: issueStatus(it.stateType, inverseRelations, it.labels),
 			};
+			if ((it.labels ?? []).includes(DEFERRED_LABEL)) item.deferred = true;
+			return item;
 		});
 	}
 
@@ -106,19 +105,17 @@ export class LinearRoadmap implements RoadmapSource {
 		const issue = await api.getIssue(id);
 		if (!issue) return null;
 		const inverseRelations = issue.inverseRelations ?? [];
-		let status: ItemStatus = "open";
-		if (issue.stateType === "completed" || issue.stateType === "canceled") status = "done";
-		else if (hasBlocker(inverseRelations)) status = "blocked";
-		else if (issue.stateType === "started" || (issue.labels ?? []).includes(IN_PROGRESS_LABEL)) status = "in-progress";
-		return {
+		const item: RoadmapItemStatus = {
 			id: issue.identifier,
 			title: issue.title,
 			deps: formatBlockers(inverseRelations),
 			sourceRef: issue.identifier,
-			status,
+			status: issueStatus(issue.stateType, inverseRelations, issue.labels),
 			body: issue.description ?? "",
 			labels: issue.labels ?? [],
 		};
+		if ((issue.labels ?? []).includes(DEFERRED_LABEL)) item.deferred = true;
+		return item;
 	}
 
 	resolvePlanPath(ctx: { id: string; worktree: string }): string {
@@ -147,7 +144,7 @@ export class LinearRoadmap implements RoadmapSource {
 		const description = parts.join("\n");
 		const labelNames: string[] = [];
 		if (this.label) labelNames.push(this.label);
-		if (opts.deferred) labelNames.push("deferred");
+		if (opts.deferred) labelNames.push(DEFERRED_LABEL);
 		const created = await api.createIssue({ teamId: this.teamId, title: opts.title, description: description || undefined, labelNames: labelNames.length > 0 ? labelNames : undefined });
 		return {
 			id: created.identifier,
@@ -272,6 +269,18 @@ export class LinearRoadmap implements RoadmapSource {
 	}
 }
 
+/**
+ * Shared by `listItems` and `getItem`. Done takes precedence: `roadmap next` and the continuous
+ * loop list with `includeDone`, so a completed/canceled (incl. duplicate) issue must not read as
+ * open. Server-side claim markers double as the cross-host claim signal (issue #12).
+ */
+function issueStatus(stateType: string | undefined, inverseRelations: LinearIssueRelation[], labels: string[] | undefined): ItemStatus {
+	if (stateType === "completed" || stateType === "canceled") return "done";
+	if (hasBlocker(inverseRelations)) return "blocked";
+	if (stateType === "started" || (labels ?? []).includes(IN_PROGRESS_LABEL)) return "in-progress";
+	return "open";
+}
+
 function hasBlocker(inverseRelations: LinearIssueRelation[]): boolean {
 	return inverseRelations.some((relation) => relation.type === "blocks");
 }
@@ -296,8 +305,9 @@ function stripMarker(body: string): string {
 
 // ── Default SDK-backed runner ──────────────────────────────────────────
 // Lazy-imports `@linear/sdk` so consumers on other roadmap sources never pay the load cost.
-// Never called in unit tests (which inject `api`). Types are defined structurally because
-// the SDK is an optional runtime dep.
+// Adapter unit tests inject `api`; `linearApiFromClient` is tested against a fake client that
+// mirrors the SDK's getter/method shapes. Types are defined structurally because the SDK is an
+// optional runtime dep.
 
 interface LinearSdkIssue {
 	id: string;
@@ -316,26 +326,35 @@ interface LinearSdkRelation {
 	issue?: Promise<{ identifier: string } | null>;
 }
 
+interface LinearSdkLabel {
+	id: string;
+	name: string;
+	/** Undefined for workspace-level labels. */
+	teamId?: string;
+}
+
 interface LinearSdkComment {
 	body: string;
 	createdAt: string | Date;
 }
 
-interface LinearSdkClient {
+export interface LinearSdkClient {
 	issues(args: unknown): Promise<{ nodes: LinearSdkIssue[] }>;
 	issue(identifier: string): Promise<LinearSdkIssue | null>;
 	createComment(input: { issueId: string; body: string }): Promise<unknown>;
 	updateIssue(id: string, input: { stateId?: string; labelIds?: string[] }): Promise<unknown>;
 	workflowStates(args: unknown): Promise<{ nodes: { id: string; type: string }[] }>;
-	issueLabels(args: unknown): Promise<{ nodes: { id: string; name: string }[] }>;
-	createIssue(input: { teamId: string; title: string; description?: string; labelIds?: string[] }): Promise<{ issue?: () => Promise<LinearSdkIssue | null> }>;
+	issueLabels(args: unknown): Promise<{ nodes: LinearSdkLabel[] }>;
+	/** `issueLabel` / `issue` on the payloads are SDK getters returning promises (see `resolveSdkField`). */
+	createIssueLabel(input: { name: string; teamId: string }): Promise<{ success?: boolean; issueLabel?: unknown }>;
+	createIssue(input: { teamId: string; title: string; description?: string; labelIds?: string[] }): Promise<{ success?: boolean; issue?: unknown }>;
 }
 
 interface LinearSdkModule {
 	LinearClient: new (opts: { apiKey: string }) => LinearSdkClient;
 }
 
-async function defaultLinearApi(): Promise<LinearApi> {
+async function defaultLinearApi(teamId: string): Promise<LinearApi> {
 	const apiKey = process.env.LINEAR_API_KEY;
 	if (!apiKey) throw new Error("LINEAR_API_KEY env var is required for Linear roadmap adapter");
 
@@ -345,8 +364,21 @@ async function defaultLinearApi(): Promise<LinearApi> {
 	} catch {
 		throw new Error("`@linear/sdk` is not installed — run `pnpm add @linear/sdk`");
 	}
-	const client = new mod.LinearClient({ apiKey });
+	return linearApiFromClient(new mod.LinearClient({ apiKey }), teamId);
+}
 
+// SDK v82+ exposes relations (Issue.state, IssuePayload.issue, IssueLabelPayload.issueLabel) as
+// GETTERS returning LinearFetch (a promise) — `typeof x === "function"` is false, so probe all
+// three shapes: method (older SDKs), promise-from-getter (v82+), plain object (test stubs).
+async function resolveSdkField(holder: object, key: string): Promise<unknown> {
+	let v = (holder as Record<string, unknown>)[key];
+	if (typeof v === "function") v = (v as () => unknown).call(holder);
+	if (v && typeof (v as { then?: unknown }).then === "function") v = await (v as Promise<unknown>);
+	return v;
+}
+
+/** SDK-backed `LinearApi`. Exported for tests; production goes through `defaultLinearApi`. */
+export function linearApiFromClient(client: LinearSdkClient, teamId: string): LinearApi {
 	async function resolveStateId(teamId: string, type: "started" | "completed"): Promise<string> {
 		const res = await client.workflowStates({ filter: { team: { id: { eq: teamId } }, type: { eq: type } } });
 		const state = res.nodes[0];
@@ -354,19 +386,42 @@ async function defaultLinearApi(): Promise<LinearApi> {
 		return state.id;
 	}
 
+	// Label names are unique per team, not per workspace: prefer the configured team's label,
+	// then a workspace-level one. Another team's same-named label can't be applied to our issues.
 	async function resolveLabelId(labelName: string): Promise<string | null> {
 		const res = await client.issueLabels({ filter: { name: { eq: labelName } } });
-		return res.nodes[0]?.id ?? null;
+		const own = res.nodes.find((l) => l.teamId === teamId) ?? res.nodes.find((l) => !l.teamId);
+		return own?.id ?? null;
 	}
 
-	// SDK v82 exposes Issue.state as a GETTER returning LinearFetch (a promise) —
-	// `typeof state === "function"` is false, so probe all three shapes: method
-	// (older SDKs), promise-from-getter (v82), plain object (test stubs).
+	async function ensureLabelId(labelName: string): Promise<string> {
+		const existing = await resolveLabelId(labelName);
+		if (existing) return existing;
+		const res = await client.createIssueLabel({ name: labelName, teamId });
+		const created = (await resolveSdkField(res, "issueLabel")) as { id?: string } | undefined;
+		if (res.success === false || !created?.id) throw new Error(`Linear label '${labelName}' not found and could not be created for team ${teamId}`);
+		return created.id;
+	}
+
 	async function stateTypeOf(holder: { state?: unknown }): Promise<string | undefined> {
-		let s = holder.state;
-		if (typeof s === "function") s = (s as () => unknown).call(holder);
-		if (s && typeof (s as { then?: unknown }).then === "function") s = await (s as Promise<unknown>);
-		return (s as { type?: string } | undefined)?.type;
+		return ((await resolveSdkField(holder, "state")) as { type?: string } | undefined)?.type;
+	}
+
+	async function labelNamesOf(issue: LinearSdkIssue): Promise<string[] | undefined> {
+		if (typeof issue.labels !== "function") return undefined;
+		const l = await issue.labels();
+		return l.nodes.map((n) => n.name);
+	}
+
+	async function blockersOf(issue: LinearSdkIssue): Promise<LinearIssueRelation[]> {
+		const inverseRelations: LinearIssueRelation[] = [];
+		if (typeof issue.inverseRelations !== "function") return inverseRelations;
+		const rel = await issue.inverseRelations();
+		for (const r of rel.nodes) {
+			const related = await r.issue;
+			if (related?.identifier) inverseRelations.push({ type: r.type, relatedIdentifier: related.identifier });
+		}
+		return inverseRelations;
 	}
 
 	return {
@@ -381,36 +436,15 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			const res = await client.issues({ filter, first: 200 });
 			const items: LinearIssueListItem[] = [];
 			for (const node of res.nodes) {
-				const inverseRelations: LinearIssueRelation[] = [];
-				const inverseRel = typeof node.inverseRelations === "function" ? await node.inverseRelations() : null;
-				if (inverseRel) {
-					for (const r of inverseRel.nodes) {
-						const related = await r.issue;
-						if (related?.identifier) inverseRelations.push({ type: r.type, relatedIdentifier: related.identifier });
-					}
-				}
-				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, inverseRelations, stateType: await stateTypeOf(node) });
+				// Labels carry the in-progress claim marker and the `deferred` curation flag.
+				items.push({ id: node.id, identifier: node.identifier, title: node.title, description: node.description ?? null, inverseRelations: await blockersOf(node), stateType: await stateTypeOf(node), labels: await labelNamesOf(node) });
 			}
 			return items;
 		},
 		async getIssue(identifier) {
 			const issue = await client.issue(identifier);
 			if (!issue) return null;
-			const stateType = await stateTypeOf(issue);
-			const inverseRelations: LinearIssueRelation[] = [];
-			if (typeof issue.inverseRelations === "function") {
-				const rel = await issue.inverseRelations();
-				for (const r of rel.nodes) {
-					const related = await r.issue;
-					if (related?.identifier) inverseRelations.push({ type: r.type, relatedIdentifier: related.identifier });
-				}
-			}
-			let labels: string[] | undefined;
-			if (typeof issue.labels === "function") {
-				const l = await issue.labels();
-				labels = l.nodes.map((n) => n.name);
-			}
-			return { id: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description ?? null, stateType, labels, inverseRelations };
+			return { id: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description ?? null, stateType: await stateTypeOf(issue), labels: await labelNamesOf(issue), inverseRelations: await blockersOf(issue) };
 		},
 		async createComment(issueId, body) {
 			await client.createComment({ issueId, body });
@@ -443,17 +477,18 @@ async function defaultLinearApi(): Promise<LinearApi> {
 			}));
 		},
 		async createIssue({ teamId, title, description, labelNames }) {
+			// Resolve (or create) every label before the mutation: a silently dropped `deferred`
+			// label would make the item auto-pickable, and throwing after create orphans an issue.
 			const labelIds: string[] = [];
-			for (const name of labelNames ?? []) {
-				const id = await resolveLabelId(name);
-				if (id) labelIds.push(id);
-			}
+			for (const name of labelNames ?? []) labelIds.push(await ensureLabelId(name));
 			const input: { teamId: string; title: string; description?: string; labelIds?: string[] } = { teamId, title };
 			if (description) input.description = description;
 			if (labelIds.length > 0) input.labelIds = labelIds;
 			const res = await client.createIssue(input);
-			const issue = typeof res.issue === "function" ? await res.issue() : null;
-			if (!issue) throw new Error("Linear createIssue returned no issue");
+			if (res.success === false) throw new Error("Linear createIssue reported success: false");
+			const issue = (await resolveSdkField(res, "issue")) as LinearSdkIssue | null | undefined;
+			// Past this point the issue exists server-side — say so, so a retry doesn't duplicate it.
+			if (!issue) throw new Error("Linear createIssue succeeded but returned no issue; check the team for the new issue before retrying");
 			return { id: issue.id, identifier: issue.identifier, title: issue.title };
 		},
 	};
